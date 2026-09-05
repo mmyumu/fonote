@@ -1,0 +1,9 @@
+__pycache__/
+*.sqlite3
+*.sqlite3-*
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.tooling/

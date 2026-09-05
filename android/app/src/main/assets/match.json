@@ -1,0 +1,224 @@
+{
+  "id": "wc2018-final",
+  "title": "France · Croatie",
+  "competition": "Coupe du monde 2018",
+  "stage": "Finale",
+  "date": "2018-07-15",
+  "source": "StatsBomb Open Data (match 8658)",
+  "teams": [
+    {
+      "key": "home",
+      "name": "France",
+      "formation": "4-4-2",
+      "colour": "#7D9CD9",
+      "colourOfficial": "#21304D"
+    },
+    {
+      "key": "away",
+      "name": "Croatie",
+      "formation": "4-3-3",
+      "colour": "#F6DADB",
+      "colourOfficial": "#ED1C24"
+    }
+  ],
+  "players": [
+    {
+      "id": "sb-3099",
+      "name": "Lloris",
+      "number": 1,
+      "team": "home",
+      "position": "Goalkeeper",
+      "x": 0.5,
+      "y": 0.055
+    },
+    {
+      "id": "sb-5476",
+      "name": "Pavard",
+      "number": 2,
+      "team": "home",
+      "position": "Right Back",
+      "x": 0.13,
+      "y": 0.17
+    },
+    {
+      "id": "sb-5485",
+      "name": "Varane",
+      "number": 4,
+      "team": "home",
+      "position": "Right Center Back",
+      "x": 0.3,
+      "y": 0.16
+    },
+    {
+      "id": "sb-5492",
+      "name": "Umtiti",
+      "number": 5,
+      "team": "home",
+      "position": "Left Center Back",
+      "x": 0.7,
+      "y": 0.16
+    },
+    {
+      "id": "sb-5484",
+      "name": "Hernandez",
+      "number": 21,
+      "team": "home",
+      "position": "Left Back",
+      "x": 0.87,
+      "y": 0.17
+    },
+    {
+      "id": "sb-20004",
+      "name": "Pogba",
+      "number": 6,
+      "team": "home",
+      "position": "Right Defensive Midfield",
+      "x": 0.32,
+      "y": 0.25
+    },
+    {
+      "id": "sb-3961",
+      "name": "Kanté",
+      "number": 13,
+      "team": "home",
+      "position": "Left Defensive Midfield",
+      "x": 0.68,
+      "y": 0.25
+    },
+    {
+      "id": "sb-3009",
+      "name": "Mbappé",
+      "number": 10,
+      "team": "home",
+      "position": "Right Midfield",
+      "x": 0.15,
+      "y": 0.31
+    },
+    {
+      "id": "sb-4375",
+      "name": "Matuidi",
+      "number": 14,
+      "team": "home",
+      "position": "Left Midfield",
+      "x": 0.85,
+      "y": 0.31
+    },
+    {
+      "id": "sb-5487",
+      "name": "Griezmann",
+      "number": 7,
+      "team": "home",
+      "position": "Right Center Forward",
+      "x": 0.38,
+      "y": 0.43
+    },
+    {
+      "id": "sb-3604",
+      "name": "Giroud",
+      "number": 9,
+      "team": "home",
+      "position": "Left Center Forward",
+      "x": 0.62,
+      "y": 0.43
+    },
+    {
+      "id": "sb-3444",
+      "name": "Subašić",
+      "number": 23,
+      "team": "away",
+      "position": "Goalkeeper",
+      "x": 0.5,
+      "y": 0.055
+    },
+    {
+      "id": "sb-5461",
+      "name": "Vrsaljko",
+      "number": 2,
+      "team": "away",
+      "position": "Right Back",
+      "x": 0.13,
+      "y": 0.17
+    },
+    {
+      "id": "sb-3471",
+      "name": "Lovren",
+      "number": 6,
+      "team": "away",
+      "position": "Right Center Back",
+      "x": 0.3,
+      "y": 0.16
+    },
+    {
+      "id": "sb-5468",
+      "name": "Vida",
+      "number": 21,
+      "team": "away",
+      "position": "Left Center Back",
+      "x": 0.7,
+      "y": 0.16
+    },
+    {
+      "id": "sb-5457",
+      "name": "Strinić",
+      "number": 3,
+      "team": "away",
+      "position": "Left Back",
+      "x": 0.87,
+      "y": 0.17
+    },
+    {
+      "id": "sb-5469",
+      "name": "Brozović",
+      "number": 11,
+      "team": "away",
+      "position": "Center Defensive Midfield",
+      "x": 0.5,
+      "y": 0.24
+    },
+    {
+      "id": "sb-5463",
+      "name": "Modrić",
+      "number": 10,
+      "team": "away",
+      "position": "Right Center Midfield",
+      "x": 0.32,
+      "y": 0.3
+    },
+    {
+      "id": "sb-5470",
+      "name": "Rakitić",
+      "number": 7,
+      "team": "away",
+      "position": "Left Center Midfield",
+      "x": 0.68,
+      "y": 0.3
+    },
+    {
+      "id": "sb-5465",
+      "name": "Rebić",
+      "number": 18,
+      "team": "away",
+      "position": "Right Wing",
+      "x": 0.17,
+      "y": 0.41
+    },
+    {
+      "id": "sb-5474",
+      "name": "Perišić",
+      "number": 4,
+      "team": "away",
+      "position": "Left Wing",
+      "x": 0.83,
+      "y": 0.41
+    },
+    {
+      "id": "sb-5472",
+      "name": "Mandžukić",
+      "number": 17,
+      "team": "away",
+      "position": "Center Forward",
+      "x": 0.5,
+      "y": 0.43
+    }
+  ]
+}
