@@ -3,11 +3,23 @@ import argparse
 import hmac
 import json
 import os
+import re
 import sqlite3
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
+
+if __package__:
+    from .espn import Espn
+else:
+    from espn import Espn
 
 DEMO = Path(__file__).resolve().parents[1] / 'android/app/src/main/assets/match.json'
 # Each action carries its own polarity; the client derives colour and balance from it,
@@ -15,6 +27,58 @@ DEMO = Path(__file__).resolve().parents[1] / 'android/app/src/main/assets/match.
 ACTIONS = {'positive', 'goal', 'assist', 'pass', 'dribble', 'shot_on', 'defense', 'save',
            'negative', 'own_goal', 'lost_ball', 'pass_missed', 'dribble_lost', 'shot_off',
            'duel_lost', 'save_missed', 'yellow', 'red'}
+
+
+def load_env(path=None):
+    """Load literal KEY=value settings; existing environment variables take precedence."""
+    path = Path(path) if path is not None else Path(__file__).resolve().parents[1] / '.env'
+    if not path.exists():
+        return
+    for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        if line.startswith('export '):
+            line = line[7:].strip()
+        key, separator, value = line.partition('=')
+        key, value = key.strip(), value.strip()
+        if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+            raise ValueError(f'Configuration .env invalide à la ligne {number}')
+        if value.startswith(('"', "'")):
+            if len(value) < 2 or value[-1] != value[0]:
+                raise ValueError(f'Configuration .env invalide à la ligne {number}')
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+def football_data(path, token):
+    """Small, deliberately transparent proxy so the provider key never ships in the APK."""
+    if not token:
+        raise RuntimeError('FOOTBALL_DATA_TOKEN absent')
+    request = urllib.request.Request('https://api.football-data.org/v4/' + path.lstrip('/'),
+                                     headers={'X-Auth-Token': token, 'User-Agent': 'Fonote/1'})
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        # Do not pass provider bodies through: they can change and are not part of our contract.
+        raise RuntimeError(f'football-data.org: HTTP {error.code}') from error
+
+
+def football_path(route, query):
+    """Map the narrow public Fonote contract to the upstream API."""
+    if route == '/v1/football/competitions':
+        return 'competitions'
+    if route == '/v1/football/matches':
+        allowed = {key: values[-1] for key, values in query.items()
+                   if key in {'dateFrom', 'dateTo', 'competitions'} and values}
+        return 'matches' + (('?' + urllib.parse.urlencode(allowed)) if allowed else '')
+    parts = route.strip('/').split('/')
+    if len(parts) == 5 and parts[:3] == ['v1', 'football', 'competitions'] and parts[4] == 'teams':
+        return 'competitions/' + urllib.parse.quote(parts[3], safe='') + '/teams'
+    if len(parts) == 4 and parts[:3] == ['v1', 'football', 'matches'] and parts[3].isdigit():
+        return 'matches/' + parts[3]
+    return None
 
 
 def validate(op):
@@ -30,7 +94,8 @@ def validate(op):
     allowed = {'id', 'note_id', 'kind'}
     if kind == 'note':
         match = json.loads(DEMO.read_text())
-        if op['match_id'] != match['id']:
+        remote_match = isinstance(op['match_id'], str) and re.fullmatch(r'fd-[0-9]+', op['match_id'])
+        if op['match_id'] != match['id'] and not remote_match:
             raise ValueError('Match inconnu')
         if type(op['minute']) is not int or not 0 <= op['minute'] <= 150:
             raise ValueError('Minute invalide')
@@ -48,7 +113,8 @@ def validate(op):
                 raise ValueError('Participant invalide')
             if not legacy and set(entry) != {'player_id', 'action'}:
                 raise ValueError('Participant invalide')
-            if entry['player_id'] not in known:
+            remote_player = isinstance(entry['player_id'], str) and re.fullmatch(r'(?:fd|espn)-[0-9]+', entry['player_id'])
+            if entry['player_id'] not in known and not (remote_match and remote_player):
                 raise ValueError('Joueur inconnu')
             if entry['action'] not in ACTIONS:
                 raise ValueError('Action inconnue')
@@ -89,7 +155,8 @@ def append(db, op):
                           (op['id'], payload)).lastrowid
 
 
-def make_server(host, port, path, token):
+def make_server(host, port, path, token, football_token=None):
+    espn = Espn()
     with connect(path):
         pass
 
@@ -106,17 +173,29 @@ def make_server(host, port, path, token):
             self.wfile.write(raw)
 
         def authorized(self):
-            if not hmac.compare_digest(self.headers.get('Authorization', '').encode(), ('Bearer ' + token).encode()):
+            if not token or not hmac.compare_digest(self.headers.get('Authorization', '').encode(), ('Bearer ' + token).encode()):
                 self.reply(401, {'error': 'Authentification requise'})
                 return False
             return True
 
         def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == '/v1/health':
+                return self.reply(200, {'service': 'fonote', 'football_configured': bool(football_token)})
+            upstream = football_path(parsed.path, urllib.parse.parse_qs(parsed.query))
+            if upstream:
+                try:
+                    data = football_data(upstream, football_token)
+                    if re.fullmatch(r'matches/[0-9]+', upstream):
+                        data = espn.enrich(data)
+                    return self.reply(200, data)
+                except (RuntimeError, OSError):
+                    return self.reply(503, {'error': 'Données football indisponibles'})
             if not self.authorized():
                 return
-            if self.path == '/v1/matches':
+            if parsed.path == '/v1/matches':
                 return self.reply(200, [json.loads(DEMO.read_text())])
-            if self.path == '/v1/operations':
+            if parsed.path == '/v1/operations':
                 with connect(path) as db:
                     rows = db.execute('SELECT seq,payload FROM operations ORDER BY seq').fetchall()
                 return self.reply(200, [{'seq': s, 'operation': json.loads(p)} for s, p in rows])
@@ -141,16 +220,72 @@ def make_server(host, port, path, token):
     return ThreadingHTTPServer((host, port), Handler)
 
 
+def sources(folder):
+    """Modification times of the server's own modules.
+
+    A file being written is skipped rather than reported missing: an editor that truncates
+    before it writes would otherwise look like a change, and then like a change back.
+    """
+    marks = {}
+    for path in sorted(Path(folder).glob('*.py')):
+        try:
+            marks[path.name] = path.stat().st_mtime
+        except OSError:
+            continue
+    return marks
+
+
+def supervise(interval=1.0):
+    """Run the server in a child process, restarted whenever its own sources change.
+
+    The watching process never imports what it watches, so a half-typed edit costs only the
+    child: nothing is listening until the next save, and that save brings a working server
+    back. Reloading on purpose drops the ESPN memory cache and re-reads the settings, which
+    is the point of reloading.
+    """
+    here = Path(__file__).resolve().parent
+    command = [sys.executable, *sys.argv]
+    environment = {**os.environ, 'FONOTE_RELOAD_CHILD': '1'}
+    child, seen = subprocess.Popen(command, env=environment), sources(here)
+    try:
+        while True:
+            time.sleep(interval)
+            current = sources(here)
+            if current == seen:
+                continue
+            seen = current
+            if child.poll() is None:
+                child.terminate()
+                child.wait()
+            print('Sources modifiées : redémarrage du serveur')
+            child = subprocess.Popen(command, env=environment)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            child.wait()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--db', default='fonote.sqlite3')
+    parser.add_argument('--reload', action='store_true',
+                        help='redémarrer le serveur à chaque modification de backend/*.py')
     args = parser.parse_args()
+    if args.reload and not os.environ.get('FONOTE_RELOAD_CHILD'):
+        supervise()
+        raise SystemExit
+    try:
+        load_env()
+    except ValueError as error:
+        parser.error(str(error))
     token = os.environ.get('FONOTE_TOKEN', '')
-    if len(token) < 24 or not token.isascii():
+    if token and (len(token) < 24 or not token.isascii()):
         parser.error('Définir FONOTE_TOKEN avec au moins 24 caractères ASCII aléatoires')
-    server = make_server(args.host, args.port, args.db, token)
+    server = make_server(args.host, args.port, args.db, token, os.environ.get('FOOTBALL_DATA_TOKEN'))
     print(f'Fonote : http://{args.host}:{args.port} (usage personnel, arrêter avec Ctrl+C)')
     try:
         server.serve_forever()

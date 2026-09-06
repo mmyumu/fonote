@@ -4,17 +4,22 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
 import android.text.SpannableString;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.text.style.RelativeSizeSpan;
 import android.view.HapticFeedbackConstants;
+import android.view.MotionEvent;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
@@ -23,6 +28,11 @@ import org.json.JSONObject;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
@@ -30,16 +40,25 @@ import java.util.concurrent.ExecutorService;
 public class MainActivity extends Activity {
     private static final int BACKGROUND = Color.rgb(16, 27, 32), SURFACE = Color.rgb(20, 34, 31),
         CHIP = Color.rgb(33, 48, 45), ACCENT = Color.rgb(207, 240, 160), ON_ACCENT = Color.rgb(25, 48, 28),
-        INK = Color.rgb(229, 238, 231), MUTED = Color.rgb(156, 179, 164);
+        INK = Color.rgb(229, 238, 231), MUTED = Color.rgb(156, 179, 164),
+        /** A stand-in kit colour: the shirt preview belongs to no team in particular. */
+        SAMPLE_KIT = Color.rgb(126, 178, 235);
     private Store store;
     private SharedPreferences prefs;
     private JSONObject match;
-    private LinearLayout root, composer;
+    private JSONObject demoMatch;
+    private LinearLayout root, composer, factsPage, statsPage;
+    private Pager pager;
     /** Which screen is shown: these pages replace the view, so back has to unwind them itself. */
-    private String screen = "match";
+    private String screen = "home";
     private PitchView pitch;
     private TextView status, clockLabel;
     private int minute;
+    /** One refresh a minute while a match is current; ESPN calls its own feed stale after nine
+     *  seconds, so this is conservative, and the server caches hard enough to absorb it. */
+    private static final long POLL = 60_000L, WARMUP = 3600L;
+    private static final int LATE = 140;
+    private long polled;
     private long clockAnchor, clockBase;
     private int period;
     private boolean clockRunning;
@@ -72,6 +91,40 @@ public class MainActivity extends Activity {
     private int noteMinute;
     /** Fixed so that opening a note never moves the players under the finger. */
     private static final int COMPOSER = 214;
+    /**
+     * What the provider counts, in the order it reads. ESPN publishes twenty-eight figures, over
+     * half of them percentages that only restate the pair above them — a note-taker wants the
+     * counts, not `passPct` next to `totalPasses` and `accuratePasses`.
+     */
+    /**
+     * What the provider counts for one player, in reading order, singular then plural. Zeroes are
+     * left out — a line of twelve noughts says nothing — and `appearances`, always one for whoever
+     * played, and `subIns`, which the pitch already showed, are left out for the same reason.
+     */
+    private static final String[][] TALLY = {
+        {"totalGoals", "but", "buts"}, {"goalAssists", "passe déc.", "passes déc."},
+        {"ownGoals", "csc", "csc"}, {"totalShots", "tir", "tirs"},
+        {"shotsOnTarget", "cadré", "cadrés"}, {"saves", "arrêt", "arrêts"},
+        {"goalsConceded", "encaissé", "encaissés"}, {"shotsFaced", "tir subi", "tirs subis"},
+        {"foulsCommitted", "faute", "fautes"}, {"foulsSuffered", "faute subie", "fautes subies"},
+        {"yellowCards", "jaune", "jaunes"}, {"redCards", "rouge", "rouges"}};
+    /**
+     * Counters the provider carries on every player's line although they describe the side: an
+     * outfielder shown "1 encaissé" reads as his own mistake. They are kept for the one player
+     * they actually describe, and the pitch already knows which one that is.
+     */
+    private static final Set<String> KEEPER = new HashSet<>(Arrays.asList(
+        "saves", "goalsConceded", "shotsFaced"));
+    private static final String[][] COUNTED = {
+        {"possessionPct", "Possession", " %"}, {"totalShots", "Tirs", ""},
+        {"shotsOnTarget", "Tirs cadrés", ""}, {"wonCorners", "Corners", ""},
+        {"offsides", "Hors-jeu", ""}, {"totalPasses", "Passes", ""},
+        {"accuratePasses", "Passes réussies", ""}, {"totalTackles", "Tacles", ""},
+        {"interceptions", "Interceptions", ""}, {"saves", "Arrêts", ""},
+        {"foulsCommitted", "Fautes", ""}, {"yellowCards", "Cartons jaunes", ""},
+        {"redCards", "Cartons rouges", ""}};
+    private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("HH:mm", Locale.FRANCE);
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.FRANCE);
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -99,7 +152,7 @@ public class MainActivity extends Activity {
         action("red", "▣", "Rouge", "Rouge", -3);
         try {
             try (java.io.InputStream input = getAssets().open("match.json")) {
-                match = new JSONObject(readText(input));
+                match = new JSONObject(readText(input)); demoMatch = match;
             }
             if (saved != null) {
                 noteId = saved.getString("note_id", "");
@@ -116,7 +169,7 @@ public class MainActivity extends Activity {
             clockRunning = prefs.getBoolean("clock_running", true);
             period = prefs.getInt("clock_period", 1);
             saveClock();
-            showMatch();
+            showHome();
         } catch (Exception e) { error(e); }
     }
     @Override protected void onSaveInstanceState(Bundle state) {
@@ -132,8 +185,14 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
     @Override public void onBackPressed() {
-        if (!"match".equals(screen)) { showMatch(); return; }
-        if (!noteId.isEmpty()) { closeNote(); return; }
+        if ("match".equals(screen)) {
+            // Undo the screen before undoing the work: the card first, then the note, then leave.
+            // One card at a time: facts sit between the pitch and the figures.
+            if (pager != null && pager.page() > 0) { pager.show(pager.page() - 1, true); return; }
+            if (!noteId.isEmpty()) { closeNote(); return; }
+            showHome(); return;
+        }
+        if (!"home".equals(screen)) { showHome(); return; }
         super.onBackPressed();
     }
     @Override protected void onResume() { super.onResume(); ticker.removeCallbacks(tick); ticker.post(tick); }
@@ -143,15 +202,79 @@ public class MainActivity extends Activity {
         int previous = minute;
         minute = (int)(clockSeconds()/60);
         if (clockLabel == null) return;
+        // The pitch belongs to the same clock as the notes: one minute, one set of players.
+        if (minute != previous && pitch != null) pitch.setMinute(minute);
+        follow();
         if (minute != previous && !noteId.isEmpty() && minute - noteMinute == 2) renderComposer();
         long left = (clockAnchor - System.currentTimeMillis()) / 1000;
+        // A match whistled off is fixed at the minute it ended: seconds tick for nobody.
+        boolean over = match != null && match.optLong("end_epoch_ms") > 0 && !clockRunning;
         clockLabel.setText(clockRunning && left > 0
-            ? String.format(java.util.Locale.FRANCE, "⏳  %d:%02d  ⌄", left/60, left%60)
+            ? "⏳  " + MatchClock.countdown(left) + "  ⌄"
+            : over ? "⏹  " + MatchClock.stamp(clockSeconds(), period) + "  ⌄"
             : (clockRunning ? "●  " : "Ⅱ  ") + MatchClock.display(clockSeconds(), period) + "  ⌄");
     }
+    /**
+     * A match being watched is re-read once a minute, so a substitution reaches the pitch while
+     * it still matters. Bounded on every side: only the match screen, only a match of the day,
+     * and never while a note is open — the players must not move under the finger mid-note.
+     */
+    private void follow() {
+        if (!"match".equals(screen) || match == null || !noteId.isEmpty() || !hasServer()) return;
+        if (!match.optString("id").startsWith("fd-")) return;
+        // A match the provider has whistled off has nothing left to publish.
+        if (match.optLong("end_epoch_ms") > 0) return;
+        long ahead = (clockAnchor - System.currentTimeMillis()) / 1000;
+        // Compositions are published about an hour before kickoff and the match is over well
+        // after ninety minutes: outside that window there is nothing new to learn.
+        if (ahead > 0 ? ahead > WARMUP : minute > LATE) return;
+        long now = System.currentTimeMillis();
+        if (now - polled < POLL) return;
+        polled = now;
+        String id = match.optString("id").substring(3);
+        worker.execute(() -> {
+            try {
+                JSONObject fresh = convertMatch(new JSONObject(get("/v1/football/matches/" + id)));
+                runOnUiThread(() -> absorb(fresh));
+            } catch (Exception unreachable) {
+                // A refresh that fails is a refresh missed, not an error to put on screen:
+                // the notes are local and the next minute tries again.
+            }
+        });
+    }
+
+    /**
+     * The pitch takes a newer run of play in place; a composition that has changed shape —
+     * published late, or a squad that differs — earns a redraw instead.
+     */
+    private void absorb(JSONObject fresh) {
+        if (!"match".equals(screen) || match == null || !noteId.isEmpty()) return;
+        if (!fresh.optString("id").equals(match.optString("id"))) return;
+        boolean same = squad(fresh).equals(squad(match));
+        match = fresh;
+        adoptClock();
+        if (!same || pitch == null || factsPage == null && told()
+            || statsPage == null && counted()) { showMatch(); return; }
+        pitch.setChanges(fresh.optJSONArray("changes"), minute);
+        // The card is rebuilt where it stands: a reader of the facts is not sent back to the pitch.
+        if (factsPage != null) renderFacts();
+        if (statsPage != null) renderStats();
+    }
+
+    /** Who the match knows about, as one comparable string. */
+    private String squad(JSONObject source) {
+        JSONArray players = source.optJSONArray("players");
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        for (int i = 0; players != null && i < players.length(); i++)
+            ids.add(players.optJSONObject(i).optString("id"));
+        java.util.Collections.sort(ids);
+        return String.join(",", ids);
+    }
+
     private void saveClock() {
-        prefs.edit().putLong("clock_anchor", clockAnchor).putLong("clock_base", clockBase)
-            .putBoolean("clock_running", clockRunning).putInt("clock_period", period).apply();
+        String key = "clock_" + (match == null ? "default" : match.optString("id", "default"));
+        prefs.edit().putLong(key + "_anchor", clockAnchor).putLong(key + "_base", clockBase)
+            .putBoolean(key + "_running", clockRunning).putInt(key + "_period", period).apply();
     }
     private int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density); }
     private static String readText(java.io.InputStream input) throws java.io.IOException {
@@ -166,13 +289,73 @@ public class MainActivity extends Activity {
         box.setPadding(dp(16), dp(16), dp(16), dp(16)); box.setBackgroundColor(BACKGROUND);
         return box;
     }
-    /** Scrolling page, for lists. The match page lays itself out to the screen instead. */
-    private void page(String title) {
+    private LinearLayout page(String title) { return page(title, null); }
+    /**
+     * Scrolling page, for lists. The match page lays itself out to the screen instead.
+     * Back sits at the top left and actions at the top right, where every other Android
+     * application puts them, and the returned bar is where a screen hangs its own actions.
+     */
+    private LinearLayout page(String title, Runnable back) {
         ScrollView scroll = new ScrollView(this);
-        root = frame(); root.setPadding(dp(16), dp(16), dp(16), dp(24));
+        // Without this the page ends where its content does and the window shows through.
+        scroll.setFillViewport(true); scroll.setBackgroundColor(BACKGROUND);
+        // The system bars are part of the page: a black strip above the title is a seam.
+        getWindow().setStatusBarColor(BACKGROUND); getWindow().setNavigationBarColor(BACKGROUND);
+        root = frame(); root.setPadding(dp(16), dp(10), dp(16), dp(24));
         scroll.addView(root); setContentView(scroll);
-        TextView heading = label(title); heading.setTextSize(26);
+        LinearLayout bar = strip(); root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        if (back != null) bar.addView(barAction(R.drawable.ic_arrow_back, "Revenir", back), barSize(0));
+        TextView heading = new TextView(this);
+        heading.setText(title); heading.setTextSize(26); heading.setTextColor(Color.WHITE);
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        heading.setPadding(back == null ? 0 : dp(10), dp(8), 0, dp(8));
+        bar.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        return bar;
+    }
+    /**
+     * A round icon action for the bar, at the 44 dp target a finger expects. The icon is a vector
+     * drawable of our own: the platform's own ic_menu_* are Gingerbread rasters that differ from
+     * one manufacturer to the next, and a font glyph like ⚙ lands on whichever emoji the system has.
+     */
+    private ImageButton barAction(int icon, String described, Runnable action) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(icon);
+        button.setImageTintList(ColorStateList.valueOf(INK));
+        button.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        button.setBackground(tappable(rounded(CHIP, 22)));
+        button.setPadding(dp(11), dp(11), dp(11), dp(11));
+        button.setContentDescription(described);
+        button.setOnClickListener(v -> action.run());
+        return button;
+    }
+    private LinearLayout.LayoutParams barSize(int leftMargin) {
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(44), dp(44));
+        size.leftMargin = dp(leftMargin); size.gravity = Gravity.CENTER_VERTICAL;
+        return size;
+    }
+    /** Touch feedback: a surface that answers the finger is the cheapest sign of a live control. */
+    private Drawable tappable(Drawable surface) {
+        return new RippleDrawable(ColorStateList.valueOf(Color.argb(60, 255, 255, 255)), surface, null);
+    }
+    /** A section heading, with an optional text action on its right the way lists do it. */
+    private LinearLayout section(String title, String action, Runnable go) {
+        LinearLayout row = strip();
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+        p.topMargin = dp(14); p.bottomMargin = dp(6); root.addView(row, p);
+        TextView heading = new TextView(this);
+        heading.setText(title); heading.setTextSize(20); heading.setTextColor(Color.WHITE);
+        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        row.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        if (action != null) row.addView(link(action, go));
+        return row;
+    }
+    /** A text action: modern shorthand for "there is more this way". */
+    private Button link(String text, Runnable action) {
+        Button button = button(text, action);
+        button.setTextSize(13); button.setTextColor(ACCENT);
+        button.setBackground(tappable(rounded(Color.TRANSPARENT, 12)));
+        button.setPadding(dp(10), 0, dp(10), 0); button.setMinHeight(dp(40));
+        return button;
     }
     private TextView label(String text) {
         TextView view = new TextView(this); view.setText(text); view.setTextSize(16);
@@ -181,12 +364,12 @@ public class MainActivity extends Activity {
     private Button button(String text, Runnable action) {
         Button button = new Button(this); button.setText(text); button.setAllCaps(false);
         button.setTextSize(13); button.setTextColor(INK);
-        button.setBackground(rounded(CHIP, 12));
+        button.setBackground(tappable(rounded(CHIP, 12)));
         button.setPadding(dp(8), dp(6), dp(8), dp(6));
         button.setMinHeight(dp(48)); button.setOnClickListener(v -> action.run()); return button;
     }
     private Button accent(Button button) {
-        button.setBackground(rounded(ACCENT, 12)); button.setTextColor(ON_ACCENT); return button;
+        button.setBackground(tappable(rounded(ACCENT, 12))); button.setTextColor(ON_ACCENT); return button;
     }
     private GradientDrawable rounded(int color, int radius) {
         GradientDrawable drawable = new GradientDrawable(); drawable.setColor(color); drawable.setCornerRadius(dp(radius)); return drawable;
@@ -194,6 +377,26 @@ public class MainActivity extends Activity {
     /** A soft edge is the only hint that a row keeps going past the screen. */
     private void fade(HorizontalScrollView scroll) {
         scroll.setHorizontalFadingEdgeEnabled(true); scroll.setFadingEdgeLength(dp(22));
+    }
+    /**
+     * A row that scrolls sideways, inside a page that also turns sideways.
+     *
+     * <p>It claims the gesture in {@code onInterceptTouchEvent}, which a parent sees before its
+     * own children: a listener would never fire here, because the buttons of the palette consume
+     * the touch first. Claiming only when there is something to scroll leaves a row that already
+     * fits free to turn the card instead.
+     */
+    private HorizontalScrollView sideways() {
+        HorizontalScrollView scroll = new HorizontalScrollView(this) {
+            @Override public boolean onInterceptTouchEvent(MotionEvent event) {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN
+                        && (canScrollHorizontally(1) || canScrollHorizontally(-1)))
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                return super.onInterceptTouchEvent(event);
+            }
+        };
+        scroll.setHorizontalScrollBarEnabled(false); fade(scroll);
+        return scroll;
     }
     /** Small inline control living on a line of text. */
     private Button mini(String text, String described, Runnable action) {
@@ -212,11 +415,538 @@ public class MainActivity extends Activity {
         button.setPadding(dp(14), dp(10), dp(14), dp(10));
         root.addView(button, p);
     }
+
+    // ——— Accueil, calendrier et préférences ———
+
+    private void showHome() {
+        showHomeShell();
+        loadFixtures(LocalDate.now(), LocalDate.now(), true);
+    }
+
+    private void calendar(LocalDate centre) {
+        screen = "calendar"; page("Calendrier", this::showHome);
+        // Two arrows and the window they move: lighter than three buttons, and it says the dates.
+        LinearLayout dates = strip();
+        LinearLayout.LayoutParams row = new LinearLayout.LayoutParams(-1, -2);
+        row.topMargin = dp(6); root.addView(dates, row);
+        dates.addView(barAction(R.drawable.ic_chevron_left, "Semaine précédente",
+            () -> calendar(centre.minusDays(7))), barSize(0));
+        TextView date = new TextView(this);
+        DateTimeFormatter span = DateTimeFormatter.ofPattern("d MMM", Locale.FRANCE);
+        date.setText("du " + centre.minusDays(3).format(span) + " au " + centre.plusDays(3).format(span));
+        date.setTextColor(INK); date.setTextSize(15); date.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        date.setGravity(Gravity.CENTER);
+        dates.addView(date, new LinearLayout.LayoutParams(0, -2, 1));
+        dates.addView(barAction(R.drawable.ic_chevron_right, "Semaine suivante",
+            () -> calendar(centre.plusDays(7))), barSize(0));
+        loadFixtures(centre.minusDays(3), centre.plusDays(3), false);
+    }
+
+    private void profile() {
+        screen = "profile"; page("Mes suivis", this::showHome);
+        TextView help = label("Choisissez des compétitions et/ou des clubs. Un match est affiché s’il correspond à au moins un de vos choix.");
+        help.setTextColor(MUTED); help.setTextSize(13);
+        loading("Chargement du catalogue…");
+        if (!hasServer()) {
+            label("Configurez la connexion dans Accueil → Options pour choisir vos clubs et compétitions.");
+            return;
+        }
+        worker.execute(() -> {
+            try {
+                JSONObject competitions = new JSONObject(get("/v1/football/competitions"));
+                LocalDate now = LocalDate.now();
+                JSONObject matches = new JSONObject(get("/v1/football/matches?dateFrom=" + now.minusDays(3)
+                    + "&dateTo=" + now.plusDays(7)));
+                runOnUiThread(() -> { if ("profile".equals(screen)) renderProfile(competitions, matches); });
+            } catch (Exception error) { runOnUiThread(() -> remoteError(error)); }
+        });
+    }
+
+    private void renderProfile(JSONObject catalogue, JSONObject fixtureData) {
+        page("Mes suivis", this::showHome);
+        Set<String> competitionIds = new HashSet<>(prefs.getStringSet("follow_competitions", Collections.emptySet()));
+        Set<String> teamIds = new HashSet<>(prefs.getStringSet("follow_teams", Collections.emptySet()));
+        section("Compétitions", null, null);
+        JSONArray competitions = catalogue.optJSONArray("competitions");
+        if (competitions != null) for (int i = 0; i < competitions.length(); i++) {
+            JSONObject item = competitions.optJSONObject(i); String id = String.valueOf(item.optInt("id"));
+            CheckBox choice = choice(item.optString("name"), competitionIds.contains(id));
+            choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_competitions", id, checked));
+        }
+        section("Clubs jouant dans les 10 prochains jours", null, null);
+        LinkedHashMap<String,String> teams = new LinkedHashMap<>();
+        JSONArray fixtures = fixtureData.optJSONArray("matches");
+        if (fixtures != null) for (int i = 0; i < fixtures.length(); i++) {
+            JSONObject fixture = fixtures.optJSONObject(i);
+            JSONObject home = fixture.optJSONObject("homeTeam"), away = fixture.optJSONObject("awayTeam");
+            if (home != null) teams.put(String.valueOf(home.optInt("id")), home.optString("name"));
+            if (away != null) teams.put(String.valueOf(away.optInt("id")), away.optString("name"));
+        }
+        for (Map.Entry<String,String> team : teams.entrySet()) {
+            CheckBox choice = choice(team.getValue(), teamIds.contains(team.getKey()));
+            choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_teams", team.getKey(), checked));
+        }
+        TextView note = label("La liste des clubs est renouvelée avec les rencontres proches couvertes par votre plan API.");
+        note.setTextColor(MUTED); note.setTextSize(12);
+    }
+
+    private CheckBox choice(String text, boolean checked) {
+        CheckBox box = new CheckBox(this); box.setText(text); box.setChecked(checked);
+        box.setTextColor(INK); box.setTextSize(15); box.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
+        box.setPadding(dp(4), dp(5), dp(4), dp(5)); root.addView(box, new LinearLayout.LayoutParams(-1, dp(48)));
+        return box;
+    }
+
+    private void saveChoice(String key, String id, boolean checked) {
+        Set<String> values = new HashSet<>(prefs.getStringSet(key, Collections.emptySet()));
+        if (checked) values.add(id); else values.remove(id);
+        prefs.edit().putStringSet(key, values).apply();
+    }
+
+    private void loadFixtures(LocalDate from, LocalDate to, boolean home) {
+        if (!hasServer()) {
+            fixtureCard(demoMatch, true);
+            TextView offline = label("Mode démo hors ligne · configurez le serveur pour charger les vrais matchs.");
+            offline.setTextColor(MUTED); offline.setTextSize(12);
+            return;
+        }
+        loading("Chargement des matchs…");
+        String expected = screen;
+        worker.execute(() -> {
+            try {
+                JSONObject data = new JSONObject(get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1)));
+                runOnUiThread(() -> { if (expected.equals(screen)) renderFixtures(data.optJSONArray("matches"), home); });
+            } catch (Exception error) { runOnUiThread(() -> remoteError(error)); }
+        });
+    }
+
+    private void renderFixtures(JSONArray fixtures, boolean home) {
+        if (home) showHomeShell(); else calendarShellOnly();
+        int shown = 0;
+        String day = "";
+        if (fixtures != null) for (int i = 0; i < fixtures.length(); i++) {
+            JSONObject fixture = fixtures.optJSONObject(i);
+            if (!follows(fixture)) continue;
+            // A week of fixtures is a week of days: say which one, once, above its matches.
+            if (!home) {
+                ZonedDateTime kickoff = local(fixture.optString("utcDate"));
+                String named = kickoff == null ? "Date inconnue" : kickoff.format(DAY);
+                if (!named.equals(day)) { day = named; dayHeader(named); }
+            }
+            fixtureCard(fixture, false); shown++;
+        }
+        if (shown == 0) empty("Aucun match correspondant à vos suivis sur cette période.",
+            "Choisir mes suivis", this::profile);
+    }
+
+    /** Kickoff in the reader's own zone: UTC on a home screen is a machine's idea of a clock. */
+    private ZonedDateTime local(String utc) {
+        try { return Instant.parse(utc).atZone(ZoneId.systemDefault()); }
+        catch (Exception unparsable) { return null; }
+    }
+
+    private void dayHeader(String named) {
+        TextView header = new TextView(this);
+        header.setText(named.toUpperCase(Locale.FRANCE));
+        header.setTextSize(11); header.setTextColor(MUTED); header.setLetterSpacing(.09f);
+        header.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+        p.topMargin = dp(14); p.bottomMargin = dp(6); root.addView(header, p);
+    }
+
+    private void loading(String message) {
+        LinearLayout row = strip(); row.setPadding(dp(2), dp(20), 0, dp(20));
+        ProgressBar spinner = new ProgressBar(this);
+        spinner.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
+        row.addView(spinner, new LinearLayout.LayoutParams(dp(22), dp(22)));
+        TextView text = new TextView(this); text.setText(message);
+        text.setTextColor(MUTED); text.setTextSize(14); text.setPadding(dp(12), 0, 0, 0);
+        row.addView(text); root.addView(row);
+    }
+
+    /** Nothing to show is still something to say, with the way out beside it. */
+    private void empty(String message, String action, Runnable go) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL); box.setGravity(Gravity.CENTER);
+        box.setPadding(dp(16), dp(26), dp(16), dp(20)); box.setBackground(rounded(SURFACE, 16));
+        TextView text = new TextView(this); text.setText(message);
+        text.setTextColor(MUTED); text.setTextSize(14); text.setGravity(Gravity.CENTER);
+        box.addView(text);
+        if (action != null) box.addView(link(action, go));
+        root.addView(box, new LinearLayout.LayoutParams(-1, -2));
+    }
+
+    /** The home screen without its fixtures: drawn once on entry, redrawn when they arrive. */
+    private void showHomeShell() {
+        screen = "home";
+        // Settings are not content: they belong in the bar as icons, not in the middle of the page.
+        LinearLayout bar = page("Fonote");
+        bar.addView(barAction(R.drawable.ic_star, "Mes suivis", this::profile), barSize(8));
+        bar.addView(barAction(R.drawable.ic_settings, "Options", this::options), barSize(8));
+        TextView intro = label("Les matchs que vous suivez, prêts à être notés.");
+        intro.setTextColor(MUTED); intro.setTextSize(14); intro.setPadding(0, 0, 0, 0);
+        section("Aujourd’hui", "Calendrier ›", () -> calendar(LocalDate.now()));
+    }
+
+    private void calendarShellOnly() {
+        // Async refresh keeps the selected seven-day window on screen; cards simply replace loading.
+        while (root.getChildCount() > 2) root.removeViewAt(2);
+    }
+
+    private boolean follows(JSONObject fixture) {
+        Set<String> comps = prefs.getStringSet("follow_competitions", Collections.emptySet());
+        Set<String> teams = prefs.getStringSet("follow_teams", Collections.emptySet());
+        if (comps.isEmpty() && teams.isEmpty()) return true;
+        JSONObject competition = fixture.optJSONObject("competition");
+        JSONObject home = fixture.optJSONObject("homeTeam"), away = fixture.optJSONObject("awayTeam");
+        return (competition != null && comps.contains(String.valueOf(competition.optInt("id"))))
+            || (home != null && teams.contains(String.valueOf(home.optInt("id"))))
+            || (away != null && teams.contains(String.valueOf(away.optInt("id"))));
+    }
+
+    /**
+     * One fixture, read the way a fixture is read: when on the left, who in the middle, what
+     * competition underneath. A match under way says so in place of its kickoff time.
+     */
+    private void fixtureCard(JSONObject fixture, boolean demo) {
+        String homeName = "?", awayName = "?", subtitle = "";
+        String state = null; boolean live = false;
+        ZonedDateTime kickoff = null;
+        if (demo) {
+            JSONArray teams = fixture.optJSONArray("teams");
+            if (teams != null && teams.length() == 2) {
+                homeName = teams.optJSONObject(0).optString("name");
+                awayName = teams.optJSONObject(1).optString("name");
+            }
+            subtitle = fixture.optString("stage") + " · " + fixture.optString("competition");
+            state = "DÉMO";
+        } else {
+            JSONObject home = fixture.optJSONObject("homeTeam"), away = fixture.optJSONObject("awayTeam");
+            JSONObject competition = fixture.optJSONObject("competition");
+            if (home != null) homeName = home.optString("shortName", home.optString("name"));
+            if (away != null) awayName = away.optString("shortName", away.optString("name"));
+            subtitle = competition == null ? "" : competition.optString("name");
+            kickoff = local(fixture.optString("utcDate"));
+            state = state(fixture.optString("status"));
+            live = "IN_PLAY".equals(fixture.optString("status")) || "PAUSED".equals(fixture.optString("status"));
+        }
+        LinearLayout card = new LinearLayout(this); card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(dp(14), dp(12), dp(12), dp(12));
+        card.setBackground(tappable(rounded(SURFACE, 16)));
+        card.setClickable(true); card.setFocusable(true);
+        card.setOnClickListener(v -> { if (demo) { match = demoMatch; openMatch(); } else openRemoteMatch(fixture); });
+        card.setContentDescription(homeName + " contre " + awayName + ", " + subtitle
+            + ", " + (state != null ? state : kickoff == null ? "horaire inconnu"
+                : "à " + kickoff.format(HOUR)) + ", ouvrir la feuille de notes");
+
+        LinearLayout when = new LinearLayout(this);
+        when.setOrientation(LinearLayout.VERTICAL); when.setGravity(Gravity.CENTER);
+        TextView first = new TextView(this);
+        first.setText(state != null ? state : kickoff == null ? "—" : kickoff.format(HOUR));
+        first.setTextSize(state != null ? 11 : 17); first.setGravity(Gravity.CENTER);
+        first.setTypeface(state != null ? Typeface.DEFAULT_BOLD : Typeface.MONOSPACE, Typeface.BOLD);
+        first.setTextColor(live || demo ? ACCENT : INK);
+        when.addView(first, new LinearLayout.LayoutParams(-1, -2));
+        if (kickoff != null) {
+            TextView second = new TextView(this);
+            second.setText(state == null ? kickoff.format(DateTimeFormatter.ofPattern("d MMM", Locale.FRANCE))
+                : kickoff.format(HOUR));
+            second.setTextSize(11); second.setTextColor(MUTED); second.setGravity(Gravity.CENTER);
+            when.addView(second, new LinearLayout.LayoutParams(-1, -2));
+        }
+        card.addView(when, new LinearLayout.LayoutParams(dp(56), -2));
+
+        LinearLayout sides = new LinearLayout(this); sides.setOrientation(LinearLayout.VERTICAL);
+        sides.setPadding(dp(12), 0, dp(8), 0);
+        // A match under way or over carries its score; one still to come has nothing to say yet.
+        JSONObject score = state == null || demo ? null : fixture.optJSONObject("score");
+        JSONObject goals = score == null ? null : score.optJSONObject("fullTime");
+        sides.addView(side(homeName, goals == null ? "" : goals.optString("home", "")));
+        sides.addView(side(awayName, goals == null ? "" : goals.optString("away", "")));
+        TextView note = new TextView(this); note.setText(subtitle);
+        note.setTextSize(12); note.setTextColor(MUTED); note.setPadding(0, dp(3), 0, 0);
+        note.setMaxLines(1); note.setEllipsize(TextUtils.TruncateAt.END);
+        sides.addView(note);
+        card.addView(sides, new LinearLayout.LayoutParams(0, -2, 1));
+
+        ImageView chevron = new ImageView(this);
+        chevron.setImageResource(R.drawable.ic_chevron_right);
+        chevron.setImageTintList(ColorStateList.valueOf(MUTED));
+        card.addView(chevron, new LinearLayout.LayoutParams(dp(16), dp(16)));
+
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+        p.bottomMargin = dp(10); root.addView(card, p);
+    }
+
+    private LinearLayout side(String name, String goals) {
+        LinearLayout row = strip();
+        TextView team = new TextView(this); team.setText(name);
+        team.setTextSize(15.5f); team.setTextColor(INK);
+        team.setMaxLines(1); team.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(team, new LinearLayout.LayoutParams(0, -2, 1));
+        if (!goals.isEmpty() && !"null".equals(goals)) {
+            TextView count = new TextView(this); count.setText(goals);
+            count.setTextSize(15.5f); count.setTextColor(Color.WHITE);
+            count.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+            count.setPadding(dp(8), 0, 0, 0);
+            row.addView(count);
+        }
+        return row;
+    }
+
+    /** The provider's stage code, said in French. An unknown code keeps its own words. */
+    private String stage(String code, int matchday) {
+        String named;
+        switch (code) {
+            case "REGULAR_SEASON": named = "Championnat"; break;
+            case "GROUP_STAGE": named = "Phase de groupes"; break;
+            case "PLAYOFFS": named = "Barrages"; break;
+            case "PRELIMINARY_ROUND": named = "Tour préliminaire"; break;
+            case "LAST_16": named = "Huitièmes"; break;
+            case "QUARTER_FINALS": named = "Quarts de finale"; break;
+            case "SEMI_FINALS": named = "Demi-finales"; break;
+            case "THIRD_PLACE": named = "Petite finale"; break;
+            case "FINAL": named = "Finale"; break;
+            default: named = code.isEmpty() ? "Match" : code.replace('_', ' ');
+        }
+        return matchday > 0 ? named + " · J" + matchday : named;
+    }
+
+    /** The provider's status, said plainly. Null when the kickoff time is the thing to show. */
+    private String state(String status) {
+        switch (status) {
+            case "IN_PLAY": return "EN JEU";
+            case "PAUSED": return "MI-TEMPS";
+            case "FINISHED": return "FINI";
+            case "POSTPONED": return "REPORTÉ";
+            case "SUSPENDED": return "SUSPENDU";
+            case "CANCELLED": return "ANNULÉ";
+            default: return null;
+        }
+    }
+
+    private void openRemoteMatch(JSONObject fixture) {
+        String id = String.valueOf(fixture.optInt("id")); toast("Chargement de la composition…");
+        worker.execute(() -> {
+            try {
+                JSONObject detail = new JSONObject(get("/v1/football/matches/" + id));
+                JSONObject converted = convertMatch(detail);
+                runOnUiThread(() -> { match = converted; openMatch(); });
+            } catch (Exception error) { runOnUiThread(() -> remoteError(error)); }
+        });
+    }
+
+    private JSONObject convertMatch(JSONObject source) throws Exception {
+        JSONObject home = source.getJSONObject("homeTeam"), away = source.getJSONObject("awayTeam");
+        JSONArray homeLineup = home.optJSONArray("lineup"), awayLineup = away.optJSONArray("lineup");
+        boolean complete = homeLineup != null && awayLineup != null
+            && homeLineup.length() == 11 && awayLineup.length() == 11;
+        if (!complete) { homeLineup = new JSONArray(); awayLineup = new JSONArray(); }
+        JSONObject converted = new JSONObject().put("id", "fd-" + source.getInt("id"))
+            .put("title", home.optString("name") + " · " + away.optString("name"))
+            .put("competition", source.getJSONObject("competition").optString("name"))
+            .put("stage", stage(source.optString("stage", ""), source.optInt("matchday", 0)))
+            .put("date", source.optString("utcDate")).put("source", "football-data.org / " + source.optString("lineup_source", "composition indisponible"))
+            .put("lineup_available", complete).put("lineup_status", source.optString("lineup_status", "unavailable"))
+            .put("lineup_source", source.optString("lineup_source", "ESPN"))
+            .put("kickoff_epoch_ms", kickoff(source))
+            // The break and the final whistle matter as much as the start: without them the
+            // clock runs on alone and a finished match shows an hour of added time.
+            .put("halftime_epoch_ms", mark(source, "halftime"))
+            .put("second_half_epoch_ms", mark(source, "second_half"))
+            .put("end_epoch_ms", mark(source, "end"))
+            .put("end_minute", source.optJSONObject("clock") == null ? 0
+                : source.optJSONObject("clock").optInt("end_minute"));
+        JSONArray teams = new JSONArray();
+        teams.put(team("home", home.optString("name"), home.optString("formation", "Composition"), colour(home, "#7D9CD9")));
+        teams.put(team("away", away.optString("name"), away.optString("formation", "Composition"), colour(away, "#F6DADB")));
+        JSONArray players = new JSONArray();
+        addLineup(players, homeLineup, "home", home.optString("formation"));
+        addLineup(players, awayLineup, "away", away.optString("formation"));
+        if (complete) {
+            addBench(players, home.optJSONArray("bench"), "home");
+            addBench(players, away.optJSONArray("bench"), "away");
+        }
+        JSONObject goals = source.optJSONObject("score") == null ? null
+            : source.optJSONObject("score").optJSONObject("fullTime");
+        return converted.put("teams", teams).put("players", players)
+            .put("changes", changes(complete ? source.optJSONArray("timeline") : null))
+            // The provider's own account of the match travels whole, beside the notes and never
+            // inside them: the client shows it on a page of its own.
+            .put("timeline", source.optJSONArray("timeline") == null
+                ? new JSONArray() : source.optJSONArray("timeline"))
+            .put("team_stats", source.optJSONObject("team_stats") == null
+                ? new JSONObject() : source.optJSONObject("team_stats"))
+            .put("ground", source.optJSONObject("ground") == null
+                ? new JSONObject() : source.optJSONObject("ground"))
+            .put("score", new JSONObject().put("home", goals == null ? "" : goals.optString("home", ""))
+                .put("away", goals == null ? "" : goals.optString("away", "")));
+    }
+
+    /**
+     * The minute the match actually began, when the provider says so. The scheduled hour is a
+     * plan: a kickoff held up ten minutes leaves every note ten minutes out for the whole match.
+     */
+    private long kickoff(JSONObject source) throws Exception {
+        long published = mark(source, "kickoff");
+        return published != 0 ? published : Instant.parse(source.getString("utcDate")).toEpochMilli();
+    }
+
+    /** One published mark of the run of play, in epoch milliseconds. Zero until it happens. */
+    private long mark(JSONObject source, String name) {
+        JSONObject clock = source.optJSONObject("clock");
+        String at = clock == null ? "" : clock.optString(name);
+        try {
+            return at.isEmpty() ? 0 : Instant.parse(at).toEpochMilli();
+        } catch (java.time.format.DateTimeParseException malformed) { return 0; }
+    }
+
+    /** The substitutions, in the run of play the provider published. */
+    private JSONArray changes(JSONArray timeline) throws Exception {
+        JSONArray published = new JSONArray();
+        for (int i = 0; timeline != null && i < timeline.length(); i++) {
+            JSONObject event = timeline.optJSONObject(i);
+            JSONArray actors = event == null ? null : event.optJSONArray("players");
+            // ESPN names the player coming on first, the one going off second.
+            if (event == null || !"substitution".equals(event.optString("kind"))
+                || actors == null || actors.length() != 2 || event.isNull("minute")) continue;
+            published.put(new JSONObject().put("minute", event.optInt("minute"))
+                .put("in", actors.optString(0)).put("out", actors.optString(1)));
+        }
+        return published;
+    }
+
+    /** The pitch parses this straight away, so nothing malformed may reach it. */
+    private String colour(JSONObject team, String fallback) {
+        String value = team.optString("colour");
+        return value.matches("#[0-9A-Fa-f]{6}") ? value : fallback;
+    }
+
+    private JSONObject team(String key, String name, String formation, String colour) throws Exception {
+        return new JSONObject().put("key", key).put("name", name).put("formation", formation).put("colour", colour);
+    }
+
+    /** Each player stands where his published position says, not where the sheet lists him. */
+    private void addLineup(JSONArray target, JSONArray lineup, String side, String formation) throws Exception {
+        String[] positions = new String[lineup.length()];
+        for (int i = 0; i < positions.length; i++)
+            positions[i] = lineup.getJSONObject(i).optString("position");
+        double[][] spots = Formation.spots(positions, formation);
+        for (int i = 0; i < lineup.length(); i++) {
+            JSONObject player = lineup.getJSONObject(i);
+            target.put(new JSONObject().put("id", player.optString("fonote_id", "fd-" + player.optInt("id")))
+                .put("name", player.optString("name")).put("number", player.optInt("shirtNumber"))
+                .put("team", side).put("position", player.optString("position"))
+                .put("stats", player.optJSONObject("stats") == null
+                    ? new JSONObject() : player.optJSONObject("stats"))
+                .put("x", spots[i][0]).put("y", spots[i][1]));
+        }
+    }
+
+    /** Substitutes carry no spot: they are drawn on the one they inherit, or not at all. */
+    private void addBench(JSONArray target, JSONArray bench, String side) throws Exception {
+        for (int i = 0; bench != null && i < bench.length(); i++) {
+            JSONObject player = bench.getJSONObject(i);
+            target.put(new JSONObject().put("id", player.optString("fonote_id", "fd-" + player.optInt("id")))
+                .put("name", player.optString("name")).put("number", player.optInt("shirtNumber"))
+                .put("team", side).put("position", player.optString("position"))
+                .put("stats", player.optJSONObject("stats") == null
+                    ? new JSONObject() : player.optJSONObject("stats")));
+        }
+    }
+
+    private void openMatch() {
+        noteId = ""; focus = ""; entries.clear(); written = false;
+        adoptClock();
+        // The detail was just fetched: the first refresh is due a minute from now, not at once.
+        polled = System.currentTimeMillis(); showMatch();
+    }
+
+    /**
+     * The provider outranks the stored clock, but only when its marks say something new: a half
+     * begun, a half ended. Between two identical readings the clock is the user's own, adjustment
+     * to his broadcast included.
+     */
+    private void adoptClock() {
+        String key = "clock_" + match.optString("id");
+        long[] published = publishedClock();
+        if (published != null && !marks().equals(prefs.getString(key + "_marks", ""))) {
+            syncClock(published);
+            return;
+        }
+        clockAnchor = prefs.getLong(key + "_anchor", match.optLong("kickoff_epoch_ms", System.currentTimeMillis()));
+        clockBase = prefs.getLong(key + "_base", 0); clockRunning = prefs.getBoolean(key + "_running", true);
+        period = prefs.getInt(key + "_period", 1);
+    }
+
+    /** The clock the provider's marks describe, or null while it has published none. */
+    private long[] publishedClock() {
+        return match == null ? null : MatchClock.state(match.optLong("kickoff_epoch_ms"),
+            match.optLong("halftime_epoch_ms"), match.optLong("second_half_epoch_ms"),
+            match.optLong("end_epoch_ms"), match.optInt("end_minute"));
+    }
+
+    /** The marks as one comparable string: two identical readings say nothing new. */
+    private String marks() {
+        return match.optLong("kickoff_epoch_ms") + "/" + match.optLong("halftime_epoch_ms")
+            + "/" + match.optLong("second_half_epoch_ms") + "/" + match.optLong("end_epoch_ms")
+            + "/" + match.optInt("end_minute");
+    }
+
+    /** Puts the provider's clock on screen and remembers that its marks have been taken. */
+    private void syncClock(long[] published) {
+        clockAnchor = published[0]; clockBase = published[1];
+        period = (int)published[2]; clockRunning = published[3] == 1;
+        prefs.edit().putString("clock_" + match.optString("id") + "_marks", marks()).apply();
+        saveClock();
+    }
+
+    private boolean hasServer() {
+        return !prefs.getString("url", "http://10.0.2.2:8080").isEmpty();
+    }
+
+    private String get(String path) throws Exception {
+        return get(prefs.getString("url", "http://10.0.2.2:8080"), path);
+    }
+
+    private String get(String base, String path) throws Exception {
+        URL endpoint = new URL(base + path);
+        if (!endpoint.getProtocol().equals("http") && !endpoint.getProtocol().equals("https"))
+            throw new java.io.IOException("Adresse HTTP ou HTTPS attendue");
+        HttpURLConnection connection = (HttpURLConnection)endpoint.openConnection();
+        try {
+        connection.setConnectTimeout(5000); connection.setReadTimeout(15000);
+        connection.setInstanceFollowRedirects(false);
+        int code = connection.getResponseCode();
+        java.io.InputStream stream = code < 400 ? connection.getInputStream() : connection.getErrorStream();
+        String response;
+        try (java.io.InputStream input = stream) { response = input == null ? "" : readText(input); }
+        if (code < 200 || code >= 300) throw new java.io.IOException("Réponse HTTP " + code);
+        return response;
+        } finally { connection.disconnect(); }
+    }
+
+    private void remoteError(Exception error) {
+        label(error.getMessage() == null ? "Impossible de charger les matchs." : error.getMessage()).setTextColor(Color.rgb(240,186,120));
+    }
+
     private void showMatch() {
         screen = "match";
+        // The match and what the provider says about it are two cards side by side: the notes
+        // are the work, the facts are a glance away, and neither is a detour through a menu.
+        int showing = pager == null ? 0 : pager.page();
+        pager = new Pager(this); factsPage = null; statsPage = null;
         // Fills the screen when it fits, scrolls when it does not: the composer stays reachable.
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
-        root = frame(); scroll.addView(root); setContentView(scroll);
+        root = frame(); scroll.addView(root); pager.addPage(scroll); setContentView(pager);
+        // A composition that is there says so in one word at the foot of the screen; only its
+        // absence needs a sentence, and an empty pitch has all the room to carry one.
+        if (match.has("lineup_available") && !match.optBoolean("lineup_available")) {
+            String info = "provider_error".equals(match.optString("lineup_status"))
+                ? "Source des compositions injoignable. Notes générales disponibles avec + ; réessayez plus tard."
+                : "Composition indisponible auprès des sources. Vous pouvez prendre des notes générales avec +.";
+            TextView notice = label(info); notice.setTextSize(12); notice.setTextColor(MUTED);
+        }
         getWindow().setStatusBarColor(BACKGROUND); getWindow().setNavigationBarColor(BACKGROUND);
         LinearLayout header = strip(); root.addView(header);
         TextView fixture = new TextView(this); fixture.setText(
@@ -229,7 +959,7 @@ public class MainActivity extends Activity {
         clockLabel.setPadding(dp(12),0,dp(12),0); clockLabel.setBackground(rounded(Color.rgb(32,49,41),12));
         clockLabel.setContentDescription("Chronomètre du match, toucher pour ajuster ou changer de période");
         clockLabel.setOnClickListener(v -> clock()); header.addView(clockLabel,new LinearLayout.LayoutParams(-2,dp(48)));
-        pitch = new PitchView(this, match, this::tapPlayer, this::pullPlayer);
+        pitch = new PitchView(this, match, glassMarkers(), minute, this::tapPlayer, this::pullPlayer);
         pitch.setMinimumHeight(dp(300));
         LinearLayout.LayoutParams pitchSize = new LinearLayout.LayoutParams(-1, 0, 1);
         pitchSize.topMargin = dp(8); pitchSize.bottomMargin = dp(8);
@@ -237,15 +967,32 @@ public class MainActivity extends Activity {
         composer = new LinearLayout(this); composer.setOrientation(LinearLayout.VERTICAL);
         composer.setBackground(rounded(SURFACE, 16)); composer.setPadding(dp(10), dp(8), dp(10), dp(8));
         root.addView(composer, new LinearLayout.LayoutParams(-1, dp(COMPOSER)));
-        status = label(formations() + "  ·  " + match.optString("competition") + "  ·  Notes privées");
+        String source = match.optBoolean("lineup_available")
+            ? "  ·  " + match.optString("lineup_source", "ESPN") + ", placement schématique" : "";
+        LinearLayout footer = strip(); root.addView(footer, new LinearLayout.LayoutParams(-1, -2));
+        status = new TextView(this);
+        status.setText(formations() + source + "  ·  " + match.optString("competition"));
         status.setTextSize(12); status.setTextColor(Color.rgb(177,198,184));
+        status.setPadding(0, dp(8), 0, dp(8));
         status.setMaxLines(1); status.setEllipsize(TextUtils.TruncateAt.END);
+        footer.addView(status, new LinearLayout.LayoutParams(0, -2, 1));
+        // A card nobody knows about is a card nobody opens; this says so without costing a row.
+        if (told() || counted()) {
+            TextView hint = new TextView(this);
+            hint.setText(told() ? "Faits  ›" : "Statistiques  ›");
+            hint.setTextSize(12); hint.setTextColor(ACCENT);
+            hint.setPadding(dp(10), dp(8), 0, dp(8));
+            hint.setContentDescription((told() ? "Faits du match" : "Statistiques")
+                + ", ou balayer vers la gauche");
+            hint.setOnClickListener(v -> pager.show(1, true));
+            footer.addView(hint, new LinearLayout.LayoutParams(-2, -2));
+        }
         LinearLayout navigation = strip(); root.addView(navigation);
         String[] titles = {"↶", "≡ Notes", "☆ Bilan", "•••"};
         String[] described = {"Annuler la dernière action", "Mes observations", "Bilan par joueur", "Autres actions"};
         Runnable[] clicks = {this::undo, this::history, this::standings, () -> new AlertDialog.Builder(this).setTitle("Mon match")
-            .setItems(new String[]{"Synchroniser", "Configurer le serveur", "Exporter mes observations"}, (d,n) -> {
-                if(n==0) sync(); else if(n==1) settings(); else export();
+            .setItems(new String[]{"Accueil", "Synchroniser", "Configurer le serveur", "Exporter mes observations"}, (d,n) -> {
+                if(n==0) showHome(); else if(n==1) sync(); else if(n==2) settings(); else export();
             }).show()};
         for(int i=0;i<titles.length;i++) {
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0,dp(48),1); p.setMargins(dp(3),0,dp(3),0);
@@ -253,7 +1000,218 @@ public class MainActivity extends Activity {
             tab.setContentDescription(described[i]);
             navigation.addView(tab, p);
         }
+        if (told()) {
+            ScrollView beside = new ScrollView(this); beside.setFillViewport(true);
+            factsPage = frame(); beside.addView(factsPage); pager.addPage(beside);
+            renderFacts();
+        }
+        if (counted()) {
+            ScrollView further = new ScrollView(this); further.setFillViewport(true);
+            statsPage = frame(); further.addView(statsPage); pager.addPage(further);
+            renderStats();
+        }
+        root = (LinearLayout)scroll.getChildAt(0);
+        pager.show(showing, false);
         updateClock(); renderComposer();
+    }
+
+    /** Whether the provider gave any account of this match to put on the second card. */
+    private boolean told() {
+        JSONArray published = match.optJSONArray("timeline");
+        return published != null && published.length() > 0;
+    }
+
+    /** Whether the provider counted anything worth a card of figures of its own. */
+    private boolean counted() {
+        JSONObject counts = match.optJSONObject("team_stats");
+        JSONObject home = counts == null ? null : counts.optJSONObject("home");
+        JSONObject away = counts == null ? null : counts.optJSONObject("away");
+        if (home == null || away == null) return false;
+        for (String[] stat : COUNTED)
+            if (!home.optString(stat[0]).isEmpty() || !away.optString(stat[0]).isEmpty()) return true;
+        return false;
+    }
+
+    // ——— Ce que le fournisseur raconte, à côté des notes ———
+
+    /**
+     * The provider's own account of the match, on a page of its own. Deliberately not folded into
+     * the notes: the bilan promises to measure only what was observed, so a goal ESPN counted is
+     * shown next to that promise, never inside it.
+     */
+    private void renderFacts() {
+        LinearLayout previous = root;
+        root = factsPage; factsPage.removeAllViews();
+        TextView title = label("Faits du match");
+        title.setTextSize(24); title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView caveat = label("Relevé du fournisseur, à côté de vos notes. Rien ici n’entre dans "
+            + "votre journal ni dans votre bilan.");
+        caveat.setTextSize(12); caveat.setTextColor(MUTED);
+        JSONObject score = match.optJSONObject("score");
+        String home = score == null ? "" : score.optString("home"), away = score == null ? "" : score.optString("away");
+        if (!home.isEmpty() || !away.isEmpty()) {
+            TextView board = label(teamName("home") + "   " + (home.isEmpty() ? "–" : home)
+                + " – " + (away.isEmpty() ? "–" : away) + "   " + teamName("away"));
+            board.setTextSize(19); board.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        }
+        timelineSection();
+        groundSection();
+        crumbs("‹  Balayer vers la droite pour revenir au terrain",
+            counted() ? "Statistiques  ›" : null, 2);
+        root = previous;
+    }
+
+    /**
+     * The figures, one more card to the right. Their own page because they are read differently
+     * from the story of the match: a column of counts is scanned, a timeline is followed.
+     */
+    private void renderStats() {
+        LinearLayout previous = root;
+        root = statsPage; statsPage.removeAllViews();
+        // Named for what it shows, not for who supplies it; the caveat below says where it comes from.
+        TextView title = label("Statistiques");
+        title.setTextSize(24); title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView caveat = label("Compteurs " + match.optString("lineup_source", "du fournisseur")
+            + ", à côté de vos notes. Rien ici n’entre dans votre journal ni dans votre bilan.");
+        caveat.setTextSize(12); caveat.setTextColor(MUTED);
+        countedSection();
+        crumbs("‹  Balayer vers la droite pour revenir "
+            + (told() ? "aux faits" : "au terrain"), null, 0);
+        root = previous;
+    }
+
+    /** Where this card sits and where the next one is, on the line that closes a page. */
+    private void crumbs(String back, String forward, int page) {
+        LinearLayout row = strip();
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+        p.topMargin = dp(14); root.addView(row, p);
+        TextView here = new TextView(this);
+        here.setText(back); here.setTextSize(12); here.setTextColor(MUTED);
+        row.addView(here, new LinearLayout.LayoutParams(0, -2, 1));
+        if (forward == null) return;
+        TextView next = new TextView(this);
+        next.setText(forward); next.setTextSize(12); next.setTextColor(ACCENT);
+        next.setPadding(dp(10), dp(6), 0, dp(6));
+        next.setContentDescription(forward.replace("  ›", "") + ", ou balayer vers la gauche");
+        next.setOnClickListener(v -> pager.show(page, true));
+        row.addView(next, new LinearLayout.LayoutParams(-2, -2));
+    }
+
+    /** Goals, cards and changes, in the order they happened. The rest is clock keeping. */
+    private void timelineSection() {
+        JSONArray published = match.optJSONArray("timeline");
+        Map<String,String> names = playerNames();
+        boolean titled = false;
+        for (int i = 0; published != null && i < published.length(); i++) {
+            JSONObject event = published.optJSONObject(i);
+            String mark = moment(event.optString("kind"), event.optBoolean("scoring"));
+            if (mark.isEmpty() || event.isNull("minute")) continue;
+            if (!titled) { section("Le fil du match", null, null); titled = true; }
+            LinearLayout row = strip();
+            TextView when = new TextView(this);
+            when.setText(event.optInt("minute") + "’"); when.setTextSize(13); when.setTextColor(MUTED);
+            row.addView(when, new LinearLayout.LayoutParams(dp(38), -2));
+            TextView what = new TextView(this); what.setText(mark); what.setTextSize(13);
+            row.addView(what, new LinearLayout.LayoutParams(dp(34), -2));
+            TextView who = new TextView(this); who.setText(actors(event, names)); who.setTextSize(13);
+            who.setTextColor(sideColour(event.optString("team")));
+            row.addView(who, new LinearLayout.LayoutParams(0, -2, 1));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+            p.bottomMargin = dp(6); root.addView(row, p);
+        }
+    }
+
+    /** Both counts on one line, the label between them, so the two sides are read at a glance. */
+    private void countedSection() {
+        JSONObject counts = match.optJSONObject("team_stats");
+        JSONObject home = counts == null ? null : counts.optJSONObject("home");
+        JSONObject away = counts == null ? null : counts.optJSONObject("away");
+        if (home == null || away == null) return;
+        // Which column is whose: the colours say it, and a side that is only a colour is a riddle.
+        LinearLayout heading = strip();
+        heading.addView(figure(teamName("home"), Gravity.START, sideColour("home")),
+            new LinearLayout.LayoutParams(0, -2, 1));
+        heading.addView(figure(teamName("away"), Gravity.END, sideColour("away")),
+            new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams head = new LinearLayout.LayoutParams(-1, -2);
+        head.topMargin = dp(14); head.bottomMargin = dp(10); root.addView(heading, head);
+        for (String[] stat : COUNTED) {
+            String left = home.optString(stat[0]), right = away.optString(stat[0]);
+            if (left.isEmpty() && right.isEmpty()) continue;
+            LinearLayout row = strip();
+            row.addView(figure(left + stat[2], Gravity.END, sideColour("home")),
+                new LinearLayout.LayoutParams(dp(74), -2));
+            TextView label = new TextView(this); label.setText(stat[1]);
+            label.setTextSize(13); label.setTextColor(MUTED); label.setGravity(Gravity.CENTER);
+            row.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+            row.addView(figure(right + stat[2], Gravity.START, sideColour("away")),
+                new LinearLayout.LayoutParams(dp(74), -2));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+            p.bottomMargin = dp(7); root.addView(row, p);
+        }
+    }
+
+    private void groundSection() {
+        JSONObject where = match.optJSONObject("ground");
+        if (where == null) return;
+        List<String> lines = new ArrayList<>();
+        if (!where.optString("venue").isEmpty()) lines.add(where.optString("venue"));
+        if (!where.optString("referee").isEmpty()) lines.add("Arbitre : " + where.optString("referee"));
+        // Attendance is published as zero when it is simply not known; a zero crowd is a lie.
+        if (where.optInt("attendance") > 0)
+            lines.add(String.format(java.util.Locale.FRANCE, "%,d spectateurs",
+                where.optInt("attendance")).replace(',', ' '));
+        if (lines.isEmpty()) return;
+        section("La rencontre", null, null);
+        TextView text = label(String.join("\n", lines));
+        text.setTextSize(13); text.setTextColor(Color.rgb(194, 208, 198));
+    }
+
+    private TextView figure(String text, int gravity, int colour) {
+        TextView view = new TextView(this);
+        view.setText(text); view.setTextSize(15); view.setTextColor(colour);
+        view.setTypeface(Typeface.DEFAULT, Typeface.BOLD); view.setGravity(gravity);
+        return view;
+    }
+
+    /** The mark a published moment deserves, or nothing for the clock keeping nobody reads. */
+    private String moment(String kind, boolean scoring) {
+        if (scoring) return "own-goal".equals(kind) ? "⚽" : "⚽";
+        if (kind.startsWith("yellow")) return "🟨";
+        if (kind.startsWith("red")) return "🟥";
+        return "substitution".equals(kind) ? "⇄" : "";
+    }
+
+    /**
+     * Who was involved, read from the order the provider publishes: the scorer then who assisted,
+     * the player coming on then the one going off.
+     */
+    private String actors(JSONObject event, Map<String,String> names) {
+        JSONArray players = event.optJSONArray("players");
+        if (players == null || players.length() == 0) return "";
+        String first = names.getOrDefault(players.optString(0), players.optString(0));
+        if (players.length() < 2) return "own-goal".equals(event.optString("kind")) ? first + "  csc" : first;
+        String second = names.getOrDefault(players.optString(1), players.optString(1));
+        return "substitution".equals(event.optString("kind"))
+            ? first + "  ←  " + second : first + "  (p. " + second + ")";
+    }
+
+    private Map<String,String> playerNames() {
+        Map<String,String> names = new HashMap<>();
+        JSONArray players = match.optJSONArray("players");
+        for (int i = 0; players != null && i < players.length(); i++) {
+            JSONObject player = players.optJSONObject(i);
+            names.put(player.optString("id"), PlayerName.shorten(player.optString("name")));
+        }
+        return names;
+    }
+
+    private int sideColour(String side) {
+        JSONArray teams = match.optJSONArray("teams");
+        for (int i = 0; teams != null && i < teams.length(); i++)
+            if (teams.optJSONObject(i).optString("key").equals(side))
+                return Color.parseColor(teams.optJSONObject(i).optString("colour"));
+        return Color.WHITE;
     }
 
     // ——— Composition d'une note ———
@@ -448,8 +1406,7 @@ public class MainActivity extends Activity {
         }
         LinearLayout.LayoutParams minuteSize = new LinearLayout.LayoutParams(dp(58), dp(44));
         minuteSize.rightMargin = dp(8); line.addView(minuteButton, minuteSize);
-        HorizontalScrollView chips = new HorizontalScrollView(this);
-        chips.setHorizontalScrollBarEnabled(false); fade(chips);
+        HorizontalScrollView chips = sideways();
         LinearLayout chipRow = strip(); chips.addView(chipRow);
         if (entries.isEmpty()) {
             TextView empty = new TextView(this);
@@ -461,8 +1418,7 @@ public class MainActivity extends Activity {
         line.addView(chips, new LinearLayout.LayoutParams(0, dp(44), 1));
         composer.addView(line, new LinearLayout.LayoutParams(-1, dp(44)));
 
-        HorizontalScrollView palette = new HorizontalScrollView(this);
-        palette.setHorizontalScrollBarEnabled(false); fade(palette);
+        HorizontalScrollView palette = sideways();
         LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
         palette.addView(rows);
         String current = entries.containsKey(focus) ? entries.get(focus) : "";
@@ -653,13 +1609,13 @@ public class MainActivity extends Activity {
     }
     private String playerName(String id) {
         JSONObject player = playerById(id);
-        return player == null ? id : player.optInt("number") + " · " + player.optString("name")
+        return player == null ? id : player.optInt("number") + " · " + PlayerName.shorten(player.optString("name"))
             + " (" + teamName(player.optString("team")) + ")";
     }
     /** Short enough for a chip: "10 Mbappé". */
     private String shortName(String id) {
         JSONObject player = playerById(id);
-        return player == null ? id : player.optInt("number") + " " + player.optString("name");
+        return player == null ? id : player.optInt("number") + " " + PlayerName.shorten(player.optString("name"));
     }
     private List<JSONObject> notes() throws Exception {
         LinkedHashMap<String, JSONObject> notes = new LinkedHashMap<>();
@@ -679,7 +1635,8 @@ public class MainActivity extends Activity {
         }
         List<JSONObject> visible = new ArrayList<>();
         for (Map.Entry<String,JSONObject> entry : notes.entrySet()) {
-            if (!deleted.contains(entry.getKey())) {
+            if (!deleted.contains(entry.getKey())
+                    && match.optString("id").equals(entry.getValue().optString("match_id"))) {
                 entry.getValue().put("comment", comments.getOrDefault(entry.getKey(), ""));
                 visible.add(entry.getValue());
             }
@@ -712,11 +1669,42 @@ public class MainActivity extends Activity {
         return score == Math.rint(score) ? String.valueOf((int)score)
             : String.format(java.util.Locale.FRANCE, "%.1f", score);
     }
+    /**
+     * What the provider counted for this player, or nothing at all when it counted nothing.
+     *
+     * <p>Set beside the mark, never inside it: the mark answers "what did I see", this answers
+     * "what does the provider say happened", and a bilan that mixed the two would stop meaning
+     * either. A goalkeeper and a striker end up with different lines, which is the point.
+     */
+    private String counted(String id) {
+        JSONArray players = match.optJSONArray("players");
+        JSONObject stats = null;
+        boolean keeps = false;
+        for (int i = 0; players != null && i < players.length(); i++)
+            if (players.optJSONObject(i).optString("id").equals(id)) {
+                stats = players.optJSONObject(i).optJSONObject("stats");
+                // The same reading of a position the pitch uses to place him — and, for a
+                // substitute the provider only calls "Substitute", what he was counted doing.
+                keeps = Formation.band(players.optJSONObject(i).optString("position")) == 0;
+            }
+        if (stats == null) return "";
+        keeps = keeps || stats.optInt("saves", 0) > 0 || stats.optInt("shotsFaced", 0) > 0;
+        StringBuilder line = new StringBuilder();
+        for (String[] tally : TALLY) {
+            int value = stats.optInt(tally[0], 0);
+            if (value <= 0 || !keeps && KEEPER.contains(tally[0])) continue;
+            if (line.length() > 0) line.append("   ·   ");
+            line.append(value).append(' ').append(value > 1 ? tally[2] : tally[1]);
+        }
+        return line.toString();
+    }
+
     private void standings() {
-        screen = "standings"; page("Bilan de mes notes");
-        full("← Retour au match", this::showMatch);
+        screen = "standings"; page("Bilan de mes notes", this::showMatch);
+
         TextView caveat = label("Calculé sur mes seules notes : ce que j’ai remarqué, pas le match complet. "
-            + "Base 6, une demi-note par point.");
+            + "Base 6, une demi-note par point. La ligne grise est le compte du fournisseur, "
+            + "montré à côté et jamais compris dans la note.");
         caveat.setTextSize(12); caveat.setTextColor(MUTED);
         try {
             Map<String,int[]> balance = balances();
@@ -751,10 +1739,16 @@ public class MainActivity extends Activity {
                     if (counts.get(key) > 1) acts.append(" ×").append(counts.get(key));
                 }
                 String head = scoreText(cell[0]) + "   " + playerName(row.getKey());
-                SpannableString text = new SpannableString(head + "\n"
-                    + balanceText(cell[0]) + " de solde   ·   "
-                    + cell[1] + " ↑   " + cell[2] + " ↓\n" + acts);
+                String mine = head + "\n" + balanceText(cell[0]) + " de solde   ·   "
+                    + cell[1] + " ↑   " + cell[2] + " ↓\n" + acts;
+                String theirs = counted(row.getKey());
+                if (!theirs.isEmpty())
+                    theirs = "\n" + match.optString("lineup_source", "ESPN") + " : " + theirs;
+                SpannableString text = new SpannableString(mine + theirs);
                 text.setSpan(new RelativeSizeSpan(1.5f), 0, scoreText(cell[0]).length(), 0);
+                // The provider's line is set back a shade: it is context, not the mark.
+                if (!theirs.isEmpty())
+                    text.setSpan(new ForegroundColorSpan(MUTED), mine.length(), text.length(), 0);
                 card(text, balanceTint(cell[0]));
             }
             int silent = match.optJSONArray("players").length() - ranked.size();
@@ -830,7 +1824,7 @@ public class MainActivity extends Activity {
         return "";
     }
     private void history() {
-        screen = "history"; page("Mes observations"); full("← Retour au match", this::showMatch);
+        screen = "history"; page("Mes observations", this::showMatch);
         try {
             List<JSONObject> notes = notes();
             int moments = notes.size(), acts = 0;
@@ -868,13 +1862,19 @@ public class MainActivity extends Activity {
             }).show();
     }
     private void clock() {
+        long[] published = publishedClock();
+        java.util.List<String> choices = new java.util.ArrayList<>(java.util.Arrays.asList(
+            "Coup d’envoi : démarrer à 0′",
+            "Mi-temps : pause puis reprise auto à 45′",
+            "Coup d’envoi 2e mi-temps : démarrer à 45′",
+            clockRunning ? "Pause" : "Reprendre le chrono",
+            "Ajuster à la minute de ma diffusion"));
+        // No adjustment is a dead end: where the provider has published its marks, the match's
+        // own time is one tap away, whatever the chrono was set to in the meantime.
+        if (published != null) choices.add("Resynchroniser sur le match (" + reading(published) + ")");
         new AlertDialog.Builder(this).setTitle("Chronomètre du match")
-            .setItems(new String[]{
-                "Coup d’envoi : démarrer à 0′",
-                "Mi-temps : pause puis reprise auto à 45′",
-                "Coup d’envoi 2e mi-temps : démarrer à 45′",
-                clockRunning ? "Pause" : "Reprendre le chrono",
-                "Ajuster à la minute de ma diffusion"}, (d,n) -> {
+            .setItems(choices.toArray(new String[0]), (d,n) -> {
+                if(n==5) { syncClock(published); showMatch(); return; }
                 if(n==4) { adjustClock(); return; }
                 if(n==3) { clockBase = clockSeconds(); clockRunning = !clockRunning; }
                 else { clockBase = n==0 ? 0 : HALF*60L; period = n==0 ? 1 : 2; clockRunning = true; }
@@ -885,6 +1885,13 @@ public class MainActivity extends Activity {
                 saveClock(); showMatch();
             }).setNegativeButton("Fermer",null).show();
     }
+    /** What resynchronising would put on the clock, said as the menu will show it. */
+    private String reading(long[] published) {
+        if (published[0] > System.currentTimeMillis() && published[1] == 0) return "avant le coup d’envoi";
+        long seconds = MatchClock.seconds(System.currentTimeMillis(), published[0], published[1], published[3] == 1);
+        return MatchClock.stamp(seconds, (int)published[2]) + "′";
+    }
+
     private void adjustClock() {
         NumberPicker picker = new NumberPicker(this); picker.setMinValue(0); picker.setMaxValue(150);
         updateClock();
@@ -895,19 +1902,117 @@ public class MainActivity extends Activity {
                 saveClock(); showMatch();
             }).setNegativeButton("Annuler", null).show();
     }
+    private void options() {
+        screen = "options"; page("Options", this::showHome);
+        section("Serveur", null, null);
+        TextView help = label("Les matchs sont accessibles sans compte ni jeton personnel. "
+            + "La synchronisation des notes utilise un jeton séparé, facultatif.");
+        help.setTextColor(MUTED); help.setTextSize(13); help.setPadding(0, 0, 0, dp(10));
+        full("Configurer le serveur", this::settings);
+        connectionTest(root, () -> prefs.getString("url", "http://10.0.2.2:8080"));
+        markerChoice();
+    }
+
+    /** Which of the two shirt looks the pitch draws. Glass unless the player asked for paint. */
+    private boolean glassMarkers() { return !"solid".equals(prefs.getString("markers", "glass")); }
+
+    /** Taste, not behaviour: the two looks sit side by side and the choice is what it shows. */
+    private void markerChoice() {
+        section("Pastilles des joueurs", null, null);
+        LinearLayout row = strip(); root.addView(row);
+        row.addView(shirtChoice(true, "Verre",
+            "Pastilles verre : disque sombre, couleur de l'équipe en anneau et en halo"), half());
+        row.addView(shirtChoice(false, "Plein",
+            "Pastilles pleines : disque peint à la couleur de l'équipe"), half());
+    }
+
+    private LinearLayout.LayoutParams half() {
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(0, -2, 1);
+        size.setMargins(dp(3), dp(4), dp(3), dp(4));
+        return size;
+    }
+
+    private LinearLayout shirtChoice(boolean glass, String name, String described) {
+        boolean chosen = glass == glassMarkers();
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL); card.setGravity(Gravity.CENTER);
+        card.setPadding(dp(10), dp(14), dp(10), dp(14));
+        // The sample sits on a patch of pitch, because that is the only place it will ever be seen.
+        GradientDrawable back = rounded(Color.rgb(24, 56, 46), 14);
+        back.setStroke(dp(chosen ? 2 : 1), chosen ? ACCENT : Color.argb(60, 255, 255, 255));
+        card.setBackground(back);
+        TextView sample = new TextView(this);
+        sample.setText("10"); sample.setTextSize(12.5f); sample.setGravity(Gravity.CENTER);
+        sample.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        sample.setBackground(PitchView.shirt(this, glass, SAMPLE_KIT, false, false));
+        sample.setTextColor(glass ? SAMPLE_KIT : Color.rgb(15, 35, 33));
+        sample.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        card.addView(sample, new LinearLayout.LayoutParams(dp(32), dp(32)));
+        TextView caption = new TextView(this);
+        caption.setText(name); caption.setTextSize(14); caption.setPadding(0, dp(8), 0, 0);
+        caption.setTextColor(chosen ? ACCENT : INK);
+        caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        card.addView(caption);
+        card.setContentDescription(described + (chosen ? ", sélectionné" : ""));
+        card.setFocusable(true); card.setMinimumHeight(dp(48));
+        card.setOnClickListener(v -> {
+            prefs.edit().putString("markers", glass ? "glass" : "solid").apply();
+            options();
+        });
+        return card;
+    }
+
     private void settings() {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
         EditText url = new EditText(this); url.setHint("https://mon-serveur");
         url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         url.setText(prefs.getString("url", "http://10.0.2.2:8080")); box.addView(url);
-        EditText token = new EditText(this); token.setHint("Jeton personnel");
+        EditText token = new EditText(this); token.setHint("Jeton de synchronisation (facultatif)");
         token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         token.setText(prefs.getString("token", "")); box.addView(token);
+        connectionTest(box, () -> url.getText().toString().trim().replaceAll("/+$", ""));
         new AlertDialog.Builder(this).setTitle("Serveur personnel").setView(box)
             .setPositiveButton("Enregistrer", (d,w) -> prefs.edit()
                 .putString("url", url.getText().toString().trim().replaceAll("/+$", ""))
                 .putString("token", token.getText().toString().trim()).apply())
             .setNegativeButton("Annuler", null).show();
+    }
+
+    private void connectionTest(LinearLayout box, java.util.function.Supplier<String> address) {
+        TextView result = new TextView(this);
+        result.setTextColor(MUTED); result.setPadding(dp(8), dp(8), dp(8), dp(8));
+        result.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        Button test = button("Tester la connexion", () -> {});
+        box.addView(test, new LinearLayout.LayoutParams(-1, dp(48))); box.addView(result);
+        test.setOnClickListener(v -> {
+            String base = address.get();
+            test.setEnabled(false); result.setText("Connexion au serveur…");
+            worker.execute(() -> {
+                boolean reached = false;
+                String message;
+                try {
+                    JSONObject health = new JSONObject(get(base, "/v1/health"));
+                    if (!"fonote".equals(health.optString("service")))
+                        throw new java.io.IOException("Ce serveur n’est pas un serveur Fonote");
+                    reached = true;
+                    if (!health.optBoolean("football_configured")) {
+                        message = "Serveur connecté. Clé football absente : renseignez FOOTBALL_DATA_TOKEN dans le .env du serveur, puis redémarrez-le.";
+                    } else {
+                        runOnUiThread(() -> result.setText("Serveur connecté. Vérification des données football…"));
+                        JSONObject data = new JSONObject(get(base, "/v1/football/competitions"));
+                        JSONArray competitions = data.getJSONArray("competitions");
+                        message = "Connexion réussie : serveur et API football accessibles ("
+                            + competitions.length() + " compétitions). Retournez à l’accueil pour charger les matchs.";
+                    }
+                } catch (Exception error) {
+                    message = reached
+                        ? "Serveur connecté, mais données football indisponibles. Vérifiez la clé API, le quota et la connexion Internet du serveur."
+                        : "Connexion impossible. Vérifiez que le serveur est démarré et que l’adresse est correcte. Sur l’émulateur : http://10.0.2.2:8080. Si le serveur tourne déjà, redémarrez-le avec la dernière version.";
+                }
+                String feedback = message;
+                runOnUiThread(() -> { test.setEnabled(true); result.setText(feedback); });
+            });
+        });
     }
     private String request(String base, String token, JSONObject body) throws Exception {
         URL url = new URL(base + "/v1/operations");

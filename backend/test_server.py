@@ -8,7 +8,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from backend.server import DEMO, connect, make_server
+from backend.server import DEMO, connect, football_path, make_server, sources
 
 MATCH = json.loads(DEMO.read_text())
 PLAYERS = [p['id'] for p in MATCH['players']]
@@ -82,6 +82,16 @@ class ServerTest(unittest.TestCase):
             self.request(self.note(), token='wrong')
         self.assertEqual(error.exception.code, 401)
 
+    def test_health_is_public_without_exposing_credentials(self):
+        self.assertEqual(self.request(token='wrong', path='/v1/health'),
+                         {'service': 'fonote', 'football_configured': False})
+
+    def test_calendar_does_not_require_personal_token(self):
+        from unittest.mock import patch
+        with patch('backend.server.football_data', return_value={'competitions': []}):
+            self.assertEqual(self.request(token='wrong', path='/v1/football/competitions'),
+                             {'competitions': []})
+
     def test_invalid_input_never_persists(self):
         rejected = [
             ('minute', True), ('minute', 151), ('id', 'bad'), ('match_id', 'unknown'),
@@ -111,6 +121,23 @@ class ServerTest(unittest.TestCase):
                                 dict(player_id=PLAYERS[2], action='negative')])
         self.request(op)
         self.assertEqual(self.request()[0]['operation'], op)
+
+    def test_football_data_routes_are_narrowly_mapped(self):
+        self.assertEqual(football_path('/v1/football/competitions', {}), 'competitions')
+        self.assertEqual(football_path('/v1/football/matches', {
+            'dateFrom': ['2026-09-05'], 'ignored': ['secret']}),
+            'matches?dateFrom=2026-09-05')
+        self.assertEqual(football_path('/v1/football/matches/123', {}), 'matches/123')
+        self.assertEqual(football_path('/v1/football/matches/not-a-number', {}), None)
+
+    def test_remote_football_data_note_ids_are_accepted(self):
+        op = self.note(match_id='fd-123', entries=[dict(player_id='fd-456', action='pass')])
+        self.request(op)
+        self.assertEqual(self.request()[0]['operation'], op)
+
+    def test_espn_players_sync_under_the_original_match_id(self):
+        op = self.note(match_id='fd-123', entries=[dict(player_id='espn-456', action='pass')])
+        self.assertEqual(self.request(op)['operation'], op)
 
     def test_note_without_player_is_a_general_note(self):
         op = self.note(entries=[])
@@ -154,3 +181,25 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ReloadTest(unittest.TestCase):
+    def test_sources_track_the_server_modules_and_tolerate_a_vanishing_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'server.py').write_text('x = 1')
+            (root / 'espn.py').write_text('y = 2')
+            (root / 'notes.txt').write_text('ignored')
+            marks = sources(root)
+            self.assertEqual(sorted(marks), ['espn.py', 'server.py'])
+
+            # A save is a change; reading the same tree twice is not.
+            self.assertEqual(marks, sources(root))
+            (root / 'espn.py').write_text('y = 3')
+            import os as system
+            system.utime(root / 'espn.py', (0, 0))
+            self.assertNotEqual(marks, sources(root))
+
+            # A file removed mid-write is skipped, never an exception.
+            (root / 'espn.py').unlink()
+            self.assertEqual(sorted(sources(root)), ['server.py'])
