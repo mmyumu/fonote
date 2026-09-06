@@ -27,6 +27,12 @@ DEMO = Path(__file__).resolve().parents[1] / 'android/app/src/main/assets/match.
 ACTIONS = {'positive', 'goal', 'assist', 'pass', 'dribble', 'shot_on', 'defense', 'save',
            'negative', 'own_goal', 'lost_ball', 'pass_missed', 'dribble_lost', 'shot_off',
            'duel_lost', 'save_missed', 'yellow', 'red'}
+# What a stroke on a tactical schema can mean. Meaning is carried by the shape of the line the
+# client draws — solid, dashed, waved, doubled — never by a colour, which already names a team.
+STROKES = {'pass', 'run', 'carry', 'shot'}
+# Bounds a hand-drawn schema stays well inside; anything past them is a client gone wrong,
+# not a moment of football. Twenty-two players is the whole pitch.
+MAX_TOKENS, MAX_SHAPES, MAX_POINTS = 30, 40, 32
 
 
 def load_env(path=None):
@@ -89,7 +95,10 @@ def validate(op):
     kind = op['kind']
     # 'restore' undoes a 'delete'. Only an explicit restore does, so a deletion still wins
     # over a concurrent edit arriving from another device.
-    if kind not in {'note', 'comment', 'delete', 'restore'}:
+    # 'diagram' carries the schema of a tactical note. Written beside the note under the same
+    # id, the way a comment is: a drawn note is a note that also happens to be drawn, and the
+    # journal keeps one kind of note rather than two.
+    if kind not in {'note', 'comment', 'delete', 'restore', 'diagram'}:
         raise ValueError('Type inconnu')
     allowed = {'id', 'note_id', 'kind'}
     if kind == 'note':
@@ -125,9 +134,69 @@ def validate(op):
         allowed |= {'text'}
         if not isinstance(op['text'], str) or len(op['text']) > 2000:
             raise ValueError('Commentaire trop long ou invalide')
+    if kind == 'diagram':
+        allowed |= {'schema'}
+        validate_schema(op['schema'])
     if set(op) != allowed:
         raise ValueError('Champs invalides')
     return op
+
+
+def fraction(value):
+    """A coordinate on the board: a fraction of the pitch, and nothing else."""
+    if type(value) not in (int, float) or isinstance(value, bool) or not 0 <= value <= 1:
+        raise ValueError('Coordonnée invalide')
+    return value
+
+
+def validate_schema(schema):
+    """The geometry of a tactical note: who stands where, and the run of play between them.
+
+    Deliberately geometry alone. A token names a player and stops there, so nothing here can
+    disagree with the composition, the bilan or the journal about who he is or what he did.
+    """
+    if not isinstance(schema, dict) or set(schema) != {'board', 'tokens', 'shapes'}:
+        raise ValueError('Schéma invalide')
+    if schema['board'] not in {'blank', 'full'}:
+        raise ValueError('Terrain inconnu')
+    tokens, shapes = schema['tokens'], schema['shapes']
+    if not isinstance(tokens, list) or len(tokens) > MAX_TOKENS:
+        raise ValueError('Joueurs du schéma invalides')
+    if not isinstance(shapes, list) or len(shapes) > MAX_SHAPES:
+        raise ValueError('Tracés du schéma invalides')
+    known = {p['id'] for p in json.loads(DEMO.read_text())['players']}
+    for token in tokens:
+        if not isinstance(token, dict) or not {'x', 'y'} <= set(token):
+            raise ValueError('Joueur du schéma invalide')
+        fraction(token['x'])
+        fraction(token['y'])
+        if 'player_id' in token:
+            # A named token belongs to this match; a pawn belongs to nobody and says so.
+            if set(token) != {'player_id', 'x', 'y'}:
+                raise ValueError('Joueur du schéma invalide')
+            remote = isinstance(token['player_id'], str) and re.fullmatch(r'(?:fd|espn)-[0-9]+', token['player_id'])
+            if token['player_id'] not in known and not remote:
+                raise ValueError('Joueur inconnu')
+        else:
+            if not set(token) <= {'team', 'label', 'x', 'y'} or 'team' not in token:
+                raise ValueError('Joueur du schéma invalide')
+            if token['team'] not in {'home', 'away', 'neutral'}:
+                raise ValueError('Équipe inconnue')
+            if not isinstance(token.get('label', ''), str) or len(token.get('label', '')) > 3:
+                raise ValueError('Étiquette invalide')
+    for shape in shapes:
+        if not isinstance(shape, dict) or set(shape) != {'kind', 'points'}:
+            raise ValueError('Tracé invalide')
+        if shape['kind'] not in STROKES:
+            raise ValueError('Tracé inconnu')
+        points = shape['points']
+        if not isinstance(points, list) or not 2 <= len(points) <= MAX_POINTS:
+            raise ValueError('Tracé invalide')
+        for point in points:
+            if not isinstance(point, list) or len(point) != 2:
+                raise ValueError('Point invalide')
+            fraction(point[0])
+            fraction(point[1])
 
 
 @contextmanager

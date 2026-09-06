@@ -151,6 +151,79 @@ class ServerTest(unittest.TestCase):
         self.request(op)
         self.assertEqual(self.request()[0]['operation'], op)
 
+    def schema(self, **fields):
+        """A tactical note's board: a couple of players and the pass between them."""
+        board = dict(board='blank',
+                     tokens=[dict(player_id=PLAYERS[0], x=0.3, y=0.4),
+                             dict(team='away', label='6', x=0.5, y=0.5)],
+                     shapes=[dict(kind='pass', points=[[0.3, 0.4], [0.42, 0.46], [0.7, 0.62]])])
+        board.update(fields)
+        return board
+
+    def diagram(self, note_id=None, **fields):
+        return dict(id=str(uuid4()), note_id=note_id or str(uuid4()), kind='diagram',
+                    schema=self.schema(**fields))
+
+    def test_tactical_note_carries_its_schema_beside_the_note(self):
+        note = self.note(entries=[dict(player_id=PLAYERS[0], action='pass')])
+        drawn = self.diagram(note['note_id'])
+        self.request(note)
+        self.request(drawn)
+        self.assertEqual([r['operation'] for r in self.request()], [note, drawn])
+
+    def test_a_schema_is_rewritten_stroke_by_stroke_under_the_same_note(self):
+        note_id = str(uuid4())
+        first = self.diagram(note_id)
+        second = self.diagram(note_id, shapes=first['schema']['shapes']
+                              + [dict(kind='run', points=[[0.7, 0.6], [0.8, 0.8]])])
+        self.request(first)
+        self.request(second)
+        # Both versions stay in the log; a reader takes the last, as it does for a note.
+        self.assertEqual([r['operation'] for r in self.request()], [first, second])
+
+    def test_an_empty_board_is_a_schema_undone(self):
+        op = self.diagram(tokens=[], shapes=[])
+        self.assertEqual(self.request(op)['operation'], op)
+
+    def test_a_full_board_carries_the_whole_pitch(self):
+        op = self.diagram(board='full',
+                          tokens=[dict(player_id=p, x=0.5, y=0.5) for p in PLAYERS[:22]])
+        self.assertEqual(self.request(op)['operation'], op)
+
+    def test_invalid_schema_never_persists(self):
+        rejected = [
+            dict(board='ailleurs'),
+            dict(tokens=[dict(player_id='unknown', x=0.5, y=0.5)]),
+            dict(tokens=[dict(player_id=PLAYERS[0], x=1.5, y=0.5)]),
+            dict(tokens=[dict(player_id=PLAYERS[0], x=0.5, y=0.5, team='home')]),
+            dict(tokens=[dict(x=0.5, y=0.5)]),
+            dict(tokens=[dict(team='arbitre', x=0.5, y=0.5)]),
+            dict(tokens=[dict(team='home', label='trop long', x=0.5, y=0.5)]),
+            dict(tokens=[dict(player_id=PLAYERS[0], x=True, y=0.5)]),
+            dict(tokens=[dict(player_id=PLAYERS[0], x=0.5, y=0.5)] * 31),
+            dict(shapes=[dict(kind='tunnel', points=[[0, 0], [1, 1]])]),
+            dict(shapes=[dict(kind='pass', points=[[0, 0]])]),
+            dict(shapes=[dict(kind='pass', points=[[0, 0], [1, 1]], extra=1)]),
+            dict(shapes=[dict(kind='pass', points=[[0, 0], [1, 1, 1]])]),
+            dict(shapes=[dict(kind='pass', points=[[0, 0], [1, 1]])] * 41),
+            dict(shapes=[dict(kind='pass', points=[[0, 0], [1, 1]] * 17)]),
+        ]
+        for broken in rejected:
+            with self.assertRaises(HTTPError) as error:
+                self.request(self.diagram(**broken))
+            self.assertEqual(error.exception.code, 400, broken)
+        # A schema is a field of its own: neither missing nor smuggled onto another kind.
+        for op in [dict(id=str(uuid4()), note_id=str(uuid4()), kind='diagram'),
+                   self.note(schema=self.schema())]:
+            with self.assertRaises(HTTPError) as error:
+                self.request(op)
+            self.assertEqual(error.exception.code, 400, op['kind'])
+        self.assertEqual(self.request(), [])
+
+    def test_a_schema_accepts_the_players_of_a_remote_match(self):
+        op = self.diagram(tokens=[dict(player_id='espn-456', x=0.5, y=0.5)])
+        self.assertEqual(self.request(op)['operation'], op)
+
     def test_delete_can_be_undone_by_a_restore(self):
         note = self.note()
         delete = dict(id=str(uuid4()), note_id=note['note_id'], kind='delete')

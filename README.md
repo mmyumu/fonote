@@ -87,6 +87,71 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
 - Deux styles de pastille au choix dans **Accueil → Options** : « Verre » (disque sombre, couleur de l'équipe en anneau, en halo et sur le numéro) ou « Plein » (disque peint). Le choix est montré par un aperçu dessiné avec le même code que le terrain, et il est conservé d'une session à l'autre. Le nom de chaque joueur porte sa propre plaque, dessinée sur une couche à part, au-dessus de **toutes** les pastilles : sur une formation à cinq lignes, une demi-pelouse ne peut pas loger six rangées sans chevauchement, donc la question n'est pas de l'éviter mais de choisir qui l'emporte — un nom reste toujours lisible, un numéro à moitié couvert garde sa couleur et sa place. Seul le joueur qu'on est en train de noter passe devant les noms, pour que lire un voisin ne coûte jamais le numéro de celui qu'on note. La cible tactile est la pastille elle-même (44 dp) et non la boîte qui portait le nom : deux voisins sont moins faciles à confondre du doigt.
 - Deux gestes pour noter : toucher un joueur, puis son action. Il n'y a pas de bouton d'enregistrement — chaque action écrit la note aussitôt.
 - Une note décrit un moment, pas un joueur. Tant qu'une note est ouverte, le panneau **collecte** : chaque joueur touché la rejoint avec son action propre, et « A marque, B délivre la passe décisive, C rate son arrêt » s'enchaîne d'un trait en six taps, sans quitter le terrain. Sans note ouverte, toucher un joueur en démarre une. Le seul geste qui reste à dire tout haut est donc la fin d'un moment : **« Terminé »**, qui rend la liste des notes. La corbeille à côté jette la note en cours ; tant qu'aucune action n'a été choisie il n'y a rien à jeter, et le bouton dit « Abandonner ».
+- **Note tactique**, le second mode de prise de note, ouvert par « ▤ Tactique » à côté de
+  « + Note sans joueur ». Le mode rapide répond à « qui a fait quoi, et à quelle minute » ; celui-ci
+  répond à « où, et vers qui » — une passe mérite d'être dessinée quand ce qui compte est la ligne
+  qu'elle a prise et les joueurs qu'elle a éliminés, et aucune palette de dix-huit symboles ne dit
+  cela. C'est **la même note** en dessous : même identifiant, même minute, même commentaire, même
+  récapitulatif, et les actions données ici comptent dans le bilan exactement comme celles tapées
+  sur le terrain. Seule la surface change, et elle prend tout l'écran — un tableau qui partage la
+  place avec un panneau est un tableau sur lequel on ne peut pas dessiner.
+  - Deux plateaux : **terrain vierge**, où l'on pose les trois ou quatre joueurs qui comptent
+    (« + Joueur » les place à leur poste réel, y compris un remplaçant à la place qu'il occupe à
+    cette minute, et la suite du geste est une correction plutôt qu'un placement à partir de rien),
+    et **terrain complet**, les 22 dans leur formation, qu'on déplace. On passe de l'un à l'autre à
+    tout moment ; vider le terrain se rattrape par `↶`. Un pion sans nom — « Pion — Strasbourg »,
+    « Pion — sans équipe » — sert pour l'adversaire dont le seul rôle est d'avoir été éliminé.
+  - Deux outils explicites plutôt qu'un geste malin : `↔ Déplacer` traîne les joueurs, les quatre
+    tracés dessinent. Un doigt qui glisse est ambigu — « il était plus à gauche » ou « le ballon est
+    parti là-bas » — et deviner faux coûte soit un tracé perdu, soit un joueur déplacé qui était
+    bien placé. Le dire coûte un tap avant une série de tracés et ne coûte jamais une erreur.
+  - **Déplacement par lots.** En mode Déplacer, glisser sur la pelouse **vide** encadre : tous les
+    joueurs pris dans le rectangle sont sélectionnés, et glisser l'un d'eux les emmène tous. Un
+    schéma est très souvent un bloc — une défense qui remonte, un milieu qui coulisse — et les
+    bouger un par un est la façon la plus sûre de renoncer au dessin. Le geste était libre : dans
+    ce mode, un glissé sur l'herbe ne faisait rien. Le déplacement est **rigide** : la course est
+    bornée une fois pour tout le groupe et non joueur par joueur contre la ligne de touche, sinon
+    une défense poussée vers le corner s'écraserait contre le bord au lieu de garder sa forme.
+    Prendre quelqu'un hors du groupe relâche le groupe ; toucher l'herbe relâche tout. Le panneau
+    dit ce que l'outil en main sait faire quand rien n'est sélectionné, et sa hauteur ne change
+    jamais — choisir un outil ou un joueur ne déplace pas le terrain sous le doigt.
+  - **Appui long sur un joueur** : il entre dans la sélection ou en sort. Un rectangle est un outil
+    grossier — il attrape le milieu défensif qui se tenait entre les lignes visées — et le
+    redessiner pour corriger un homme coûte plus cher que corriger cet homme. Le groupe n'est
+    donc touché qu'une fois que le doigt a dit ce qu'il voulait : remplacer la sélection dès
+    l'appui ferait perdre tous les autres à un appui long destiné à en retirer un seul. La durée
+    est comptée dans la vue (`ViewConfiguration.getLongPressTimeout()`) : elle traite elle-même
+    chaque événement, donc l'appui long que la plateforme aurait programmé ne l'est jamais.
+    Le seuil de déplacement n'est pas du trajet — le glissé part de l'endroit où le toucher a
+    cessé d'être un appui, et rien ne bouge avant : un tremblement sous un doigt posé n'est pas
+    un glissé, sinon il emporterait la sélection avant que l'appui long ait le temps de parler.
+    Attention, le geste ne dit pas la même chose que sur le terrain du mode rapide, où l'appui
+    long **retire** le joueur de la note ; ici retirer un pion se fait à la gomme ou par le `×` du
+    panneau, et l'appui long ne touche qu'à la sélection.
+  - Les bords du tableau sont réservés à l'application (`setSystemGestureExclusionRects`) : un
+    latéral se tient sur la ligne de touche et un groupe s'encadre depuis l'extérieur, deux gestes
+    qui partent là où le système lit un balayage retour — glisser Maronnier vers la gauche quittait
+    la note au lieu de le déplacer. La plateforme plafonne à 200 dp par bord ce qu'une application
+    peut réclamer, donc les glissés les plus près du cadre sont protégés, pas tous.
+  - Quatre tracés, distingués par la **forme** du trait et jamais par sa couleur — la couleur nomme
+    déjà une équipe : passe (trait plein), course sans ballon (pointillés), conduite de balle
+    (ondulé), tir (trait double). Chacun part d'un ballon sauf la course, qui se fait sans lui.
+    Le trait suit le doigt : un glissé droit donne une droite, un glissé courbe garde sa courbe.
+  - Les deux bouts d'un tracé **s'aimantent** au joueur qui se trouve à côté, donc « de Ripart vers
+    Yassine » est exact sans viser au pixel ; le trait est ensuite reculé du disque qu'il touche,
+    sinon la pointe de flèche disparaît sous le joueur qu'elle désigne. Un tracé garde les
+    coordonnées avec lesquelles il a été dessiné : un schéma enregistre où le ballon est allé à un
+    instant, pas un lien qui suivrait un joueur.
+  - Toucher un joueur du tableau ouvre la palette complète pour lui, ou « Aucune action ». Ce qui
+    est sur le tableau **est** la note : gommer un joueur emporte l'action qu'on lui avait donnée.
+  - Pas de bouton d'enregistrement ici non plus : chaque tracé, chaque déplacement, chaque gomme
+    écrit aussitôt. Chacun des trois éléments d'une note — les participants, le texte, le schéma —
+    n'est réémis que s'il a réellement changé, sinon renvoyer les participants à chaque trait
+    enterrerait le journal sous des versions qui disent la même chose.
+- Dans **« Mes observations »**, une note dessinée est montrée dessinée : « ↗ Bonne passe — 20 Ripart »
+  ne dit presque rien d'un moment dont tout l'intérêt était la ligne prise par le ballon. La carte
+  porte donc le tableau lui-même, en petit, et la toucher rouvre le tableau — la boîte de dialogue
+  que toute autre note ouvre au toucher est ici sur l'appui long.
 - Le résumé d'une note suit toujours le même ordre, quel que soit l'ordre de saisie : le plus fort d'abord, le bon avant le mauvais, départages par l'ordre de la palette. Il se déduit des poids d'actions, sans table supplémentaire, et s'applique au rendu seulement — le journal garde l'ordre réel de saisie, donc changer d'avis sur cet ordre ne réécrit aucune note.
 - Le geste retour défait l'écran courant au lieu de quitter : il ferme la note ouverte en la gardant, puis ramène de « Notes » ou « Bilan » au match, et ne sort de l'application qu'en dernier recours.
 - Retirer un joueur de la note se fait par **appui long sur le terrain**, là où on l'a mis — la croix de sa pastille fait la même chose. Un tap sur un joueur déjà dans la note vise sa ligne pour corriger son action, ce qui interdisait le double-clic. Retirer le dernier joueur d'une note l'efface.
@@ -233,7 +298,7 @@ for check in Formation Lineup MatchClock PlayerName; do java -ea -cp /tmp/fonote
 La logique sans Android (placement, chronomètre, noms) tient dans des classes à part, vérifiées
 par ces `assert` sans émulateur ni dépendance de test.
 
-Parcours Android à vérifier sur appareil : composer une note à plusieurs joueurs sans quitter le terrain, une note générale par `+`, noter hors connexion, fermer et rouvrir en cours de composition, ajouter un commentaire, vérifier le bilan, synchroniser deux fois, annuler puis resynchroniser, importer sur un second appareil. Les notes ne doivent pas être dupliquées ou réapparaître après suppression.
+Parcours Android à vérifier sur appareil : composer une note à plusieurs joueurs sans quitter le terrain, une note générale par `+`, une note tactique (remplir le terrain, déplacer un joueur, tracer une passe puis une course, encadrer une ligne entière et la déplacer d'un bloc, donner une action à un joueur du tableau, vérifier qu'elle apparaît au bilan, revenir par « Mes observations » et rouvrir le schéma d'un toucher), noter hors connexion, fermer et rouvrir en cours de composition, ajouter un commentaire, vérifier le bilan, synchroniser deux fois, annuler puis resynchroniser, importer sur un second appareil. Les notes ne doivent pas être dupliquées ou réapparaître après suppression.
 
 ## Contrat du serveur et persistance
 
@@ -255,6 +320,16 @@ Une opération possède `id` (UUID), `note_id` (UUID) et `kind`. Étendre une no
 - `comment` : `text` (2 000 caractères maximum).
 - `delete` : aucun champ supplémentaire.
 - `restore` : aucun champ supplémentaire ; rend visible une note supprimée.
+- `diagram` : `schema`, le tableau d'une note tactique — `board` (`blank` ou `full`), `tokens` et
+  `shapes`. Écrit à côté de la note sous le même `note_id`, comme un commentaire : une note dessinée
+  est une note qui se trouve aussi être dessinée, et le journal ne connaît qu'une sorte de note.
+  Un pion vaut `{player_id, x, y}` pour un joueur du match, ou `{team, label?, x, y}` avec `team`
+  parmi `home`, `away`, `neutral` pour un pion sans nom ; un tracé vaut `{kind, points}` avec `kind`
+  parmi `pass`, `run`, `carry`, `shot` et 2 à 32 couples de coordonnées. Les coordonnées sont des
+  fractions du terrain (0 à 1), l'équipe recevante attaquant vers le bas — le repère dans lequel
+  `match.json` écrit déjà sa composition. Bornes : 30 pions, 40 tracés. Volontairement de la
+  géométrie et rien d'autre : un pion nomme un joueur et s'arrête là, donc rien ici ne peut
+  contredire la composition, le bilan ou le journal sur qui il est ou sur ce qu'il a fait.
 
 Un nouvel envoi du même identifiant et contenu est sans effet. Un contenu différent sous le même identifiant est refusé. Les opérations sont immuables. Le client transmet d'abord ses opérations en attente, puis récupère le journal commun. Une suppression l'emporte sur toute modification concurrente : réécrire une note supprimée ne la fait pas réapparaître, seule une opération `restore` explicite le fait. Pour une note comme pour un commentaire, la dernière version reçue par le serveur prévaut. Avant synchronisation, les opérations locales en attente sont appliquées après celles du serveur.
 

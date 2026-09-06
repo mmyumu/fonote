@@ -89,8 +89,22 @@ public class MainActivity extends Activity {
     /** How many trailing operations undo has already walked back over. */
     private int undone;
     private int noteMinute;
+    /**
+     * The schema an advanced note carries, or null while the open note is a plain one. A schema
+     * is written beside the note under the same id, the way a comment is: the journal keeps one
+     * kind of note, and the second mode is a note that also happens to be drawn.
+     */
+    private Diagram diagram;
+    /** What already reached the log, so a stroke never rewrites what has not changed. */
+    private String entriesWritten = "", diagramWritten = "";
+    private BoardView board;
+    private LinearLayout tacticPanel;
+    private Button tacticMinute;
     /** Fixed so that opening a note never moves the players under the finger. */
     private static final int COMPOSER = 214;
+    /** The one row of the tactical panel that changes its mind, kept the same height throughout:
+     *  choosing a tool or a player must never move the board under the finger either. */
+    private static final int SELECTION = 44;
     /**
      * What the provider counts, in the order it reads. ESPN publishes twenty-eight figures, over
      * half of them percentages that only restate the pair above them — a note-taker wants the
@@ -162,6 +176,10 @@ public class MainActivity extends Activity {
                 written = saved.getBoolean("written", false);
                 noteMinute = saved.getInt("note_minute", 0);
                 loadEntries(new JSONArray(saved.getString("entries", "[]")));
+                entriesWritten = saved.getString("entries_written", "");
+                diagramWritten = saved.getString("diagram_written", "");
+                String drawn = saved.getString("diagram", "");
+                if (!drawn.isEmpty()) diagram = Diagram.from(new JSONObject(drawn));
             }
             // A real fixture can supply its actual kickoff. The demo starts on first opening.
             clockAnchor = prefs.getLong("clock_anchor", match.optLong("kickoff_epoch_ms", System.currentTimeMillis()));
@@ -177,6 +195,9 @@ public class MainActivity extends Activity {
         state.putString("draft", draft); state.putString("draft_written", draftWritten);
         state.putBoolean("written", written); state.putInt("note_minute", noteMinute);
         state.putString("entries", draftEntries().toString());
+        state.putString("entries_written", entriesWritten);
+        state.putString("diagram_written", diagramWritten);
+        state.putString("diagram", diagram == null ? "" : drawnJson());
         super.onSaveInstanceState(state);
     }
     @Override protected void onDestroy() {
@@ -185,6 +206,7 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
     @Override public void onBackPressed() {
+        if ("tactic".equals(screen)) { leaveTactic(); return; }
         if ("match".equals(screen)) {
             // Undo the screen before undoing the work: the card first, then the note, then leave.
             // One card at a time: facts sit between the pitch and the figures.
@@ -1271,18 +1293,37 @@ public class MainActivity extends Activity {
         toast("Noté · " + noteMinute + "′  " + recap);
         renderComposer();
     }
-    /** Rewrites the open note under its own id: the log keeps every version, the reader takes the last. */
+    /**
+     * Rewrites the open note under its own id: the log keeps every version, the reader takes the
+     * last. Each of the three things a note is made of — who was involved, what was written, what
+     * was drawn — is re-emitted only when it actually changed. A schema is drawn stroke by stroke,
+     * and re-sending the participants on every stroke would bury the journal under versions that
+     * say the same thing.
+     */
     private boolean writeNote() {
         try {
-            record(operation("note", noteId).put("match_id", match.getString("id"))
-                .put("minute", noteMinute).put("entries", draftEntries()));
+            String people = noteMinute + "·" + draftEntries();
+            if (!written || !people.equals(entriesWritten)) {
+                record(operation("note", noteId).put("match_id", match.getString("id"))
+                    .put("minute", noteMinute).put("entries", draftEntries()));
+                entriesWritten = people;
+            }
             if (!draft.trim().equals(draftWritten)) {
                 draftWritten = draft.trim();
                 record(operation("comment", noteId).put("text", draftWritten));
             }
+            if (diagram != null && !drawnJson().equals(diagramWritten)) {
+                diagramWritten = drawnJson();
+                record(operation("diagram", noteId).put("schema", new JSONObject(diagramWritten)));
+            }
             written = true;
             return true;
         } catch (Exception e) { error(e); return false; }
+    }
+    /** The open schema as it would be written down; "" when the note carries none. */
+    private String drawnJson() {
+        try { return diagram == null ? "" : diagram.toJson().toString(); }
+        catch (Exception e) { return ""; }
     }
     /** The note is already in the log, so dropping it is a deletion, not an abandon. */
     private void discardNote() {
@@ -1292,14 +1333,23 @@ public class MainActivity extends Activity {
     }
     private void closeNote() {
         noteId = ""; entries.clear(); focus = ""; draft = ""; draftWritten = ""; written = false;
+        diagram = null; entriesWritten = ""; diagramWritten = "";
         renderComposer();
     }
-    /** Reopen a note so the same moment can name one more player. */
+    /**
+     * Reopen a note so the same moment can name one more player. A note that was drawn reopens
+     * where it was drawn: the board is the note, and the panel could not show it.
+     */
     private void amend(JSONObject note) {
         noteId = note.optString("note_id"); noteMinute = note.optInt("minute");
         loadEntries(entriesOf(note));
         draft = note.optString("comment"); draftWritten = draft; written = true;
-        focus = ""; renderComposer();
+        entriesWritten = noteMinute + "·" + draftEntries();
+        JSONObject drawn = note.optJSONObject("schema");
+        diagram = drawn == null ? null : Diagram.from(drawn);
+        diagramWritten = drawnJson();
+        focus = "";
+        if (diagram != null) showTactic(); else renderComposer();
     }
     private void removeNote(JSONObject note) {
         try {
@@ -1322,6 +1372,8 @@ public class MainActivity extends Activity {
             }).show();
     }
     private void renderComposer() {
+        // The panel belongs to the match screen; a note closed from anywhere else has none to dress.
+        if (composer == null || !"match".equals(screen)) return;
         composer.removeAllViews();
         boolean open = !noteId.isEmpty();
         if (open) renderDraft(); else renderIdle();
@@ -1372,7 +1424,10 @@ public class MainActivity extends Activity {
                 line.addView(text, new LinearLayout.LayoutParams(0, -1, 1));
                 // The moment just written is the one still likely to need a second name, or none at all.
                 if (i == 0) {
-                    line.addView(mini("＋ joueur", "Ajouter un joueur à cette note", () -> amend(note)),
+                    boolean drawn = note.optJSONObject("schema") != null;
+                    line.addView(mini(drawn ? "▤ ouvrir" : "＋ joueur",
+                            drawn ? "Rouvrir le schéma de cette note" : "Ajouter un joueur à cette note",
+                            () -> amend(note)),
                         new LinearLayout.LayoutParams(dp(86), dp(34)));
                     line.addView(mini("🗑", "Supprimer cette note", () -> removeNote(note)),
                         new LinearLayout.LayoutParams(dp(44), dp(34)));
@@ -1385,12 +1440,12 @@ public class MainActivity extends Activity {
         composer.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout bottom = strip();
         bottom.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        Button general = button("+  Note sans joueur", this::generalNote);
-        general.setTextSize(12); general.setTextColor(MUTED);
-        GradientDrawable ghost = rounded(SURFACE, 10);
-        ghost.setStroke(dp(1), Color.argb(60, 255, 255, 255));
-        general.setBackground(ghost);
-        bottom.addView(general, new LinearLayout.LayoutParams(dp(150), dp(40)));
+        // The two other ways of writing, offered as what they are: side paths off the fast one.
+        bottom.addView(ghost("▤  Tactique", "Note tactique : placer les joueurs et tracer le jeu",
+            this::openTactic), new LinearLayout.LayoutParams(dp(112), dp(40)));
+        LinearLayout.LayoutParams generalSize = new LinearLayout.LayoutParams(dp(146), dp(40));
+        generalSize.leftMargin = dp(6);
+        bottom.addView(ghost("+  Note sans joueur", "Note sans joueur", this::generalNote), generalSize);
         composer.addView(bottom, new LinearLayout.LayoutParams(-1, dp(40)));
     }
     private void renderDraft() {
@@ -1466,6 +1521,16 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams footerSize = new LinearLayout.LayoutParams(-1, dp(46));
         footerSize.topMargin = dp(6); composer.addView(footer, footerSize);
     }
+    /** An outlined control: present, reachable, and visibly not the main road. */
+    private Button ghost(String text, String described, Runnable action) {
+        Button button = button(text, action);
+        button.setTextSize(12); button.setTextColor(MUTED); button.setMinHeight(0);
+        button.setPadding(dp(6), 0, dp(6), 0); button.setContentDescription(described);
+        GradientDrawable outline = rounded(SURFACE, 10);
+        outline.setStroke(dp(1), Color.argb(60, 255, 255, 255));
+        button.setBackground(outline);
+        return button;
+    }
     /** Polarity is the colour; being chosen is the fill. The two never say the same thing. */
     private Button cell(String key, boolean chosen) {
         Button cell = button("", () -> qualify(key));
@@ -1512,7 +1577,10 @@ public class MainActivity extends Activity {
         picker.setValue(noteMinute); picker.setWrapSelectorWheel(false);
         new AlertDialog.Builder(this).setTitle("Minute de cette note").setView(picker)
             .setPositiveButton("Appliquer", (d,w) -> {
-                picker.clearFocus(); noteMinute = picker.getValue(); renderComposer();
+                picker.clearFocus(); noteMinute = picker.getValue();
+                // A minute corrected on a note already written has to reach the log to mean anything.
+                if (written) writeNote();
+                if ("tactic".equals(screen)) renderTactic(); else renderComposer();
             }).setNegativeButton("Annuler", null).show();
     }
     private void editDraft() {
@@ -1521,9 +1589,377 @@ public class MainActivity extends Activity {
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
         new AlertDialog.Builder(this).setTitle("Commentaire").setView(input)
             .setNegativeButton("Annuler", null).setPositiveButton("Enregistrer", (d,w) -> {
-                draft = input.getText().toString(); renderComposer();
+                draft = input.getText().toString();
+                // A tactical note may carry nothing else, so its comment is written straight away.
+                if (written || "tactic".equals(screen)) writeNote();
+                if ("tactic".equals(screen)) renderTactic(); else renderComposer();
             }).show();
     }
+    // ——— Note tactique ———
+
+    /**
+     * The second way of writing a note. The fast one answers "who did what, and when"; this one
+     * answers "where, and to whom" — a pass is worth drawing when what matters is the line it
+     * took and the players it left behind, and no palette of eighteen symbols can say that.
+     *
+     * <p>It is the same note underneath: same id, same minute, same comment, same recap, and the
+     * actions given here count in the bilan exactly like the ones tapped on the pitch. Only the
+     * surface differs, and it takes the whole screen because a board that shares it with a panel
+     * is a board nobody can draw on.
+     */
+    private void openTactic() {
+        if (noteId.isEmpty()) {
+            updateClock();
+            noteId = UUID.randomUUID().toString(); entries.clear();
+            draft = ""; draftWritten = ""; entriesWritten = ""; written = false;
+            noteMinute = minute;
+        }
+        if (diagram == null) diagram = new Diagram();
+        showTactic();
+    }
+
+    private void showTactic() {
+        screen = "tactic";
+        getWindow().setStatusBarColor(BACKGROUND); getWindow().setNavigationBarColor(BACKGROUND);
+        LinearLayout page = frame(); page.setPadding(dp(12), dp(10), dp(12), dp(12));
+        setContentView(page); root = page;
+        LinearLayout bar = strip(); page.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        bar.addView(barAction(R.drawable.ic_arrow_back, "Revenir au terrain", this::leaveTactic), barSize(0));
+        TextView heading = new TextView(this);
+        heading.setText("Note tactique"); heading.setTextSize(21); heading.setTextColor(Color.WHITE);
+        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        heading.setPadding(dp(10), dp(8), 0, dp(8));
+        bar.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        tacticMinute = button(noteMinute + "′", this::editNoteMinute);
+        tacticMinute.setTextSize(15); tacticMinute.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tacticMinute.setContentDescription("Minute de la note, toucher pour corriger");
+        bar.addView(tacticMinute, new LinearLayout.LayoutParams(dp(58), dp(44)));
+        board = new BoardView(this, match, glassMarkers(), true, false);
+        board.setDiagram(diagram);
+        // Selecting is only ever a change of what the panel offers; the note itself is untouched.
+        board.watch(index -> renderTactic(), this::boardChanged);
+        LinearLayout.LayoutParams boardSize = new LinearLayout.LayoutParams(-1, 0, 1);
+        boardSize.topMargin = dp(8); boardSize.bottomMargin = dp(8);
+        page.addView(board, boardSize);
+        tacticPanel = new LinearLayout(this); tacticPanel.setOrientation(LinearLayout.VERTICAL);
+        page.addView(tacticPanel, new LinearLayout.LayoutParams(-1, -2));
+        renderTactic();
+    }
+
+    /** What the six tools mean, said in full for the reader and for anyone listening to it. */
+    private static final String[][] TOOLS = {
+        {"↔", "Déplacer", "Déplacer les joueurs sur le terrain"},
+        {Diagram.PASS, "→", "Passe", "Tracer une passe : trait plein, ballon au départ"},
+        {Diagram.RUN, "⇢", "Course", "Tracer une course sans ballon : trait pointillé"},
+        {Diagram.CARRY, "↝", "Conduite", "Tracer une conduite de balle : trait ondulé"},
+        {Diagram.SHOT, "⇒", "Tir", "Tracer un tir : trait double"},
+        {"⌫", "Gomme", "Effacer un joueur ou un tracé d’un toucher"}};
+
+    private void renderTactic() {
+        tacticPanel.removeAllViews();
+        tacticMinute.setText(noteMinute + "′");
+        HorizontalScrollView tools = sideways();
+        LinearLayout toolRow = strip(); tools.addView(toolRow);
+        for (String[] entry : TOOLS) {
+            boolean drawing = entry.length == 4;
+            String kind = drawing ? entry[0] : "";
+            boolean chosen = drawing
+                ? board.tool() == BoardView.DRAW && kind.equals(board.stroke())
+                : "⌫".equals(entry[0]) ? board.tool() == BoardView.ERASE : board.tool() == BoardView.MOVE;
+            Runnable pick = drawing ? () -> { board.setStroke(kind); renderTactic(); }
+                : "⌫".equals(entry[0]) ? () -> { board.setTool(BoardView.ERASE); renderTactic(); }
+                : () -> { board.setTool(BoardView.MOVE); renderTactic(); };
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(62), dp(48));
+            p.rightMargin = dp(5);
+            toolRow.addView(tool(entry[drawing ? 1 : 0], entry[drawing ? 2 : 1],
+                entry[drawing ? 3 : 2], chosen, pick), p);
+        }
+        tacticPanel.addView(tools, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        LinearLayout second = strip();
+        boolean full = Diagram.FULL.equals(diagram.board);
+        second.addView(wide(full ? "Vider le terrain" : "Remplir le terrain",
+            full ? "Retirer tous les joueurs du terrain"
+                 : "Placer les 22 joueurs à leur poste, à déplacer ensuite", this::flipBoard));
+        second.addView(wide("+ Joueur", "Ajouter un joueur sur le terrain", this::addToken));
+        second.addView(wide("↶ Tracé", "Effacer le dernier tracé", this::undoStroke));
+        LinearLayout.LayoutParams secondSize = new LinearLayout.LayoutParams(-1, dp(42));
+        secondSize.topMargin = dp(6); tacticPanel.addView(second, secondSize);
+
+        // One row, always: whoever is held, or what the tool in hand is for. Its height never
+        // varies, so choosing a tool or a player never moves the board under the finger.
+        List<Integer> held = board.chosen();
+        if (held.size() > 1) tacticGroup(held);
+        else if (held.size() == 1) tacticSelection(diagram.tokens.get(held.get(0)), held.get(0));
+        else tacticHint();
+
+        LinearLayout footer = strip();
+        Button comment = button("💬", this::editDraft);
+        comment.setTextSize(15);
+        if (!draft.isEmpty()) {
+            GradientDrawable carries = rounded(CHIP, 12); carries.setStroke(dp(1), ACCENT);
+            comment.setBackground(carries); comment.setTextColor(ACCENT);
+        }
+        comment.setContentDescription(draft.isEmpty() ? "Ajouter un commentaire"
+            : "Commentaire écrit, toucher pour le modifier");
+        LinearLayout.LayoutParams small = new LinearLayout.LayoutParams(dp(52), dp(46));
+        small.rightMargin = dp(6); footer.addView(comment, small);
+        if (written) {
+            Button drop = button("🗑  Supprimer", this::discardTactic);
+            drop.setTextSize(13); drop.setContentDescription("Supprimer cette note tactique");
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(126), dp(46));
+            p.rightMargin = dp(6); footer.addView(drop, p);
+        }
+        Button done = accent(button(written ? "Terminé" : "Abandonner", this::leaveTactic));
+        done.setTextSize(15);
+        done.setContentDescription(written ? "Terminer cette note et revenir au terrain"
+            : "Abandonner cette note et revenir au terrain");
+        footer.addView(done, new LinearLayout.LayoutParams(0, dp(46), 1));
+        LinearLayout.LayoutParams footerSize = new LinearLayout.LayoutParams(-1, dp(46));
+        footerSize.topMargin = dp(6); tacticPanel.addView(footer, footerSize);
+    }
+
+    /** What the tool in hand is for, said once, where the selection would otherwise be. */
+    private void tacticHint() {
+        TextView hint = new TextView(this);
+        hint.setText(board.tool() == BoardView.ERASE
+            ? "Touchez un joueur ou un tracé pour l’effacer"
+            : board.tool() == BoardView.DRAW
+            ? "Tracez d’un joueur à l’autre : les deux bouts s’aimantent"
+            : "Encadrez plusieurs joueurs pour les déplacer ensemble");
+        hint.setTextSize(12); hint.setTextColor(MUTED); hint.setGravity(Gravity.CENTER_VERTICAL);
+        hint.setMaxLines(1); hint.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(SELECTION));
+        p.topMargin = dp(6); tacticPanel.addView(hint, p);
+    }
+
+    /**
+     * A block of players held at once. Nothing is offered here but letting them go and taking
+     * them off: an action describes one player, and giving the same one to nine at a time would
+     * write nine observations nobody made.
+     *
+     * <p>Two lines rather than one, because a rectangle is a blunt instrument and the way to
+     * correct it — a long press on the one player it caught or missed — is not a gesture anybody
+     * guesses. Said here, where the group is, and only while there is a group to correct.
+     */
+    private void tacticGroup(List<Integer> held) {
+        LinearLayout row = strip();
+        TextView who = new TextView(this);
+        SpannableString text = new SpannableString(held.size() + " joueurs · glissez-en un, ils suivent"
+            + "\nappui long sur un joueur pour l’ôter ou l’ajouter");
+        int first = String.valueOf(held.size()).length() + 9;
+        text.setSpan(new ForegroundColorSpan(MUTED), first, text.length(), 0);
+        who.setText(text);
+        who.setTextSize(11); who.setTextColor(INK); who.setMaxLines(2);
+        who.setLineSpacing(dp(2), 1); who.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(who, new LinearLayout.LayoutParams(0, -2, 1));
+        Button loose = button("Aucun", () -> { board.select(-1); renderTactic(); });
+        loose.setTextSize(12); loose.setMinHeight(0); loose.setTextColor(MUTED);
+        loose.setContentDescription("Relâcher la sélection");
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(74), dp(38));
+        p.rightMargin = dp(6); row.addView(loose, p);
+        Button remove = button("×", () -> {
+            // Descending, so removing one never renumbers those still to be removed.
+            for (int i = held.size() - 1; i >= 0; i--) diagram.tokens.remove((int)held.get(i));
+            board.select(-1); boardChanged();
+        });
+        remove.setTextSize(17); remove.setMinHeight(0); remove.setTextColor(MUTED);
+        remove.setContentDescription("Retirer ces " + held.size() + " joueurs du schéma");
+        row.addView(remove, new LinearLayout.LayoutParams(dp(42), dp(38)));
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, dp(SELECTION));
+        size.topMargin = dp(6); tacticPanel.addView(row, size);
+    }
+
+    /**
+     * The player the board is pointing at. A schema is a drawing, so nothing forces an action on
+     * anyone; but the one the moment is about usually deserves one, and it belongs in the bilan
+     * with all the others rather than in a second ledger of its own.
+     */
+    private void tacticSelection(Diagram.Token token, int index) {
+        LinearLayout row = strip();
+        TextView who = new TextView(this);
+        who.setText(Diagram.named(token) ? shortName(token.playerId) : "Pion " + token.label);
+        who.setTextSize(13); who.setTextColor(INK); who.setMaxLines(1);
+        who.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(who, new LinearLayout.LayoutParams(0, -2, 1));
+        if (Diagram.named(token)) {
+            String current = entries.containsKey(token.playerId) ? entries.get(token.playerId) : "";
+            Button act = button(current.isEmpty() ? "Action…" : icon(current) + "  " + shortAction(current),
+                () -> chooseAction(token.playerId));
+            act.setTextSize(12); act.setMinHeight(0);
+            act.setContentDescription(current.isEmpty() ? "Donner une action à ce joueur"
+                : actionName(current) + ", toucher pour changer");
+            if (!current.isEmpty()) {
+                act.setBackground(rounded(fill(current), 12)); act.setTextColor(tint(current));
+            }
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(124), dp(38));
+            p.rightMargin = dp(6); row.addView(act, p);
+        }
+        Button remove = button("×", () -> {
+            diagram.tokens.remove(index); board.select(-1); boardChanged();
+        });
+        remove.setTextSize(17); remove.setMinHeight(0); remove.setTextColor(MUTED);
+        remove.setContentDescription("Retirer ce joueur du schéma");
+        row.addView(remove, new LinearLayout.LayoutParams(dp(42), dp(38)));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(SELECTION));
+        p.topMargin = dp(6); tacticPanel.addView(row, p);
+    }
+
+    /** A tool: its symbol, its name, and whether it holds the next finger. */
+    private Button tool(String glyph, String name, String described, boolean chosen, Runnable go) {
+        Button cell = button("", go);
+        SpannableString text = new SpannableString(glyph + "\n" + name);
+        text.setSpan(new RelativeSizeSpan(1.5f), 0, glyph.length(), 0);
+        cell.setText(text); cell.setTextSize(10); cell.setPadding(0, dp(2), 0, dp(2));
+        cell.setMinHeight(0); cell.setContentDescription(described);
+        cell.setOnLongClickListener(v -> { toast(described); return true; });
+        cell.setBackground(rounded(chosen ? ACCENT : CHIP, 12));
+        cell.setTextColor(chosen ? ON_ACCENT : INK);
+        return cell;
+    }
+
+    /** One of the three board actions, sharing the row evenly. */
+    private Button wide(String text, String described, Runnable action) {
+        Button button = button(text, action);
+        button.setTextSize(12); button.setMinHeight(0); button.setContentDescription(described);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(42), 1);
+        p.rightMargin = dp(5); button.setLayoutParams(p);
+        return button;
+    }
+
+    private void chooseAction(String playerId) {
+        List<String> keys = new ArrayList<>(actions.keySet());
+        String[] items = new String[keys.size() + 1];
+        items[0] = "Aucune action";
+        for (int i = 0; i < keys.size(); i++)
+            items[i + 1] = icon(keys.get(i)) + "   " + actionName(keys.get(i));
+        new AlertDialog.Builder(this).setTitle(shortName(playerId)).setItems(items, (d, which) -> {
+            if (which == 0) entries.remove(playerId); else entries.put(playerId, keys.get(which - 1));
+            if (writeNote()) renderTactic();
+        }).show();
+    }
+
+    /**
+     * Adding a player puts him where he actually stands, not in the middle of the pitch: a schema
+     * almost always starts from the real shape and departs from it, so the drag that follows is a
+     * correction rather than a placement from nothing.
+     */
+    private void addToken() {
+        if (diagram.tokens.size() >= Diagram.TOKENS) { toast("Le schéma est plein"); return; }
+        Map<String,String> standing = standingNow();
+        Set<String> already = playersOnBoard();
+        List<String> ids = new ArrayList<>(), items = new ArrayList<>();
+        JSONArray players = match.optJSONArray("players");
+        for (int i = 0; players != null && i < players.length(); i++) {
+            String id = players.optJSONObject(i).optString("id");
+            if (already.contains(id) || !standing.containsKey(id)) continue;
+            ids.add(id); items.add(playerName(id));
+        }
+        // Anyone the match does not name: the opponent whose only role is to have been eliminated.
+        ids.add("#home"); items.add("Pion — " + teamName("home"));
+        ids.add("#away"); items.add("Pion — " + teamName("away"));
+        ids.add("#neutral"); items.add("Pion — sans équipe");
+        new AlertDialog.Builder(this).setTitle("Ajouter au schéma")
+            .setItems(items.toArray(new String[0]), (d, which) -> {
+                String id = ids.get(which);
+                if (id.startsWith("#")) diagram.tokens.add(pawn(id.substring(1)));
+                else {
+                    double[] spot = spotOf(standing.get(id));
+                    diagram.tokens.add(new Diagram.Token(id, "", "", spot[0], spot[1]));
+                }
+                board.select(diagram.tokens.size() - 1);
+                boardChanged();
+            }).show();
+    }
+
+    /** A nameless disc, numbered per side and laid out in a row so two never land on each other. */
+    private Diagram.Token pawn(String side) {
+        int count = 0;
+        for (Diagram.Token token : diagram.tokens)
+            if (!Diagram.named(token) && side.equals(token.team)) count++;
+        double x = Math.min(.92, .28 + (count % 5) * .11), y = Math.min(.92, .5 + (count / 5) * .09);
+        return new Diagram.Token("", side, String.valueOf(count + 1), x, y);
+    }
+
+    /** Empty pitch and full pitch, the two ways of starting, swapped at any moment. */
+    private void flipBoard() {
+        if (Diagram.FULL.equals(diagram.board)) {
+            diagram.board = Diagram.BLANK;
+            diagram.tokens.clear();
+            toast("Terrain vidé · ↶ le rétablit");
+        } else {
+            diagram.board = Diagram.FULL;
+            diagram.tokens.clear();
+            for (Map.Entry<String,String> on : standingNow().entrySet()) {
+                if (diagram.tokens.size() >= Diagram.TOKENS) break;
+                double[] spot = spotOf(on.getValue());
+                diagram.tokens.add(new Diagram.Token(on.getKey(), "", "", spot[0], spot[1]));
+            }
+        }
+        board.select(-1);
+        boardChanged();
+    }
+
+    private void undoStroke() {
+        if (diagram.shapes.isEmpty()) { toast("Aucun tracé à effacer"); return; }
+        diagram.shapes.remove(diagram.shapes.size() - 1);
+        boardChanged();
+    }
+
+    /**
+     * Every change to the board reaches the log at once, exactly as an action does in the fast
+     * mode: there is no save button here either. What is on the board is the note, so a player
+     * rubbed out takes the action he was given with him.
+     */
+    private void boardChanged() {
+        entries.keySet().retainAll(playersOnBoard());
+        board.invalidate();
+        if (writeNote()) renderTactic();
+    }
+
+    private void leaveTactic() { closeNote(); showMatch(); }
+
+    private void discardTactic() {
+        try { record(operation("delete", noteId)); toast("Note supprimée"); }
+        catch (Exception e) { error(e); return; }
+        closeNote(); showMatch();
+    }
+
+    private Set<String> playersOnBoard() {
+        Set<String> ids = new HashSet<>();
+        if (diagram != null) for (Diagram.Token token : diagram.tokens)
+            if (Diagram.named(token)) ids.add(token.playerId);
+        return ids;
+    }
+
+    /** Who stands on the pitch at the note's minute: each holder, and the spot he holds. */
+    private Map<String,String> standingNow() {
+        List<String> starters = new ArrayList<>();
+        JSONArray players = match.optJSONArray("players");
+        for (int i = 0; players != null && i < players.length(); i++)
+            if (players.optJSONObject(i).has("x")) starters.add(players.optJSONObject(i).optString("id"));
+        List<Lineup.Change> changes = new ArrayList<>();
+        JSONArray published = match.optJSONArray("changes");
+        for (int i = 0; published != null && i < published.length(); i++) {
+            JSONObject change = published.optJSONObject(i);
+            changes.add(new Lineup.Change(change.optInt("minute"),
+                change.optString("in"), change.optString("out")));
+        }
+        Map<String,String> standing = new LinkedHashMap<>();
+        for (Map.Entry<String,String> held : Lineup.holders(starters, changes, noteMinute).entrySet())
+            standing.put(held.getValue(), held.getKey());
+        return standing;
+    }
+
+    /** Where a starting spot is, on the board's own frame — the away side already turned round. */
+    private double[] spotOf(String starterId) {
+        JSONObject player = starterId == null ? null : playerById(starterId);
+        if (player == null || !player.has("x")) return new double[]{.5, .5};
+        double x = player.optDouble("x"), y = player.optDouble("y");
+        if (!"home".equals(player.optString("team"))) { x = 1 - x; y = 1 - y; }
+        return new double[]{x, y};
+    }
+
     /** A player still waiting for an action is on screen but not yet in what gets written. */
     private JSONArray draftEntries() {
         JSONArray list = new JSONArray();
@@ -1575,9 +2011,12 @@ public class MainActivity extends Activity {
     /** One line: "⚽ 10 Mbappé · → 6 Pogba". */
     private String summary(JSONObject note) {
         List<JSONObject> list = ordered(entriesOf(note));
+        String drawn = note.optJSONObject("schema") == null ? "" : "▤  ";
         if (list.isEmpty())
-            return note.optString("comment").isEmpty() ? "Note générale" : note.optString("comment");
-        StringBuilder text = new StringBuilder();
+            return note.optString("comment").isEmpty()
+                ? (drawn.isEmpty() ? "Note générale" : "Schéma")
+                : drawn + note.optString("comment");
+        StringBuilder text = new StringBuilder(drawn);
         for (JSONObject entry : list) {
             if (text.length() > 0) text.append("  ·  ");
             text.append(icon(entry.optString("action"))).append(" ").append(shortName(entry.optString("player_id")));
@@ -1621,6 +2060,7 @@ public class MainActivity extends Activity {
         LinkedHashMap<String, JSONObject> notes = new LinkedHashMap<>();
         Set<String> deleted = new HashSet<>();
         Map<String,String> comments = new HashMap<>();
+        Map<String,JSONObject> schemas = new HashMap<>();
         JSONArray ops = store.operations(false);
         for (int i=0; i<ops.length(); i++) {
             JSONObject op = ops.getJSONObject(i); String id = op.getString("note_id");
@@ -1631,6 +2071,7 @@ public class MainActivity extends Activity {
                 // deletion still wins over a modification arriving from another device.
                 case "restore": deleted.remove(id); break;
                 case "comment": comments.put(id, op.getString("text")); break;
+                case "diagram": schemas.put(id, op.getJSONObject("schema")); break;
             }
         }
         List<JSONObject> visible = new ArrayList<>();
@@ -1638,6 +2079,8 @@ public class MainActivity extends Activity {
             if (!deleted.contains(entry.getKey())
                     && match.optString("id").equals(entry.getValue().optString("match_id"))) {
                 entry.getValue().put("comment", comments.getOrDefault(entry.getKey(), ""));
+                if (schemas.containsKey(entry.getKey()))
+                    entry.getValue().put("schema", schemas.get(entry.getKey()));
                 visible.add(entry.getValue());
             }
         }
@@ -1789,6 +2232,15 @@ public class MainActivity extends Activity {
                     said = previous.isEmpty() ? "Commentaire retiré" : "Commentaire précédent rétabli";
                     break;
                 }
+                case "diagram": {
+                    JSONObject previous = previousSchema(ops, index, id);
+                    // Nothing before it means the schema never existed: an empty board says so,
+                    // and the note it belongs to is left alone.
+                    compensation = operation("diagram", id).put("schema",
+                        previous == null ? new Diagram().toJson() : previous);
+                    said = previous == null ? "Schéma effacé" : "Schéma précédent rétabli";
+                    break;
+                }
                 default: {
                     JSONObject earlier = previousVersion(ops, index, id);
                     if (earlier == null) {
@@ -1815,6 +2267,14 @@ public class MainActivity extends Activity {
         }
         return null;
     }
+    private JSONObject previousSchema(JSONArray ops, int before, String id) throws Exception {
+        for (int i = before - 1; i >= 0; i--) {
+            JSONObject op = ops.getJSONObject(i);
+            if ("diagram".equals(op.getString("kind")) && id.equals(op.getString("note_id")))
+                return op.getJSONObject("schema");
+        }
+        return null;
+    }
     private String previousComment(JSONArray ops, int before, String id) throws Exception {
         for (int i = before - 1; i >= 0; i--) {
             JSONObject op = ops.getJSONObject(i);
@@ -1834,22 +2294,53 @@ public class MainActivity extends Activity {
                 + " · observation non exhaustive");
             for (JSONObject note : notes) {
                 List<JSONObject> list = ordered(entriesOf(note));
+                JSONObject schema = note.optJSONObject("schema");
                 StringBuilder text = new StringBuilder(note.optInt("minute") + "′");
-                if (list.isEmpty()) text.append("  ·  Note générale");
+                if (list.isEmpty()) text.append(schema == null ? "  ·  Note générale" : "  ·  Schéma");
                 for (JSONObject entry : list) {
                     text.append("\n").append(icon(entry.optString("action"))).append("  ")
                         .append(actionName(entry.optString("action"))).append(" — ")
                         .append(playerName(entry.optString("player_id")));
                 }
                 if (!note.optString("comment").isEmpty()) text.append("\n").append(note.optString("comment"));
-                full(text.toString(), () -> new AlertDialog.Builder(this).setTitle("Modifier la note")
+                Runnable edit = () -> new AlertDialog.Builder(this).setTitle("Modifier la note")
                     .setItems(new String[]{"Commentaire", "Supprimer"}, (dialog, which) -> {
                         if (which == 0) comment(note);
                         else try { record(operation("delete", note.getString("note_id"))); history(); }
                         catch (Exception e) { error(e); }
-                    }).show());
+                    }).show();
+                if (schema == null) full(text.toString(), edit);
+                else drawnNote(note, schema, text.toString(), edit);
             }
         } catch (Exception e) { error(e); }
+    }
+    /**
+     * A drawn note is shown drawn. "→ passe — 6 Pogba" says nearly nothing about a moment whose
+     * whole point was the line the ball took and who it went past, so the recap carries the board
+     * itself, small, and touching it reopens the board rather than a dialog — the dialog that
+     * every other note opens on a tap is on a long press here.
+     */
+    private void drawnNote(JSONObject note, JSONObject schema, String text, Runnable edit) {
+        LinearLayout card = strip();
+        card.setBackground(tappable(rounded(CHIP, 12)));
+        card.setPadding(dp(10), dp(10), dp(10), dp(10));
+        BoardView preview = new BoardView(this, match, glassMarkers(), false, true);
+        preview.setDiagram(Diagram.from(schema));
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(150), dp(190));
+        size.rightMargin = dp(12);
+        card.addView(preview, size);
+        TextView caption = new TextView(this);
+        caption.setText(text); caption.setTextSize(13); caption.setTextColor(INK);
+        caption.setLineSpacing(dp(4), 1);
+        card.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
+        card.setClickable(true); card.setFocusable(true);
+        card.setContentDescription("Note tactique, " + note.optInt("minute")
+            + "e minute. " + text.replace("\n", ". ")
+            + ". Toucher pour rouvrir le schéma, appui long pour commenter ou supprimer.");
+        card.setOnClickListener(v -> amend(note));
+        card.setOnLongClickListener(v -> { edit.run(); return true; });
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8);
+        root.addView(card, p);
     }
     private void comment(JSONObject note) {
         EditText input = new EditText(this); input.setHint("Commentaire facultatif");

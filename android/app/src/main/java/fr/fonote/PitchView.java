@@ -3,10 +3,6 @@ package fr.fonote;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
-import android.graphics.RadialGradient;
-import android.graphics.RectF;
-import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -31,9 +27,8 @@ final class PitchView extends FrameLayout {
     private static final int SHIRT = 32, FACE = 3, TOUCH = 44, NAME_W = 68, NAME_H = 16;
     /** Above every shirt, below the player being written about. */
     private static final int Z_NAME = 10, Z_HELD = 12, Z_SHIRT_ACTIVE = 14, Z_NAME_ACTIVE = 16;
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final RectF oval = new RectF();
-    private Shader vignette;
+    /** The grass, its lines and its light, drawn by the same code as the tactical board. */
+    private final Pitch grass;
     private final JSONObject match;
     /** Which of the two looks the player picked in the options. */
     private final boolean glass;
@@ -57,9 +52,8 @@ final class PitchView extends FrameLayout {
         super(context);
         this.match = match; this.glass = glass;
         setWillNotDraw(false);
-        GradientDrawable background = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-            new int[]{Color.rgb(31, 72, 57), Color.rgb(15, 43, 36)});
-        background.setCornerRadius(dp(20)); setBackground(background);
+        grass = new Pitch(context);
+        setBackground(Pitch.turf(20, getResources().getDisplayMetrics().density));
         setClipToOutline(true);
         // Team colours travel with the match: identity is data, not theme.
         JSONArray teams = match.optJSONArray("teams");
@@ -151,7 +145,6 @@ final class PitchView extends FrameLayout {
         requestLayout();
     }
     private int dp(int n) { return (int)(n * getResources().getDisplayMetrics().density); }
-    private float dp(float n) { return n * getResources().getDisplayMetrics().density; }
     /**
      * The shirt, in either of the two looks the options offer. Glass is a dark disc lit from behind
      * by a halo of the team colour, which also draws the ring and writes the number: the team reads
@@ -254,60 +247,8 @@ final class PitchView extends FrameLayout {
             name.layout(nameLeft, nameTop, nameLeft+span, nameTop+tall);
         }
     }
-    @Override protected void onSizeChanged(int w, int h, int oldW, int oldH) {
-        super.onSizeChanged(w, h, oldW, oldH);
-        // Light gathers at the centre circle and falls away at the corners, as under floodlights.
-        vignette = w <= 0 || h <= 0 ? null : new RadialGradient(w/2f, h/2f, Math.max(w, h) * .72f,
-            new int[]{Color.argb(22, 214, 255, 226), Color.TRANSPARENT, Color.argb(85, 0, 18, 12)},
-            new float[]{0f, .5f, 1f}, Shader.TileMode.CLAMP);
-    }
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        float w = getWidth(), h = getHeight(), pad = dp(14), radius = w * .14f;
-        // Mown stripes: light and dark bands, so the turf reads as turf and not as a backdrop.
-        paint.setShader(null); paint.setStyle(Paint.Style.FILL);
-        for (int i = 0; i < 12; i++) {
-            paint.setColor(i % 2 == 0 ? Color.argb(12, 226, 255, 234) : Color.argb(16, 0, 22, 14));
-            canvas.drawRect(0, i*h/12, w, (i+1)*h/12, paint);
-        }
-        if (vignette != null) {
-            paint.setShader(vignette); canvas.drawRect(0, 0, w, h, paint); paint.setShader(null);
-        }
-        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(1.4f));
-        paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND);
-        paint.setColor(Color.argb(115, 226, 246, 228));
-        canvas.drawRect(pad, pad, w-pad, h-pad, paint);
-        canvas.drawLine(pad, h/2, w-pad, h/2, paint);
-        canvas.drawCircle(w/2, h/2, radius, paint);
-        canvas.drawRect(w*.23f, pad, w*.77f, h*.14f, paint);
-        canvas.drawRect(w*.36f, pad, w*.64f, h*.055f, paint);
-        canvas.drawRect(w*.23f, h*.86f, w*.77f, h-pad, paint);
-        canvas.drawRect(w*.36f, h*.945f, w*.64f, h-pad, paint);
-        // The D: the stretch of the penalty arc that escapes its box.
-        arc(canvas, w/2, h*.105f, radius, h*.14f - h*.105f, false);
-        arc(canvas, w/2, h*.895f, radius, h*.895f - h*.86f, true);
-        corner(canvas, pad, pad, 0); corner(canvas, w-pad, pad, 90);
-        corner(canvas, w-pad, h-pad, 180); corner(canvas, pad, h-pad, 270);
-        // Goal mouths: a thicker stroke where the net would be.
-        paint.setStrokeWidth(dp(3.5f)); paint.setColor(Color.argb(160, 236, 250, 237));
-        canvas.drawLine(w*.43f, pad, w*.57f, pad, paint);
-        canvas.drawLine(w*.43f, h-pad, w*.57f, h-pad, paint);
-        paint.setStyle(Paint.Style.FILL); paint.setColor(Color.argb(115, 226, 246, 228));
-        canvas.drawCircle(w/2, h/2, dp(2.5f), paint);
-        canvas.drawCircle(w/2, h*.105f, dp(2f), paint);
-        canvas.drawCircle(w/2, h*.895f, dp(2f), paint);
-    }
-    /** The stretch of a circle that clears a line lying dy away from its centre, above or below. */
-    private void arc(Canvas canvas, float cx, float cy, float radius, float dy, boolean upward) {
-        if (dy >= radius) return;
-        float edge = (float)Math.toDegrees(Math.asin(dy / radius));
-        oval.set(cx-radius, cy-radius, cx+radius, cy+radius);
-        canvas.drawArc(oval, upward ? 180+edge : edge, 180 - 2*edge, false, paint);
-    }
-    /** The quarter circle a corner flag stands in. */
-    private void corner(Canvas canvas, float x, float y, float from) {
-        float r = dp(9f);
-        oval.set(x-r, y-r, x+r, y+r);
-        canvas.drawArc(oval, from, 90, false, paint);
+        grass.draw(canvas, getWidth(), getHeight());
     }
 }
