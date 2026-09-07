@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp" android:height="20dp"
+    android:viewportWidth="24" android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <!-- La gomme penchée à 45°, tracée par géométrie : un corps coupé à plat sur le trait
+         qu'il vient d'effacer, et la bande qui sépare le caoutchouc du manche. C'est la coupe
+         à plat, posée sur sa ligne, qui la fait lire comme une gomme ; un rectangle de
+         travers seul se lit comme une fenêtre. -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.7"
+        android:strokeLineCap="butt" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M4.204,13.436 L13.751,3.889 L19.796,9.934 L12.23,17.501 L8.27,17.501 Z" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.7"
+        android:strokeLineCap="butt" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M7.895,9.745 L13.94,15.79" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.7"
+        android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M4.8,20.111 L19.2,20.111" />
+</vector>

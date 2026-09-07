@@ -29,18 +29,46 @@ import java.util.function.IntConsumer;
  * stroke or moves a player who was already in the right place. Saying which of the two is meant
  * costs one tap before a sequence of strokes and never costs a mistake.
  *
- * <p>Both ends of a stroke snap to whoever is standing near them, so "from Pogba to Mbappé" is
- * exact without aiming at a pixel, and stays exact when either of them is dragged afterwards
- * is not claimed: a stroke keeps the coordinates it was drawn with, because a schema records a
- * moment rather than a live link.
- *
  * <p>Meaning is carried by the line and never by its colour: colour on this pitch already says
  * which team a shirt belongs to, and a second meaning laid over it would make both unreadable.
  */
 final class BoardView extends View {
     /** What the next drag will do. */
-    static final int MOVE = 0, DRAW = 1, ERASE = 2;
-    private static final int SHIRT = 32, NAME_H = 15, NAME_PAD = 5;
+    static final int MOVE = 0, DRAW = 1, ERASE = 2, BALL = 3;
+    /**
+     * A trip whose duration the drawing decides, rather than the toolbar. Noting an action as it
+     * is remembered, a pass and the run that answered it are not timed by anybody — but a long
+     * ball is slower than a square one and a thirty-metre run is not a two-metre one, and that
+     * much the stroke already says. Choosing a duration by hand stays there for the sequence that
+     * has to be exact.
+     */
+    static final int AUTO = 0;
+    /**
+     * A pitch is 105 metres by 68, so a fraction of the board is worth more lengthwise than it is
+     * across, and the two axes are weighed apart before the length is turned into a time. The
+     * paces are the ordinary ones of a match, in metres per second: a firm ground pass, a struck
+     * ball, a player running.
+     */
+    private static final double LENGTH = 105, WIDTH = 68;
+    private static final double PASSED = 15, STRUCK = 25, RUNNING = 6.5;
+    /** Under three tenths nothing is legible, whatever the drawing says. */
+    private static final int BRIEF = 3;
+    private int time, travel = AUTO, actor = -1;
+    int time() { return time; }
+    void setTime(int value) { time = Math.max(0, Math.min(Track.END, value)); invalidate(); }
+    int travel() { return travel; }
+    void setTravel(int value) { travel = value; }
+    private double[] spot(Diagram.Token token) { return diagram.position(token, time); }
+    private void message(String text) { android.widget.Toast.makeText(getContext(), text, android.widget.Toast.LENGTH_SHORT).show(); }
+    /**
+     * A shirt on this board is a mark, not a mannequin. Two and twenty dp is still three times a
+     * man on a pitch that would draw him at five, but a disc has a number to carry and the pitch
+     * of a schema is read at arm's length; drawn at the true scale it would be a speck. Big
+     * enough to read, small enough that four players in a corner stay four players and a pass
+     * between neighbours stays a pass — which the old thirty-two, a good six metres of grass,
+     * did not allow.
+     */
+    private static final int SHIRT = 22, NAME_H = 15, NAME_PAD = 5;
     /** How close a finger must land to take hold of a token, and a stroke's end to snap to one. */
     private static final int GRAB = 26, SNAP = 34, RUBBER = 26;
     /** Under this, a drag was a tap that wandered, and a stroke was not a stroke. */
@@ -164,11 +192,57 @@ final class BoardView extends View {
         super.onDraw(canvas);
         grass.draw(canvas, getWidth(), getHeight());
         for (Diagram.Shape shape : diagram.shapes) paintShape(canvas, shape);
+        if (!compact) for (Diagram.Token token : diagram.tokens) {
+            double[] previous = new double[]{token.x, token.y};
+            int since = 0;
+            for (Track.Key key : token.track.keys) {
+                if (key.time == 0) { previous = new double[]{key.x, key.y}; continue; }
+                // Course or conduite is not a choice made at the toolbar: the ball decides.
+                Diagram.Shape route = new Diagram.Shape(
+                    diagram.carrying(token, since, key.time) ? Diagram.CARRY : Diagram.RUN);
+                route.points.add(previous);
+                for (int j = 1; j < key.path.size()-1; j++) route.points.add(key.path.get(j));
+                route.points.add(new double[]{key.x, key.y});
+                paintShape(canvas, route);
+                previous = new double[]{key.x, key.y}; since = key.time;
+            }
+        }
+        if (!compact) for (int i = 1; i < diagram.ball.keys.size(); i++) {
+            Track.Key a = diagram.ball.keys.get(i-1), b = diagram.ball.keys.get(i);
+            if (!a.flight) continue;
+            Diagram.Shape route = new Diagram.Shape(b.kind);
+            route.points.add(diagram.ballKey(a, a.time));
+            for (int j = 1; j < b.path.size()-1; j++) route.points.add(b.path.get(j));
+            route.points.add(diagram.ballKey(b, b.time));
+            paintShape(canvas, route);
+        }
         if (drawing != null) paintShape(canvas, drawing);
         for (int i = 0; i < diagram.tokens.size(); i++) paintToken(canvas, diagram.tokens.get(i), i);
         // Names last and all together, so no shirt is ever painted over one — the rule the pitch
         // itself follows, kept here because a schema is read the same way.
         if (!compact) for (Diagram.Token token : diagram.tokens) paintName(canvas, token);
+        double[] ball = diagram.ballPosition(time);
+        if (ball != null) {
+            // At the feet of whoever holds it, on the side he is about to play it: a ball set
+            // always to the right says nothing, and says it even where the play goes left. Never
+            // below him, though — that is where his name is written, and a name half covered by
+            // a ball is worse than a ball on the wrong side. A ball nobody holds sits where it is.
+            float reach = diagram.ballHeld(time) ? dp(compact ? 9 : 14) : 0;
+            float dx = 0, dy = -1;
+            double[] next = reach == 0 ? null : diagram.ballNext(time);
+            if (next != null) {
+                dx = x(next[0]) - x(ball[0]);
+                dy = Math.min(0, y(next[1]) - y(ball[1]));
+                if (dx == 0 && dy == 0) dy = -1;
+            }
+            float away = (float)Math.hypot(dx, dy);
+            float bx = Math.max(dp(6), Math.min(getWidth()-dp(6), x(ball[0]) + dx / away * reach));
+            float by = Math.max(dp(6), Math.min(getHeight()-dp(6), y(ball[1]) + dy / away * reach));
+            paint.setStyle(Paint.Style.FILL); paint.setPathEffect(null);
+            paint.setColor(Color.BLACK); canvas.drawCircle(bx, by, dp(6), paint);
+            paint.setColor(Color.WHITE); canvas.drawCircle(bx, by, dp(4.6f), paint);
+            paint.setColor(Color.BLACK); canvas.drawCircle(bx, by, dp(1.7f), paint);
+        }
         if (banding) paintBand(canvas);
     }
 
@@ -204,8 +278,7 @@ final class BoardView extends View {
             clearance(points.get(0)), clearance(points.get(points.size() - 1)));
         measure.setPath(line, false);
         measure.getPosTan(0, position, tangent);
-        float ballX = position[0], ballY = position[1];
-        boolean run = Diagram.RUN.equals(shape.kind);
+                boolean run = Diagram.RUN.equals(shape.kind);
         Path[] rails = Diagram.SHOT.equals(shape.kind)
             // Two rails rather than one thick line: a shot must not read as a firmer pass.
             ? new Path[]{offset(line, -dp(2.2f)), offset(line, dp(2.2f))}
@@ -224,18 +297,13 @@ final class BoardView extends View {
         }
         paint.setPathEffect(null);
         head(canvas, line, width);
-        // The ball leaves from somewhere: a run is the one stroke made without it.
-        if (run) return;
-        float ball = dp(compact ? 2.6f : 3.6f);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(HALO); canvas.drawCircle(ballX, ballY, ball + dp(1.2f), paint);
-        paint.setColor(STROKE_COLOUR); canvas.drawCircle(ballX, ballY, ball, paint);
+
     }
 
     /** How far a stroke stands off a player it was snapped to, or nothing when it stands alone. */
     private float clearance(double[] point) {
         for (Diagram.Token token : diagram.tokens)
-            if (Math.abs(token.x - point[0]) < 1e-9 && Math.abs(token.y - point[1]) < 1e-9)
+            if (Math.abs(spot(token)[0] - point[0]) < 1e-9 && Math.abs(spot(token)[1] - point[1]) < 1e-9)
                 return dp(compact ? SHIRT * .34f + 2 : SHIRT * .5f + 3.5f);
         return 0;
     }
@@ -276,11 +344,13 @@ final class BoardView extends View {
     }
 
     /**
-     * The polyline a finger left, rounded off. Each recorded point becomes a control point and
-     * the curve runs through the midpoints between them: a straight drag stays straight, a
-     * curved one keeps its curve, and neither shows the corners of the sampling.
+     * The polyline a finger left, eased of its tremor and then rounded off. Each remaining point
+     * becomes a control point and the curve runs through the midpoints between them: a straight
+     * drag stays straight, a curved one keeps its curve, and neither shows the corners of the
+     * sampling.
      */
-    private Path smooth(java.util.List<double[]> points) {
+    private Path smooth(java.util.List<double[]> source) {
+        java.util.List<double[]> points = Track.eased(source);
         Path line = new Path();
         float px = x(points.get(0)[0]), py = y(points.get(0)[1]);
         line.moveTo(px, py);
@@ -329,7 +399,7 @@ final class BoardView extends View {
 
     private void paintToken(Canvas canvas, Diagram.Token token, int index) {
         int radius = Math.round(dp(compact ? SHIRT * .68f : SHIRT) / 2);
-        int cx = Math.round(x(token.x)), cy = Math.round(y(token.y));
+        int cx = Math.round(x(spot(token)[0])), cy = Math.round(y(spot(token)[1]));
         boolean active = chosen.contains(index);
         Drawable shirt = PitchView.shirt(getContext(), glass, colour(token), active, false);
         shirt.setBounds(cx - radius, cy - radius, cx + radius, cy + radius);
@@ -337,7 +407,7 @@ final class BoardView extends View {
         String number = number(token);
         if (number.isEmpty()) return;
         ink.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-        ink.setTextSize(dp(compact ? 8.5f : 12.5f));
+        ink.setTextSize(dp(compact ? 6.5f : 9.5f));
         ink.setColor(glass ? colour(token) : Color.rgb(15, 35, 33));
         canvas.drawText(number, cx, cy - (ink.descent() + ink.ascent()) / 2, ink);
     }
@@ -346,7 +416,7 @@ final class BoardView extends View {
         String name = name(token);
         if (name.isEmpty()) return;
         int radius = Math.round(dp(SHIRT) / 2);
-        float cx = x(token.x), cy = y(token.y) + radius + dp(NAME_H) / 2f - dp(2);
+        float cx = x(spot(token)[0]), cy = y(spot(token)[1]) + radius + dp(NAME_H) / 2f - dp(2);
         ink.setTypeface(Typeface.DEFAULT); ink.setTextSize(dp(10.5f));
         float half = ink.measureText(name) / 2 + dp(NAME_PAD);
         // Kept whole inside the board: a name pushed off the edge is a name nobody reads.
@@ -386,7 +456,18 @@ final class BoardView extends View {
     }
     private String name(Diagram.Token token) {
         JSONObject player = player(token);
-        return player != null ? PlayerName.shorten(player.optString("name")) : "";
+        if (player == null) return "";
+        String side = player.optString("team");
+        JSONArray teams = match == null ? null : match.optJSONArray("teams");
+        for (int i = 0; teams != null && i < teams.length(); i++) {
+            JSONObject team = teams.optJSONObject(i);
+            if (side.equals(team.optString("key"))) {
+                String code = team.optString("tla");
+                if (code.isEmpty()) code = team.optString("name");
+                return code + " · " + PlayerName.shorten(player.optString("name"));
+            }
+        }
+        return PlayerName.shorten(player.optString("name"));
     }
 
     // ——— Le doigt ———
@@ -399,6 +480,17 @@ final class BoardView extends View {
                 if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
                 downX = px; downY = py; lastX = px; lastY = py; wandered = false;
                 if (tool == ERASE) { rub(px, py); return true; }
+                if (tool == BALL) {
+                    int near = tokenAt(px, py, GRAB);
+                    double[] p = anchor(px, py);
+                    Track.Key key = new Track.Key(time, p[0], p[1]);
+                    if (near >= 0) key.owner = diagram.tokens.get(near).id;
+                    Track.Key old = diagram.ball.at(time);
+                    if (old != null) { key.path.addAll(old.path); key.kind = old.kind; }
+                    if (!diagram.ball.put(key)) message("Limite de positions du ballon atteinte");
+                    if (onChange != null) onChange.run();
+                    invalidate(); return true;
+                }
                 if (tool == MOVE) {
                     holding = tokenAt(px, py, GRAB);
                     toggled = false;
@@ -433,6 +525,7 @@ final class BoardView extends View {
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                if (event.getActionMasked() == MotionEvent.ACTION_CANCEL && drawing != null) { drawing = null; invalidate(); return true; }
                 if (tool == MOVE) {
                     forget();
                     if (banding) {
@@ -487,7 +580,13 @@ final class BoardView extends View {
     }
 
     private void begin(float px, float py) {
-        if (diagram.shapes.size() >= Diagram.SHAPES) return;
+        if (time + (travel == AUTO ? BRIEF : travel) > Track.END) {
+            message("La séquence est limitée à 120 secondes"); return;
+        }
+        actor = tokenAt(px, py, SNAP);
+        if (actor < 0 && Diagram.RUN.equals(stroke)) {
+            message("Commencez le déplacement sur un joueur"); return;
+        }
         drawing = new Diagram.Shape(stroke);
         drawing.points.add(anchor(px, py));
     }
@@ -496,7 +595,13 @@ final class BoardView extends View {
         Diagram.Shape shape = drawing;
         drawing = null;
         if (shape == null) return;
-        double[] end = anchor(px, py);
+        int receiver = tokenAt(px, py, SNAP);
+        boolean moving = Diagram.RUN.equals(shape.kind);
+        // A run ends where the finger let go, and nowhere else. Only the ball is aimed at
+        // somebody: « vers Yassine » is a pass to Yassine, and it must leave from his feet at the
+        // instant he receives it. A player running past a team-mate did not run into him, and
+        // dropping him on the very spot puts two shirts on one blade of grass.
+        double[] end = moving ? point(px, py) : anchor(px, py);
         double[] start = shape.points.get(0);
         if (Math.hypot((end[0] - start[0]) * getWidth(), (end[1] - start[1]) * getHeight()) < dp(STROKE)) {
             invalidate(); return;
@@ -504,19 +609,76 @@ final class BoardView extends View {
         // The finger's last sample is not where it let go: the end is written from the release.
         if (shape.points.size() >= Diagram.POINTS) shape.points.remove(shape.points.size() - 1);
         shape.points.add(end);
-        diagram.shapes.add(shape);
+        // How long the trip lasts: what the toolbar was told, or what the stroke itself says.
+        // Read before the end is snapped to a shirt, the snap being worth a dozen dp and the
+        // arrival's whereabouts depending on the duration we are working out.
+        int travel = this.travel == AUTO ? pace(shape) : this.travel;
+        if (time + travel > Track.END) {
+            message("La séquence est limitée à 120 secondes"); invalidate(); return;
+        }
+        if (receiver >= 0 && (Diagram.PASS.equals(shape.kind) || Diagram.SHOT.equals(shape.kind))) {
+            end = diagram.position(diagram.tokens.get(receiver), time + travel);
+            shape.points.set(shape.points.size() - 1, end);
+        }
+        Track track = moving ? diagram.tokens.get(actor).track : diagram.ball;
+        if (!room(track, time, time + travel)) {
+            message("Des positions existent déjà sur cet intervalle, ou la piste est pleine"); invalidate(); return;
+        }
+        Track.Key from = new Track.Key(time, start[0], start[1]);
+        Track.Key to = new Track.Key(time + travel, end[0], end[1]);
+        to.path.addAll(shape.points);
+        Track.Key existing = track.at(time);
+        if (existing != null) { from.path.addAll(existing.path); from.kind = existing.kind; }
+        if (moving) {
+            // Nothing is said about the ball: whoever held it holds it still, and follows.
+            track.put(from); track.put(to);
+        } else {
+            to.kind = shape.kind;
+            if (actor >= 0) from.owner = diagram.tokens.get(actor).id;
+            from.flight = true;
+            if (receiver >= 0 && Diagram.PASS.equals(shape.kind)) to.owner = diagram.tokens.get(receiver).id;
+            track.put(from); track.put(to);
+        }
+        setTime(time + travel);
+        if (actor >= 0) select(actor);
         performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
         describe(); invalidate();
         if (onChange != null) onChange.run();
     }
 
-    /** Where a stroke really starts and ends: on the player standing there, if one is. */
+    private boolean room(Track track, int start, int end) {
+        int added = (track.at(start) == null ? 1 : 0) + (track.at(end) == null ? 1 : 0);
+        if (track.keys.size() + added > Track.LIMIT) return false;
+        for (Track.Key key : track.keys) if (key.time > start && key.time < end) return false;
+        return true;
+    }
+
+    /**
+     * The duration the drawing asks for: its length on the grass, at the pace that kind of trip
+     * is played at. The length is the one that will be travelled — the eased polyline, not the
+     * straight line between the ends — so a run round an opponent takes the time it goes.
+     */
+    private int pace(Diagram.Shape shape) {
+        java.util.List<double[]> points = Track.eased(shape.points);
+        double metres = 0;
+        for (int i = 1; i < points.size(); i++) {
+            double across = (points.get(i)[0] - points.get(i-1)[0]) * WIDTH;
+            double along = (points.get(i)[1] - points.get(i-1)[1]) * LENGTH;
+            metres += Math.hypot(across, along);
+        }
+        double speed = Diagram.SHOT.equals(shape.kind) ? STRUCK
+            : Diagram.RUN.equals(shape.kind) ? RUNNING : PASSED;
+        return (int)Math.max(BRIEF, Math.min(Track.END, Math.round(metres / speed * 10)));
+    }
+
+    /** Where a stroke starts, and where a ball's stroke ends: on the player standing there. */
     private double[] anchor(float px, float py) {
         int near = tokenAt(px, py, SNAP);
-        if (near >= 0) {
-            Diagram.Token token = diagram.tokens.get(near);
-            return new double[]{token.x, token.y};
-        }
+        return near >= 0 ? spot(diagram.tokens.get(near)) : point(px, py);
+    }
+
+    /** The bare spot under the finger, on the grass and nobody's. */
+    private double[] point(float px, float py) {
         return new double[]{Math.max(0, Math.min(1, px / getWidth())),
                             Math.max(0, Math.min(1, py / getHeight()))};
     }
@@ -525,17 +687,46 @@ final class BoardView extends View {
     private void rub(float px, float py) {
         int token = tokenAt(px, py, GRAB);
         if (token >= 0) {
-            diagram.tokens.remove(token);
+            diagram.removeToken(token);
             // Removing one renumbers the rest: holding on to indices past it would hold the wrong men.
             chosen.clear();
         } else {
             int shape = shapeAt(px, py);
-            if (shape < 0) return;
-            diagram.shapes.remove(shape);
+            if (shape >= 0) diagram.shapes.remove(shape);
+            else if (!rubRoute(px, py)) return;
         }
         performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
         describe(); invalidate();
         if (onChange != null) onChange.run();
+    }
+
+    private boolean rubRoute(float px, float py) {
+        for (int i = diagram.ball.keys.size()-1; i > 0; i--) {
+            Track.Key a = diagram.ball.keys.get(i-1), b = diagram.ball.keys.get(i);
+            if (a.flight && nearRoute(px, py, diagram.ballKey(a, a.time), diagram.ballKey(b, b.time), b.path)) {
+                a.flight = false; diagram.ball.keys.remove(i); return true;
+            }
+        }
+        for (Diagram.Token token : diagram.tokens) {
+            for (int i = token.track.keys.size()-1; i >= 0; i--) {
+                Track.Key b = token.track.keys.get(i);
+                if (b.time == 0) continue;
+                double[] a = i == 0 ? new double[]{token.x, token.y}
+                    : new double[]{token.track.keys.get(i-1).x, token.track.keys.get(i-1).y};
+                if (nearRoute(px, py, a, new double[]{b.x, b.y}, b.path)) {
+                    token.track.keys.remove(i); return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean nearRoute(float px, float py, double[] a, double[] b, java.util.List<double[]> route) {
+        for (int i = 0; i <= 100; i++) {
+            double[] p = Track.route(a[0], a[1], b[0], b[1], route, i / 100.0);
+            if (Math.hypot(x(p[0])-px, y(p[1])-py) <= dp(RUBBER)) return true;
+        }
+        return false;
     }
 
     /**
@@ -549,13 +740,11 @@ final class BoardView extends View {
         double mx = dx / getWidth(), my = dy / getHeight();
         for (int index : moving) {
             Diagram.Token token = diagram.tokens.get(index);
-            mx = Math.max(-token.x, Math.min(1 - token.x, mx));
-            my = Math.max(-token.y, Math.min(1 - token.y, my));
+            double[] bounds = token.bounds();
+            mx = Math.max(-bounds[0], Math.min(1 - bounds[2], mx));
+            my = Math.max(-bounds[1], Math.min(1 - bounds[3], my));
         }
-        for (int index : moving) {
-            Diagram.Token token = diagram.tokens.get(index);
-            token.x += mx; token.y += my;
-        }
+        for (int index : moving) diagram.tokens.get(index).reposition(mx, my);
     }
 
     /** Everyone the rectangle closed on, by the spot he stands on rather than by his shirt. */
@@ -565,7 +754,7 @@ final class BoardView extends View {
         float top = Math.min(downY, py), bottom = Math.max(downY, py);
         for (int i = 0; i < diagram.tokens.size(); i++) {
             Diagram.Token token = diagram.tokens.get(i);
-            float tx = x(token.x), ty = y(token.y);
+            float tx = x(spot(token)[0]), ty = y(spot(token)[1]);
             if (tx >= left && tx <= right && ty >= top && ty <= bottom) chosen.add(i);
         }
     }
@@ -576,7 +765,7 @@ final class BoardView extends View {
         double best = dp(reach);
         for (int i = diagram.tokens.size() - 1; i >= 0; i--) {
             Diagram.Token token = diagram.tokens.get(i);
-            double distance = Math.hypot(x(token.x) - px, y(token.y) - py);
+            double distance = Math.hypot(x(spot(token)[0]) - px, y(spot(token)[1]) - py);
             if (distance <= best) { best = distance; found = i; }
         }
         return found;

@@ -5,8 +5,15 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -28,6 +35,7 @@ import org.json.JSONObject;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.text.Collator;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -47,6 +55,7 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private JSONObject match;
     private JSONObject demoMatch;
+    private final List<JSONObject> demoMatches = new ArrayList<>();
     private LinearLayout root, composer, factsPage, statsPage;
     private Pager pager;
     /** Which screen is shown: these pages replace the view, so back has to unwind them itself. */
@@ -95,9 +104,32 @@ public class MainActivity extends Activity {
      * kind of note, and the second mode is a note that also happens to be drawn.
      */
     private Diagram diagram;
+    /**
+     * The board as it stood before each change, while a note is open. A drawn stroke is a gesture,
+     * and a gesture goes wrong: the finger slips, the pass lands on the wrong shirt, the eraser
+     * takes the player instead of the line. The journal already records every state — it is what
+     * ↶ walks back on the match screen — but not while a note is still being drawn, and reaching
+     * for it would mean leaving the note to undo a stroke in it.
+     *
+     * <p>Whole schemas rather than reverse operations: a schema is bounded by design — thirty
+     * tokens, forty strokes, a hundred and twenty keys — so a step costs a few kilobytes, and
+     * nothing can drift out of step with the board the way a hand-written inverse would.
+     */
+    private final List<String> undoable = new ArrayList<>();
+    private String drawnBefore = "";
+    private static final int UNDOABLE = 40;
+    private Button tacticUndo;
     /** What already reached the log, so a stroke never rewrites what has not changed. */
     private String entriesWritten = "", diagramWritten = "";
     private BoardView board;
+    private final Handler tacticClock = new Handler(Looper.getMainLooper());
+    private boolean tacticPlaying;
+    private int tacticTime;
+    private Runnable tacticTick;
+    private void stopTactic() {
+        tacticPlaying = false;
+        if (tacticTick != null) tacticClock.removeCallbacks(tacticTick);
+    }
     private LinearLayout tacticPanel;
     private Button tacticMinute;
     /** Fixed so that opening a note never moves the players under the finger. */
@@ -167,6 +199,12 @@ public class MainActivity extends Activity {
         try {
             try (java.io.InputStream input = getAssets().open("match.json")) {
                 match = new JSONObject(readText(input)); demoMatch = match;
+                try {
+                    demoMatches.addAll(loadBundledDemoMatches());
+                    if (!demoMatches.isEmpty()) { demoMatch = demoMatches.get(0); match = demoMatch; }
+                } catch (Exception bundledError) {
+                    throw new java.io.IOException("Impossible de charger les matchs ESPN de démonstration", bundledError);
+                }
             }
             if (saved != null) {
                 noteId = saved.getString("note_id", "");
@@ -177,6 +215,7 @@ public class MainActivity extends Activity {
                 noteMinute = saved.getInt("note_minute", 0);
                 loadEntries(new JSONArray(saved.getString("entries", "[]")));
                 entriesWritten = saved.getString("entries_written", "");
+                tacticTime = saved.getInt("tactic_time", 0);
                 diagramWritten = saved.getString("diagram_written", "");
                 String drawn = saved.getString("diagram", "");
                 if (!drawn.isEmpty()) diagram = Diagram.from(new JSONObject(drawn));
@@ -197,6 +236,7 @@ public class MainActivity extends Activity {
         state.putString("entries", draftEntries().toString());
         state.putString("entries_written", entriesWritten);
         state.putString("diagram_written", diagramWritten);
+        state.putInt("tactic_time", board == null ? tacticTime : board.time());
         state.putString("diagram", diagram == null ? "" : drawnJson());
         super.onSaveInstanceState(state);
     }
@@ -205,6 +245,37 @@ public class MainActivity extends Activity {
         worker.shutdown();
         super.onDestroy();
     }
+    private Pager browsePager;
+    private FrameLayout homeCard, calendarCard, annotatedCard;
+    private LinearLayout homeRoot, calendarRoot, annotatedRoot;
+    private String calendarSearch = "", annotatedSearch = "";
+    private JSONArray calendarFixtures = new JSONArray();
+    private LocalDate calendarCentre = LocalDate.now();
+
+    private boolean browsing() {
+        return browsePager != null && ("home".equals(screen) || "calendar".equals(screen) || "annotated".equals(screen));
+    }
+
+    private void selectBrowsePage() {
+        int selected = browsePager.page();
+        screen = selected == 0 ? "annotated" : selected == 1 ? "home" : "calendar";
+        root = selected == 0 ? annotatedRoot : selected == 1 ? homeRoot : calendarRoot;
+        if (selected == 2) updateFavoriteButtons(calendarRoot);
+        if (selected == 0) updateFavoriteButtons(annotatedRoot);
+    }
+
+    private void updateFavoriteButtons(android.view.ViewGroup group) {
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child instanceof ImageButton && child.getTag() instanceof JSONObject) {
+                JSONObject fixture = (JSONObject) child.getTag();
+                favoriteAppearance((ImageButton) child, fixture.optString("id"),
+                    fixture.optJSONObject("homeTeam").optString("name") + " contre "
+                    + fixture.optJSONObject("awayTeam").optString("name"));
+            } else if (child instanceof android.view.ViewGroup) updateFavoriteButtons((android.view.ViewGroup) child);
+        }
+    }
+
     @Override public void onBackPressed() {
         if ("tactic".equals(screen)) { leaveTactic(); return; }
         if ("match".equals(screen)) {
@@ -218,7 +289,7 @@ public class MainActivity extends Activity {
         super.onBackPressed();
     }
     @Override protected void onResume() { super.onResume(); ticker.removeCallbacks(tick); ticker.post(tick); }
-    @Override protected void onPause() { ticker.removeCallbacks(tick); super.onPause(); }
+    @Override protected void onPause() { stopTactic(); ticker.removeCallbacks(tick); super.onPause(); }
     private long clockSeconds() { return MatchClock.seconds(System.currentTimeMillis(), clockAnchor, clockBase, clockRunning); }
     private void updateClock() {
         int previous = minute;
@@ -318,13 +389,23 @@ public class MainActivity extends Activity {
      * application puts them, and the returned bar is where a screen hangs its own actions.
      */
     private LinearLayout page(String title, Runnable back) {
+        return page(title, back, -1);
+    }
+
+    private LinearLayout page(String title, Runnable back, int card) {
         ScrollView scroll = new ScrollView(this);
         // Without this the page ends where its content does and the window shows through.
         scroll.setFillViewport(true); scroll.setBackgroundColor(BACKGROUND);
         // The system bars are part of the page: a black strip above the title is a seam.
         getWindow().setStatusBarColor(BACKGROUND); getWindow().setNavigationBarColor(BACKGROUND);
         root = frame(); root.setPadding(dp(16), dp(10), dp(16), dp(24));
-        scroll.addView(root); setContentView(scroll);
+        scroll.addView(root);
+        if (card < 0) setContentView(scroll);
+        else {
+            FrameLayout host = card == 0 ? homeCard : card == 1 ? calendarCard : annotatedCard;
+            host.removeAllViews(); host.addView(scroll);
+            if (card == 0) homeRoot = root; else if (card == 1) calendarRoot = root; else annotatedRoot = root;
+        }
         LinearLayout bar = strip(); root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
         if (back != null) bar.addView(barAction(R.drawable.ic_arrow_back, "Revenir", back), barSize(0));
         TextView heading = new TextView(this);
@@ -441,12 +522,37 @@ public class MainActivity extends Activity {
     // ——— Accueil, calendrier et préférences ———
 
     private void showHome() {
+        if (browsing()) {
+            browsePager.show(1, true);
+            selectBrowsePage();
+            return;
+        }
+        browsePager = new Pager(this);
+        homeCard = new FrameLayout(this); calendarCard = new FrameLayout(this);
+        annotatedCard = new FrameLayout(this);
+        browsePager.addPage(annotatedCard); browsePager.addPage(homeCard); browsePager.addPage(calendarCard);
+        renderAnnotated();
         showHomeShell();
         loadFixtures(LocalDate.now(), LocalDate.now(), true);
+        renderCalendar(calendarCentre);
+        browsePager.onTurn(this::selectBrowsePage);
+        browsePager.show(1, false);
+        selectBrowsePage();
+        setContentView(browsePager);
+        refreshClubFixtures();
     }
 
     private void calendar(LocalDate centre) {
-        screen = "calendar"; page("Calendrier", this::showHome);
+        if (!browsing()) showHome();
+        renderCalendar(centre);
+        browsePager.show(2, true);
+        selectBrowsePage();
+    }
+
+    private void renderCalendar(LocalDate centre) {
+        calendarCentre = centre;
+        screen = "calendar";
+        LinearLayout title = page("Calendrier", this::showHome, 1);
         // Two arrows and the window they move: lighter than three buttons, and it says the dates.
         LinearLayout dates = strip();
         LinearLayout.LayoutParams row = new LinearLayout.LayoutParams(-1, -2);
@@ -461,26 +567,139 @@ public class MainActivity extends Activity {
         dates.addView(date, new LinearLayout.LayoutParams(0, -2, 1));
         dates.addView(barAction(R.drawable.ic_chevron_right, "Semaine suivante",
             () -> calendar(centre.plusDays(7))), barSize(0));
+        // Only fixtures scroll: the title and week controls keep the page identifiable.
+        ScrollView fixtures = (ScrollView) root.getParent();
+        root.removeView(title); root.removeView(dates);
+        calendarCard.removeAllViews();
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(BACKGROUND);
+        LinearLayout header = frame();
+        header.setPadding(dp(16), dp(10), dp(16), dp(12));
+        header.addView(title); header.addView(dates, row);
+        // The week arrows are round and heavy: the field needs air under them, more than the
+        // hairline the arrows leave on their own.
+        LinearLayout.LayoutParams search = new LinearLayout.LayoutParams(-1, -2);
+        search.topMargin = dp(10);
+        header.addView(searchField("Rechercher dans cette semaine", calendarSearch, query -> {
+            calendarSearch = query;
+            LinearLayout previous = root; root = calendarRoot;
+            renderFixtures(calendarFixtures, false); root = previous;
+        }), search);
+        layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        View divider = new View(this); divider.setBackgroundColor(CHIP);
+        layout.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+        root.setPadding(dp(16), 0, dp(16), dp(24));
+        layout.addView(fixtures, new LinearLayout.LayoutParams(-1, 0, 1));
+        calendarCard.addView(layout);
         loadFixtures(centre.minusDays(3), centre.plusDays(3), false);
+    }
+
+    private EditText searchField(String hint, String value, java.util.function.Consumer<String> changed) {
+        EditText field = new EditText(this);
+        field.setSingleLine(true); field.setTextColor(INK); field.setHintTextColor(MUTED);
+        field.setTextSize(15); field.setHint(hint); field.setText(value);
+        field.setInputType(InputType.TYPE_CLASS_TEXT);
+        field.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        // Consume submission: TextView's default Enter handling moves focus to the next
+        // search field, which can be on another card and scroll the pager there.
+        field.setOnEditorActionListener((view, action, event) -> {
+            boolean enter = event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_ENTER;
+            if (action != android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH && !enter) return false;
+            if (event == null || event.getAction() == android.view.KeyEvent.ACTION_UP) {
+                android.view.inputmethod.InputMethodManager keyboard =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                keyboard.hideSoftInputFromWindow(view.getWindowToken(), 0);
+            }
+            return true;
+        });
+        field.setBackground(rounded(CHIP, 12));
+        field.setPadding(dp(12), dp(8), dp(12), dp(8));
+        field.setContentDescription(hint);
+        field.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence text, int start, int count, int after) {}
+            public void onTextChanged(CharSequence text, int start, int before, int count) { changed.accept(text.toString()); }
+            public void afterTextChanged(android.text.Editable text) {}
+        });
+        return field;
+    }
+
+    private void renderAnnotated() {
+        screen = "annotated";
+        LinearLayout title = page("Mes matchs annotés", this::showHome, 2);
+        ScrollView list = (ScrollView) root.getParent();
+        root.removeView(title); annotatedCard.removeAllViews();
+        LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(BACKGROUND);
+        LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
+        header.addView(title);
+        header.addView(searchField("Équipe, compétition, date ou note", annotatedSearch, query -> {
+            annotatedSearch = query;
+            LinearLayout previous = root; root = annotatedRoot;
+            renderAnnotatedMatches(); root = previous;
+        }));
+        layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        layout.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
+        annotatedCard.addView(layout);
+        renderAnnotatedMatches();
+    }
+
+    private void renderAnnotatedMatches() {
+        root.removeAllViews();
+        try {
+            Map<String, List<JSONObject>> byMatch = new LinkedHashMap<>();
+            for (JSONObject note : notes(null))
+                byMatch.computeIfAbsent(note.optString("match_id"), ignored -> new ArrayList<>()).add(note);
+            Map<String, JSONObject> known = new HashMap<>();
+            JSONArray fixtures = store.fixtures();
+            for (int i = 0; i < fixtures.length(); i++) {
+                JSONObject fixture = fixtures.getJSONObject(i); known.put("fd-" + fixture.optString("id"), fixture);
+            }
+            if (demoMatch != null) known.put(demoMatch.optString("id"), demoMatch);
+            for (JSONObject demo : demoMatches) known.put(demo.optString("id"), demo);
+            // Include the original bundled fixture for notes made before the current demos existed.
+            try (java.io.InputStream input = getAssets().open("match.json")) {
+                JSONObject original = new JSONObject(readText(input)); known.put(original.optString("id"), original);
+            }
+            int shown = 0;
+            for (Map.Entry<String, List<JSONObject>> item : byMatch.entrySet()) {
+                String id = item.getKey(); JSONObject fixture = known.get(id);
+                if (fixture == null) {
+                    if (id.startsWith("fd-")) fixture = new JSONObject().put("id", Integer.parseInt(id.substring(3)))
+                        .put("homeTeam", new JSONObject().put("name", "Match " + id))
+                        .put("awayTeam", new JSONObject().put("name", "Détails non téléchargés"))
+                        .put("competition", new JSONObject());
+                    else fixture = new JSONObject().put("id", id).put("title", "Match " + id)
+                        .put("teams", new JSONArray()).put("players", new JSONArray());
+                }
+                boolean found = FixtureSelection.matches(fixture, annotatedSearch);
+                for (JSONObject note : item.getValue())
+                    found |= FixtureSelection.contains(note.optString("comment"), annotatedSearch);
+                if (!found) continue;
+                label(item.getValue().size() + (item.getValue().size() == 1 ? " note" : " notes")).setTextColor(MUTED);
+                fixtureDate(fixture); fixtureCard(fixture, !id.startsWith("fd-")); shown++;
+            }
+            if (shown == 0) label(byMatch.isEmpty() ? "Les matchs où vous prenez des notes apparaîtront ici, même une fois terminés."
+                : "Aucun match annoté ne correspond à cette recherche.");
+        } catch (Exception error) { error(error); }
     }
 
     private void profile() {
         screen = "profile"; page("Mes suivis", this::showHome);
         TextView help = label("Choisissez des compétitions et/ou des clubs. Un match est affiché s’il correspond à au moins un de vos choix.");
         help.setTextColor(MUTED); help.setTextSize(13);
-        loading("Chargement du catalogue…");
-        if (!hasServer()) {
-            label("Configurez la connexion dans Accueil → Options pour choisir vos clubs et compétitions.");
-            return;
-        }
+        try {
+            String cached = store.downloaded("/v1/football/competitions");
+            renderProfile(cached == null ? new JSONObject() : new JSONObject(cached),
+                new JSONObject().put("matches", store.fixtures()));
+            label("Vos suivis sont conservés sur cet appareil. Catalogue actualisé si le serveur est disponible.");
+        } catch (Exception error) { error(error); }
+        if (!hasServer()) return;
         worker.execute(() -> {
             try {
                 JSONObject competitions = new JSONObject(get("/v1/football/competitions"));
-                LocalDate now = LocalDate.now();
-                JSONObject matches = new JSONObject(get("/v1/football/matches?dateFrom=" + now.minusDays(3)
-                    + "&dateTo=" + now.plusDays(7)));
+                JSONObject matches = new JSONObject().put("matches", store.fixtures());
                 runOnUiThread(() -> { if ("profile".equals(screen)) renderProfile(competitions, matches); });
-            } catch (Exception error) { runOnUiThread(() -> remoteError(error)); }
+            } catch (Exception unavailable) { /* The local catalogue remains usable. */ }
         });
     }
 
@@ -488,14 +707,24 @@ public class MainActivity extends Activity {
         page("Mes suivis", this::showHome);
         Set<String> competitionIds = new HashSet<>(prefs.getStringSet("follow_competitions", Collections.emptySet()));
         Set<String> teamIds = new HashSet<>(prefs.getStringSet("follow_teams", Collections.emptySet()));
+        // Both lists arrive in the order a server or a calendar happened to hold them, and a list
+        // you pick from is searched by eye: alphabetical, and by a collator rather than by code
+        // point, so that Évian sits with the E's and not after Z.
+        Collator alphabet = Collator.getInstance(Locale.FRANCE);
         section("Compétitions", null, null);
         JSONArray competitions = catalogue.optJSONArray("competitions");
+        List<JSONObject> named = new ArrayList<>();
         if (competitions != null) for (int i = 0; i < competitions.length(); i++) {
-            JSONObject item = competitions.optJSONObject(i); String id = String.valueOf(item.optInt("id"));
+            JSONObject item = competitions.optJSONObject(i);
+            if (item != null) named.add(item);
+        }
+        named.sort((one, other) -> alphabet.compare(one.optString("name"), other.optString("name")));
+        for (JSONObject item : named) {
+            String id = String.valueOf(item.optInt("id"));
             CheckBox choice = choice(item.optString("name"), competitionIds.contains(id));
             choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_competitions", id, checked));
         }
-        section("Clubs jouant dans les 10 prochains jours", null, null);
+        section("Clubs des matchs enregistrés", null, null);
         LinkedHashMap<String,String> teams = new LinkedHashMap<>();
         JSONArray fixtures = fixtureData.optJSONArray("matches");
         if (fixtures != null) for (int i = 0; i < fixtures.length(); i++) {
@@ -504,11 +733,13 @@ public class MainActivity extends Activity {
             if (home != null) teams.put(String.valueOf(home.optInt("id")), home.optString("name"));
             if (away != null) teams.put(String.valueOf(away.optInt("id")), away.optString("name"));
         }
-        for (Map.Entry<String,String> team : teams.entrySet()) {
+        List<Map.Entry<String,String>> clubs = new ArrayList<>(teams.entrySet());
+        clubs.sort((one, other) -> alphabet.compare(one.getValue(), other.getValue()));
+        for (Map.Entry<String,String> team : clubs) {
             CheckBox choice = choice(team.getValue(), teamIds.contains(team.getKey()));
             choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_teams", team.getKey(), checked));
         }
-        TextView note = label("La liste des clubs est renouvelée avec les rencontres proches couvertes par votre plan API.");
+        TextView note = label("Les clubs des calendriers consultés restent disponibles sans connexion.");
         note.setTextColor(MUTED); note.setTextSize(12);
     }
 
@@ -525,30 +756,200 @@ public class MainActivity extends Activity {
         prefs.edit().putStringSet(key, values).apply();
     }
 
+    private final int[] fixturesRequests = new int[2];
+
+    private JSONArray localFixtures(LocalDate from, LocalDate to) throws Exception {
+        List<JSONObject> found = new ArrayList<>();
+        JSONArray all = store.fixtures();
+        for (int i = 0; i < all.length(); i++) {
+            JSONObject item = all.getJSONObject(i);
+            ZonedDateTime kickoff = local(item.optString("utcDate"));
+            if (from == null || (kickoff != null && !kickoff.toLocalDate().isBefore(from)
+                    && !kickoff.toLocalDate().isAfter(to))) found.add(item);
+        }
+        found.sort(Comparator.comparing(item -> item.optString("utcDate")));
+        return new JSONArray(found);
+    }
+
+    private void savedMatches() {
+        screen = "saved"; page("Matchs enregistrés", this::showHome);
+        label("Disponibles sur cet appareil. Les scores et compositions peuvent dater de la dernière connexion.");
+        try {
+            JSONArray all = localFixtures(null, null);
+            for (int i = 0; i < all.length(); i++) fixtureCard(all.getJSONObject(i), false);
+            if (all.length() == 0) label("Aucun match téléchargé. Consultez le calendrier avec le serveur pour en conserver une copie.");
+        } catch (Exception error) { error(error); }
+    }
+
     private void loadFixtures(LocalDate from, LocalDate to, boolean home) {
-        if (!hasServer()) {
-            fixtureCard(demoMatch, true);
-            TextView offline = label("Mode démo hors ligne · configurez le serveur pour charger les vrais matchs.");
-            offline.setTextColor(MUTED); offline.setTextSize(12);
+        int slot = home ? 0 : 1;
+        int request = ++fixturesRequests[slot];
+        Pager requestedPager = browsePager;
+        if (prefs.getBoolean("demo_mode", true)) {
+            showOfflineFixtures(home);
             return;
         }
-        loading("Chargement des matchs…");
-        String expected = screen;
+        try {
+            renderFixtures(localFixtures(from, to), home);
+            label("Copie locale · actualisation si le serveur est disponible.");
+        } catch (Exception error) { error(error); }
+        if (!hasServer()) return;
         worker.execute(() -> {
             try {
                 JSONObject data = new JSONObject(get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1)));
-                runOnUiThread(() -> { if (expected.equals(screen)) renderFixtures(data.optJSONArray("matches"), home); });
-            } catch (Exception error) { runOnUiThread(() -> remoteError(error)); }
+                runOnUiThread(() -> {
+                    if (request != fixturesRequests[slot] || requestedPager != browsePager || !browsing()) return;
+                    root = home ? homeRoot : calendarRoot;
+                    renderFixtures(data.optJSONArray("matches"), home);
+                    selectBrowsePage();
+                    if (!home) refreshHomeCard();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (request != fixturesRequests[slot] || requestedPager != browsePager || !browsing()) return;
+                    root = home ? homeRoot : calendarRoot;
+                    try { renderFixtures(localFixtures(from, to), home); }
+                    catch (Exception localError) { error(localError); }
+                    label("Serveur indisponible · données enregistrées, pouvant être anciennes. Les autres matchs restent accessibles dans Matchs enregistrés.");
+                    selectBrowsePage();
+                });
+            }
         });
     }
 
+    private void showOfflineFixtures(boolean home) {
+        if (!home) {
+            empty("Le calendrier nécessite le serveur. Le match de démonstration est disponible à l’accueil.", "Accueil", this::showHome);
+            return;
+        }
+        showHomeShell();
+        for (JSONObject demo : demoMatches) fixtureCard(demo, true);
+        TextView offline = label("Mode démo hors ligne · ces deux matchs sont disponibles sans serveur.");
+        offline.setTextColor(MUTED); offline.setTextSize(12);
+    }
+
+    /** Two self-contained fixtures so a freshly installed app remains useful without a server. */
+    private List<JSONObject> loadBundledDemoMatches() throws Exception {
+        JSONArray bundled;
+        try (java.io.InputStream input = getAssets().open("demo-matches.json")) {
+            bundled = new JSONArray(readText(input));
+        }
+        List<JSONObject> result = new ArrayList<>();
+        for (int i = 0; i < bundled.length(); i++) {
+            JSONObject source = bundled.getJSONObject(i);
+            JSONObject converted = convertMatch(source);
+            boolean finished = "FINISHED".equals(source.optString("status")) || mark(source, "end") != 0;
+            String home = source.optJSONObject("homeTeam").optString("name");
+            String away = source.optJSONObject("awayTeam").optString("name");
+            converted.put("id", finished ? "demo-psg-monaco-2026-09-04" : "demo-strasbourg-monaco-2026-09-12")
+                .put("title", home + " · " + away)
+                .put("stage", source.optString("stage") + (finished ? " · match terminé" : " · prochain match"))
+                .put("date", source.optString("utcDate"))
+                .put("demo_status", finished ? "FINI" : "À VENIR")
+                .put("demo_score_home", source.optJSONObject("score").optJSONObject("fullTime").optString("home", ""))
+                .put("demo_score_away", source.optJSONObject("score").optJSONObject("fullTime").optString("away", ""));
+            result.add(converted);
+        }
+        return result;
+    }
+
+    private List<JSONObject> buildDemoMatches(JSONObject template) throws Exception {
+        List<JSONObject> result = new ArrayList<>();
+        JSONObject finished = new JSONObject(template.toString());
+        finished.put("id", "demo-psg-monaco-2026-09-04")
+            .put("title", "Paris Saint-Germain · AS Monaco")
+            .put("competition", "Ligue 1")
+            .put("stage", "J3 · match terminé")
+            .put("date", "2026-09-04")
+            .put("demo_kickoff", "21:05")
+            .put("demo_status", "FINI")
+            .put("demo_score_home", "1")
+            .put("demo_score_away", "2");
+        JSONArray finishedTeams = finished.getJSONArray("teams");
+        finishedTeams.getJSONObject(0).put("name", "Paris Saint-Germain");
+        finishedTeams.getJSONObject(1).put("name", "AS Monaco");
+        finishedTeams.getJSONObject(0).put("formation", "4-3-3");
+        finishedTeams.getJSONObject(1).put("formation", "4-2-3-1");
+        finished.put("players", demoPsgMonacoPlayers());
+        result.add(finished);
+
+        JSONObject upcoming = new JSONObject(template.toString());
+        upcoming.put("id", "demo-strasbourg-monaco-2026-09-12")
+            .put("title", "RC Strasbourg · AS Monaco")
+            .put("competition", "Ligue 1")
+            .put("stage", "J4 · prochain match")
+            .put("date", "2026-09-12")
+            .put("demo_status", "À VENIR")
+            .put("demo_kickoff", "17:15");
+        JSONArray upcomingTeams = upcoming.getJSONArray("teams");
+        upcomingTeams.getJSONObject(0).put("name", "RC Strasbourg");
+        upcomingTeams.getJSONObject(1).put("name", "AS Monaco");
+        upcomingTeams.getJSONObject(0).put("formation", "4-3-3");
+        upcomingTeams.getJSONObject(1).put("formation", "4-2-3-1");
+        upcoming.put("players", demoStrasbourgMonacoPlayers());
+        result.add(upcoming);
+        return result;
+    }
+
+    private JSONObject demoPlayer(String id, String name, int number, String team,
+                                  String position, double x, double y) throws Exception {
+        return new JSONObject().put("id", id).put("name", name).put("number", number)
+            .put("team", team).put("position", position).put("x", x).put("y", y);
+    }
+
+    private JSONArray demoPsgMonacoPlayers() throws Exception {
+        JSONArray players = new JSONArray();
+        players.put(demoPlayer("demo-psg-safonov", "Matvey Safonov", 39, "home", "Goalkeeper", .50, .055));
+        players.put(demoPlayer("demo-psg-hakimi", "Achraf Hakimi", 2, "home", "Right Back", .14, .17));
+        players.put(demoPlayer("demo-psg-marquinhos", "Marquinhos", 5, "home", "Centre Back", .36, .16));
+        players.put(demoPlayer("demo-psg-pacho", "Willian Pacho", 51, "home", "Centre Back", .64, .16));
+        players.put(demoPlayer("demo-psg-zaire", "Warren Zaïre-Emery", 33, "home", "Left Back", .86, .17));
+        players.put(demoPlayer("demo-psg-neves", "João Neves", 87, "home", "Midfielder", .28, .29));
+        players.put(demoPlayer("demo-psg-vitinha", "Vitinha", 17, "home", "Midfielder", .50, .27));
+        players.put(demoPlayer("demo-psg-fabian", "Fabián Ruiz", 8, "home", "Midfielder", .72, .29));
+        players.put(demoPlayer("demo-psg-akliouche", "Maghnes Akliouche", 11, "home", "Right Wing", .20, .42));
+        players.put(demoPlayer("demo-psg-doue", "Désiré Doué", 14, "home", "Centre Forward", .50, .45));
+        players.put(demoPlayer("demo-psg-kvaratskhelia", "Khvicha Kvaratskhelia", 7, "home", "Left Wing", .80, .42));
+        players.put(demoPlayer("demo-monaco-hradeky", "Lukáš Hrádecký", 1, "away", "Goalkeeper", .50, .945));
+        players.put(demoPlayer("demo-monaco-vanderson", "Vanderson", 2, "away", "Right Back", .14, .83));
+        players.put(demoPlayer("demo-monaco-sane", "Sadibou Sané", 72, "away", "Centre Back", .36, .84));
+        players.put(demoPlayer("demo-monaco-dier", "Eric Dier", 15, "away", "Centre Back", .64, .84));
+        players.put(demoPlayer("demo-monaco-nazinho", "Flávio Nazinho", 20, "away", "Left Back", .86, .83));
+        players.put(demoPlayer("demo-monaco-zakaria", "Denis Zakaria", 6, "away", "Midfielder", .35, .70));
+        players.put(demoPlayer("demo-monaco-camara", "Lamine Camara", 8, "away", "Midfielder", .65, .70));
+        players.put(demoPlayer("demo-monaco-idumbo", "Stanis Idumbo", 17, "away", "Right Wing", .20, .58));
+        players.put(demoPlayer("demo-monaco-golovin", "Aleksandr Golovin", 10, "away", "Attacking Midfielder", .50, .57));
+        players.put(demoPlayer("demo-monaco-coulibaly", "Mamadou Coulibaly", 28, "away", "Left Wing", .80, .58));
+        players.put(demoPlayer("demo-monaco-brunner", "Paris Brunner", 29, "away", "Centre Forward", .50, .48));
+        return players;
+    }
+
+    /** Generic placeholders keep the not-yet-played fixture usable without inventing a lineup. */
+    private JSONArray demoStrasbourgMonacoPlayers() throws Exception {
+        JSONArray players = new JSONArray();
+        double[] homeX = {.50, .14, .36, .64, .86, .28, .50, .72, .20, .50, .80};
+        double[] homeY = {.055, .17, .16, .16, .17, .29, .27, .29, .42, .45, .42};
+        double[] awayX = {.50, .14, .36, .64, .86, .35, .65, .20, .50, .80, .50};
+        double[] awayY = {.945, .83, .84, .84, .83, .70, .70, .58, .57, .58, .48};
+        for (int i = 0; i < 11; i++) {
+            players.put(demoPlayer("demo-strasbourg-" + (i + 1), "Strasbourg " + (i + 1), i + 1,
+                "home", i == 0 ? "Goalkeeper" : "Player", homeX[i], homeY[i]));
+            players.put(demoPlayer("demo-monaco-upcoming-" + (i + 1), "Monaco " + (i + 1), i + 1,
+                "away", i == 0 ? "Goalkeeper" : "Player", awayX[i], awayY[i]));
+        }
+        return players;
+    }
+
     private void renderFixtures(JSONArray fixtures, boolean home) {
-        if (home) showHomeShell(); else calendarShellOnly();
+        if (home) showHomeShell(); else {
+            calendarFixtures = fixtures == null ? new JSONArray() : fixtures;
+            calendarShellOnly();
+        }
         int shown = 0;
         String day = "";
         if (fixtures != null) for (int i = 0; i < fixtures.length(); i++) {
             JSONObject fixture = fixtures.optJSONObject(i);
-            if (!follows(fixture)) continue;
+            if (!follows(fixture) || (!home && !FixtureSelection.matches(fixture, calendarSearch))) continue;
             // A week of fixtures is a week of days: say which one, once, above its matches.
             if (!home) {
                 ZonedDateTime kickoff = local(fixture.optString("utcDate"));
@@ -557,8 +958,10 @@ public class MainActivity extends Activity {
             }
             fixtureCard(fixture, false); shown++;
         }
-        if (shown == 0) empty("Aucun match correspondant à vos suivis sur cette période.",
-            "Choisir mes suivis", this::profile);
+        if (shown == 0) {
+            if (!home && !calendarSearch.trim().isEmpty()) label("Aucun match ne correspond à cette recherche dans la semaine affichée.");
+            else empty("Aucun match correspondant à vos suivis sur cette période.", "Choisir mes suivis", this::profile);
+        }
     }
 
     /** Kickoff in the reader's own zone: UTC on a home screen is a machine's idea of a clock. */
@@ -602,17 +1005,109 @@ public class MainActivity extends Activity {
     private void showHomeShell() {
         screen = "home";
         // Settings are not content: they belong in the bar as icons, not in the middle of the page.
-        LinearLayout bar = page("Fonote");
+        LinearLayout bar = page("Fonote", null, 0);
         bar.addView(barAction(R.drawable.ic_star, "Mes suivis", this::profile), barSize(8));
         bar.addView(barAction(R.drawable.ic_settings, "Options", this::options), barSize(8));
         TextView intro = label("Les matchs que vous suivez, prêts à être notés.");
         intro.setTextColor(MUTED); intro.setTextSize(14); intro.setPadding(0, 0, 0, 0);
+        full("Matchs enregistrés", this::savedMatches);
+        homeFollows();
         section("Aujourd’hui", "Calendrier ›", () -> calendar(LocalDate.now()));
     }
 
+    private void homeFollows() {
+        try {
+            JSONArray all = localFixtures(null, null);
+            Set<String> favorites = prefs.getStringSet("follow_matches", Collections.emptySet());
+            section("Mes matchs favoris", "Calendrier ›", () -> calendar(calendarCentre));
+            int shown = 0;
+            for (int i = 0; i < all.length(); i++) {
+                JSONObject fixture = all.getJSONObject(i);
+                if (!favorites.contains(fixture.optString("id")) || !FixtureSelection.unfinished(fixture)) continue;
+                fixtureDate(fixture); fixtureCard(fixture, false); shown++;
+            }
+            if (shown == 0) label("Aucun favori à venir ou en cours. Ajoutez-en avec l’étoile du calendrier.").setTextColor(MUTED);
+
+            Set<String> clubs = prefs.getStringSet("follow_teams", Collections.emptySet());
+            section("Prochains matchs de mes clubs", "Mes suivis ›", this::profile);
+            Map<String, JSONObject> next = FixtureSelection.next(all, clubs, Instant.now());
+            Set<String> displayed = new HashSet<>();
+            for (JSONObject fixture : next.values()) {
+                if (!displayed.add(fixture.optString("id"))) continue;
+                fixtureDate(fixture); fixtureCard(fixture, false);
+            }
+            if (clubs.isEmpty()) label("Suivez un club pour afficher son prochain match.").setTextColor(MUTED);
+            else if (next.size() < clubs.size())
+                label("Prochain match encore inconnu pour certains clubs. Actualisation à la connexion au serveur.").setTextColor(MUTED);
+        } catch (Exception error) { error(error); }
+    }
+
+    private void fixtureDate(JSONObject fixture) {
+        ZonedDateTime date = local(fixture.optString("utcDate"));
+        if (date != null) dayHeader(date.format(DAY));
+    }
+
+    private void refreshHomeCard() {
+        if (!browsing()) return;
+        try {
+            if (prefs.getBoolean("demo_mode", true)) showOfflineFixtures(true);
+            else renderFixtures(localFixtures(LocalDate.now(), LocalDate.now()), true);
+        } catch (Exception error) { error(error); }
+        selectBrowsePage();
+    }
+
+    private final Map<String, Long> clubFetched = new HashMap<>();
+    private final Set<String> clubsFetching = new HashSet<>();
+
+    private void refreshClubFixtures() {
+        if (!hasServer() || prefs.getBoolean("demo_mode", true)) return;
+        String base = prefs.getString("url", "");
+        for (String club : prefs.getStringSet("follow_teams", Collections.emptySet())) {
+            String key = base + "/" + club;
+            if (clubsFetching.contains(key) || System.currentTimeMillis() - clubFetched.getOrDefault(key, 0L) < 300_000) continue;
+            clubsFetching.add(key);
+            worker.execute(() -> {
+                boolean success = false;
+                try {
+                    LocalDate today = LocalDate.now();
+                    String path = "/v1/football/teams/" + club + "/matches?dateFrom=" + today
+                        + "&dateTo=" + today.plusYears(1) + "&limit=100";
+                    store.download(path, get(base, path));
+                    success = true;
+                } catch (Exception unavailable) { /* Previously downloaded fixtures remain usable. */ }
+                boolean fetched = success;
+                runOnUiThread(() -> {
+                    clubsFetching.remove(key);
+                    if (fetched) clubFetched.put(key, System.currentTimeMillis());
+                    refreshHomeCard();
+                });
+            });
+        }
+    }
+
+    private void favoriteAppearance(ImageButton star, String id, String title) {
+        boolean selected = prefs.getStringSet("follow_matches", Collections.emptySet()).contains(id);
+        star.setImageResource(selected ? R.drawable.ic_star_filled : R.drawable.ic_star);
+        star.setImageTintList(ColorStateList.valueOf(selected ? ACCENT : MUTED));
+        star.setSelected(selected);
+        star.setContentDescription((selected ? "Ne plus suivre " : "Suivre ") + title);
+    }
+
+    private void toggleFavorite(JSONObject fixture, ImageButton star, String title) {
+        String id = fixture.optString("id");
+        boolean selected = !prefs.getStringSet("follow_matches", Collections.emptySet()).contains(id);
+        saveChoice("follow_matches", id, selected);
+        favoriteAppearance(star, id, title);
+        refreshHomeCard();
+        if (selected && hasServer()) worker.execute(() -> {
+            try { get("/v1/football/matches/" + id); }
+            catch (Exception unavailable) { /* The calendar entry already supports offline notes. */ }
+        });
+    }
+
     private void calendarShellOnly() {
-        // Async refresh keeps the selected seven-day window on screen; cards simply replace loading.
-        while (root.getChildCount() > 2) root.removeViewAt(2);
+        // The fixed header lives outside this list and survives every refresh.
+        root.removeAllViews();
     }
 
     private boolean follows(JSONObject fixture) {
@@ -641,7 +1136,7 @@ public class MainActivity extends Activity {
                 awayName = teams.optJSONObject(1).optString("name");
             }
             subtitle = fixture.optString("stage") + " · " + fixture.optString("competition");
-            state = "DÉMO";
+            state = fixture.optString("demo_status", "DÉMO");
         } else {
             JSONObject home = fixture.optJSONObject("homeTeam"), away = fixture.optJSONObject("awayTeam");
             JSONObject competition = fixture.optJSONObject("competition");
@@ -656,7 +1151,7 @@ public class MainActivity extends Activity {
         card.setPadding(dp(14), dp(12), dp(12), dp(12));
         card.setBackground(tappable(rounded(SURFACE, 16)));
         card.setClickable(true); card.setFocusable(true);
-        card.setOnClickListener(v -> { if (demo) { match = demoMatch; openMatch(); } else openRemoteMatch(fixture); });
+        card.setOnClickListener(v -> { if (demo) { match = fixture; openMatch(); } else openRemoteMatch(fixture); });
         card.setContentDescription(homeName + " contre " + awayName + ", " + subtitle
             + ", " + (state != null ? state : kickoff == null ? "horaire inconnu"
                 : "à " + kickoff.format(HOUR)) + ", ouvrir la feuille de notes");
@@ -683,18 +1178,27 @@ public class MainActivity extends Activity {
         // A match under way or over carries its score; one still to come has nothing to say yet.
         JSONObject score = state == null || demo ? null : fixture.optJSONObject("score");
         JSONObject goals = score == null ? null : score.optJSONObject("fullTime");
-        sides.addView(side(homeName, goals == null ? "" : goals.optString("home", "")));
-        sides.addView(side(awayName, goals == null ? "" : goals.optString("away", "")));
+        sides.addView(side(homeName, demo ? fixture.optString("demo_score_home", "") : goals == null ? "" : goals.optString("home", "")));
+        sides.addView(side(awayName, demo ? fixture.optString("demo_score_away", "") : goals == null ? "" : goals.optString("away", "")));
         TextView note = new TextView(this); note.setText(subtitle);
         note.setTextSize(12); note.setTextColor(MUTED); note.setPadding(0, dp(3), 0, 0);
         note.setMaxLines(1); note.setEllipsize(TextUtils.TruncateAt.END);
         sides.addView(note);
         card.addView(sides, new LinearLayout.LayoutParams(0, -2, 1));
 
-        ImageView chevron = new ImageView(this);
-        chevron.setImageResource(R.drawable.ic_chevron_right);
-        chevron.setImageTintList(ColorStateList.valueOf(MUTED));
-        card.addView(chevron, new LinearLayout.LayoutParams(dp(16), dp(16)));
+        if (!demo) {
+            String title = homeName + " contre " + awayName;
+            ImageButton star = barAction(R.drawable.ic_star, "Suivre " + title, () -> {});
+            star.setTag(fixture);
+            favoriteAppearance(star, fixture.optString("id"), title);
+            star.setOnClickListener(v -> toggleFavorite(fixture, star, title));
+            card.addView(star, barSize(0));
+        } else {
+            ImageView chevron = new ImageView(this);
+            chevron.setImageResource(R.drawable.ic_chevron_right);
+            chevron.setImageTintList(ColorStateList.valueOf(MUTED));
+            card.addView(chevron, new LinearLayout.LayoutParams(dp(16), dp(16)));
+        }
 
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
         p.bottomMargin = dp(10); root.addView(card, p);
@@ -748,13 +1252,22 @@ public class MainActivity extends Activity {
     }
 
     private void openRemoteMatch(JSONObject fixture) {
-        String id = String.valueOf(fixture.optInt("id")); toast("Chargement de la composition…");
+        String path = "/v1/football/matches/" + fixture.optInt("id");
+        try {
+            String cached = store.downloaded(path);
+            // A calendar entry is already enough for general notes, even before a lineup was fetched.
+            match = convertMatch(cached == null ? fixture : new JSONObject(cached));
+            openMatch();
+            toast("Copie enregistrée · actualisation si possible");
+        } catch (Exception error) { error(error); return; }
+        if (!hasServer()) return;
         worker.execute(() -> {
             try {
-                JSONObject detail = new JSONObject(get("/v1/football/matches/" + id));
-                JSONObject converted = convertMatch(detail);
-                runOnUiThread(() -> { match = converted; openMatch(); });
-            } catch (Exception error) { runOnUiThread(() -> remoteError(error)); }
+                JSONObject converted = convertMatch(new JSONObject(get(path)));
+                runOnUiThread(() -> absorb(converted));
+            } catch (Exception unavailable) {
+                // Keep the local match and the note being written intact.
+            }
         });
     }
 
@@ -780,8 +1293,8 @@ public class MainActivity extends Activity {
             .put("end_minute", source.optJSONObject("clock") == null ? 0
                 : source.optJSONObject("clock").optInt("end_minute"));
         JSONArray teams = new JSONArray();
-        teams.put(team("home", home.optString("name"), home.optString("formation", "Composition"), colour(home, "#7D9CD9")));
-        teams.put(team("away", away.optString("name"), away.optString("formation", "Composition"), colour(away, "#F6DADB")));
+        teams.put(team("home", home, colour(home, "#7D9CD9")));
+        teams.put(team("away", away, colour(away, "#F6DADB")));
         JSONArray players = new JSONArray();
         addLineup(players, homeLineup, "home", home.optString("formation"));
         addLineup(players, awayLineup, "away", away.optString("formation"));
@@ -811,7 +1324,9 @@ public class MainActivity extends Activity {
      */
     private long kickoff(JSONObject source) throws Exception {
         long published = mark(source, "kickoff");
-        return published != 0 ? published : Instant.parse(source.getString("utcDate")).toEpochMilli();
+        if (published != 0) return published;
+        String date = source.optString("utcDate");
+        return date.isEmpty() ? System.currentTimeMillis() : java.time.OffsetDateTime.parse(date).toInstant().toEpochMilli();
     }
 
     /** One published mark of the run of play, in epoch milliseconds. Zero until it happens. */
@@ -844,8 +1359,35 @@ public class MainActivity extends Activity {
         return value.matches("#[0-9A-Fa-f]{6}") ? value : fallback;
     }
 
-    private JSONObject team(String key, String name, String formation, String colour) throws Exception {
-        return new JSONObject().put("key", key).put("name", name).put("formation", formation).put("colour", colour);
+    private JSONObject team(String key, JSONObject source, String colour) throws Exception {
+        JSONObject converted = new JSONObject().put("key", key).put("name", source.optString("name"))
+            .put("formation", source.optString("formation", "Composition")).put("colour", colour);
+        String trigram = trigram(source), badge = badge(source);
+        if (!trigram.isEmpty()) converted.put("tla", trigram);
+        if (!badge.isEmpty()) converted.put("logo", badge);
+        return converted;
+    }
+
+    /**
+     * Three letters for a club, ESPN's first. Both providers publish one and they disagree —
+     * ESPN writes TRY for Troyes where football-data writes ETR, and its RC for Strasbourg comes
+     * with the space that pads a two-letter word into a three-letter field. ESPN's read better,
+     * football-data's is there for a competition ESPN does not cover.
+     */
+    private static String trigram(JSONObject team) {
+        String espn = team.optString("abbreviation").trim();
+        return espn.isEmpty() ? team.optString("tla").trim() : espn;
+    }
+
+    /**
+     * The badge, if it is one we can draw. football-data serves a good half of its crests as
+     * SVG, which {@link BitmapFactory} does not read and which would arrive as a blank square.
+     */
+    private static String badge(JSONObject team) {
+        String espn = team.optString("logo");
+        if (!espn.isEmpty()) return espn;
+        String crest = team.optString("crest");
+        return crest.toLowerCase(Locale.ROOT).endsWith(".png") ? crest : "";
     }
 
     /** Each player stands where his published position says, not where the sheet lists him. */
@@ -924,11 +1466,15 @@ public class MainActivity extends Activity {
     }
 
     private boolean hasServer() {
-        return !prefs.getString("url", "http://10.0.2.2:8080").isEmpty();
+        // No URL saved means deliberate local/demo mode. The old emulator default (10.0.2.2)
+        // made a phone wait for a server that could never exist on that device.
+        return prefs.contains("url") && !prefs.getString("url", "").trim().isEmpty();
     }
 
     private String get(String path) throws Exception {
-        return get(prefs.getString("url", "http://10.0.2.2:8080"), path);
+        String data = get(prefs.getString("url", "http://10.0.2.2:8080"), path);
+        if (path.startsWith("/v1/football/")) return store.download(path, data);
+        return data;
     }
 
     private String get(String base, String path) throws Exception {
@@ -946,6 +1492,103 @@ public class MainActivity extends Activity {
         if (code < 200 || code >= 300) throw new java.io.IOException("Réponse HTTP " + code);
         return response;
         } finally { connection.disconnect(); }
+    }
+
+    /** Decoded badges for the current session; downloaded images also live on disk. */
+    private final Map<String, Bitmap> badges = new HashMap<>();
+    private final Set<String> fetching = new HashSet<>();
+
+    /**
+     * The club's badge on its button, as soon as it has arrived. A note opens long before an
+     * image lands, so the button is drawn with its three letters and the badge joins them; the
+     * next time it is drawn the badge is already here and the button is whole at once. A failure
+     * is silent — three letters name the club perfectly well without it.
+     */
+    private void wearCrest(Button button, String url) {
+        if (url.isEmpty()) return;
+        Bitmap known = badges.get(url);
+        if (known != null) { wear(button, known); return; }
+        if (!fetching.add(url)) return;
+        worker.execute(() -> {
+            Bitmap loaded = crest(url);
+            runOnUiThread(() -> {
+                fetching.remove(url);
+                if (loaded == null) return;
+                // A session opens a handful of matches, not a thousand; the cap is there so a
+                // very long one cannot grow this without bound.
+                if (badges.size() >= 24) badges.clear();
+                badges.put(url, loaded);
+                wear(button, loaded);
+            });
+        });
+    }
+
+    private void wear(Button button, Bitmap badge) {
+        Drawable drawable = new BitmapDrawable(getResources(), badge);
+        drawable.setBounds(0, 0, dp(18), dp(18));
+        button.setCompoundDrawablesRelative(drawable, null, null, null);
+        button.setCompoundDrawablePadding(dp(5));
+    }
+
+    /** A badge, decoded no larger than the button draws it: the provider serves 500 by 500. */
+    private Bitmap crest(String url) {
+        try {
+            if (url.startsWith("asset://")) {
+                String path = url.substring("asset://".length());
+                try (java.io.InputStream input = getAssets().open(path)) {
+                    return BitmapFactory.decodeStream(input);
+                }
+            }
+            java.io.File folder = new java.io.File(getFilesDir(), "badges");
+            if (!folder.isDirectory() && !folder.mkdirs()) return null;
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(url.getBytes(StandardCharsets.UTF_8));
+            StringBuilder name = new StringBuilder();
+            for (byte value : digest) name.append(String.format(Locale.ROOT, "%02x", value & 255));
+            java.io.File saved = new java.io.File(folder, name + ".png");
+            if (saved.isFile()) {
+                Bitmap cached = BitmapFactory.decodeFile(saved.getAbsolutePath());
+                if (cached != null) return cached;
+            }
+            URL endpoint = new URL(url);
+            if (!endpoint.getProtocol().equals("http") && !endpoint.getProtocol().equals("https"))
+                return null;
+            HttpURLConnection connection = (HttpURLConnection)endpoint.openConnection();
+            try {
+                connection.setConnectTimeout(5000); connection.setReadTimeout(15000);
+                if (connection.getResponseCode() != 200) return null;
+                byte[] raw;
+                try (java.io.InputStream input = connection.getInputStream()) {
+                    raw = readBytes(input, 1 << 20);
+                }
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inJustDecodeBounds = true;
+                BitmapFactory.decodeByteArray(raw, 0, raw.length, options);
+                options.inSampleSize = Math.max(1, options.outHeight / Math.max(1, dp(18)));
+                options.inJustDecodeBounds = false;
+                Bitmap bitmap = BitmapFactory.decodeByteArray(raw, 0, raw.length, options);
+                if (bitmap != null) {
+                    android.util.AtomicFile file = new android.util.AtomicFile(saved);
+                    java.io.FileOutputStream out = null;
+                    try {
+                        out = file.startWrite();
+                        if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new java.io.IOException("Image invalide");
+                        file.finishWrite(out);
+                    } catch (java.io.IOException failure) { if (out != null) file.failWrite(out); }
+                }
+                return bitmap;
+            } finally { connection.disconnect(); }
+        } catch (Exception error) {
+            return null;
+        }
+    }
+
+    /** Read up to a limit rather than whatever arrives: an image is not a stream we control. */
+    private static byte[] readBytes(java.io.InputStream input, int limit) throws java.io.IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int count;
+        while (bytes.size() < limit && (count = input.read(buffer)) != -1) bytes.write(buffer, 0, count);
+        return bytes.toByteArray();
     }
 
     private void remoteError(Exception error) {
@@ -1229,11 +1872,8 @@ public class MainActivity extends Activity {
     }
 
     private int sideColour(String side) {
-        JSONArray teams = match.optJSONArray("teams");
-        for (int i = 0; teams != null && i < teams.length(); i++)
-            if (teams.optJSONObject(i).optString("key").equals(side))
-                return Color.parseColor(teams.optJSONObject(i).optString("colour"));
-        return Color.WHITE;
+        JSONObject team = sideTeam(side);
+        return team == null ? Color.WHITE : Color.parseColor(team.optString("colour"));
     }
 
     // ——— Composition d'une note ———
@@ -1333,6 +1973,7 @@ public class MainActivity extends Activity {
     }
     private void closeNote() {
         noteId = ""; entries.clear(); focus = ""; draft = ""; draftWritten = ""; written = false;
+        tacticTime = 0;
         diagram = null; entriesWritten = ""; diagramWritten = "";
         renderComposer();
     }
@@ -1619,6 +2260,7 @@ public class MainActivity extends Activity {
     }
 
     private void showTactic() {
+        stopTactic();
         screen = "tactic";
         getWindow().setStatusBarColor(BACKGROUND); getWindow().setNavigationBarColor(BACKGROUND);
         LinearLayout page = frame(); page.setPadding(dp(12), dp(10), dp(12), dp(12));
@@ -1630,12 +2272,20 @@ public class MainActivity extends Activity {
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         heading.setPadding(dp(10), dp(8), 0, dp(8));
         bar.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        tacticUndo = button("↶", this::undoTactic);
+        tacticUndo.setTextSize(17);
+        tacticUndo.setContentDescription("Annuler le dernier geste sur le tableau");
+        bar.addView(tacticUndo, new LinearLayout.LayoutParams(dp(48), dp(44)));
         tacticMinute = button(noteMinute + "′", this::editNoteMinute);
         tacticMinute.setTextSize(15); tacticMinute.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         tacticMinute.setContentDescription("Minute de la note, toucher pour corriger");
-        bar.addView(tacticMinute, new LinearLayout.LayoutParams(dp(58), dp(44)));
+        LinearLayout.LayoutParams minuteSize = new LinearLayout.LayoutParams(dp(58), dp(44));
+        minuteSize.leftMargin = dp(6);
+        bar.addView(tacticMinute, minuteSize);
         board = new BoardView(this, match, glassMarkers(), true, false);
         board.setDiagram(diagram);
+        board.setTime(tacticTime);
+        board.setTravel(prefs.getInt("travel", BoardView.AUTO));
         // Selecting is only ever a change of what the panel offers; the note itself is untouched.
         board.watch(index -> renderTactic(), this::boardChanged);
         LinearLayout.LayoutParams boardSize = new LinearLayout.LayoutParams(-1, 0, 1);
@@ -1643,36 +2293,70 @@ public class MainActivity extends Activity {
         page.addView(board, boardSize);
         tacticPanel = new LinearLayout(this); tacticPanel.setOrientation(LinearLayout.VERTICAL);
         page.addView(tacticPanel, new LinearLayout.LayoutParams(-1, -2));
+        // A note opens on its own history: the board as it arrives is the floor ↶ stops at.
+        undoable.clear(); drawnBefore = drawnJson();
         renderTactic();
     }
 
-    /** What the six tools mean, said in full for the reader and for anyone listening to it. */
-    private static final String[][] TOOLS = {
-        {"↔", "Déplacer", "Déplacer les joueurs sur le terrain"},
-        {Diagram.PASS, "→", "Passe", "Tracer une passe : trait plein, ballon au départ"},
-        {Diagram.RUN, "⇢", "Course", "Tracer une course sans ballon : trait pointillé"},
-        {Diagram.CARRY, "↝", "Conduite", "Tracer une conduite de balle : trait ondulé"},
-        {Diagram.SHOT, "⇒", "Tir", "Tracer un tir : trait double"},
-        {"⌫", "Gomme", "Effacer un joueur ou un tracé d’un toucher"}};
+    /**
+     * What the five tools mean, said in full for the reader and for anyone listening to it. Each
+     * carries a vector of our own rather than a font glyph: an arrow and an emoji are drawn by
+     * whichever fonts the system has, at whichever size and — for the ball — in whichever colours,
+     * so five cells side by side never quite lined up. Drawn here, they share a graisse, a size
+     * and a centre.
+     */
+    private static final class Tool {
+        /** A vector of ours, or 0 when the mark is a glyph the system draws better than we would. */
+        final int icon, mode;
+        /** The stroke a drawing tool lays down, or "" for the ball and the eraser. */
+        final String glyph, kind, name, described;
+        Tool(int icon, int mode, String kind, String name, String described) {
+            this(icon, "", mode, kind, name, described);
+        }
+        Tool(String glyph, int mode, String kind, String name, String described) {
+            this(0, glyph, mode, kind, name, described);
+        }
+        private Tool(int icon, String glyph, int mode, String kind, String name, String described) {
+            this.icon = icon; this.glyph = glyph; this.mode = mode;
+            this.kind = kind; this.name = name; this.described = described;
+        }
+    }
+    private static final Tool[] TOOLS = {
+        new Tool(R.drawable.ic_tool_pass, BoardView.DRAW, Diagram.PASS, "Passe",
+            "Tracer une passe : trait plein, ballon au départ"),
+        new Tool(R.drawable.ic_tool_run, BoardView.DRAW, Diagram.RUN, "Course",
+            "Tracer le déplacement d’un joueur : trait pointillé sans ballon, ondulé s’il l’a "
+            + "dans les pieds"),
+        new Tool(R.drawable.ic_tool_shot, BoardView.DRAW, Diagram.SHOT, "Tir",
+            "Tracer un tir : trait double"),
+        new Tool("⚽", BoardView.BALL, "", "Ballon",
+            "Placer le ballon ou le donner à un joueur à cet instant"),
+        new Tool(R.drawable.ic_eraser, BoardView.ERASE, "", "Gomme",
+            "Effacer un joueur ou un tracé d’un toucher")};
 
     private void renderTactic() {
+        stopTactic();
+        if (tacticUndo != null) {
+            tacticUndo.setEnabled(!undoable.isEmpty());
+            tacticUndo.setAlpha(undoable.isEmpty() ? .35f : 1f);
+        }
         tacticPanel.removeAllViews();
+        tacticTimeline();
         tacticMinute.setText(noteMinute + "′");
         HorizontalScrollView tools = sideways();
         LinearLayout toolRow = strip(); tools.addView(toolRow);
-        for (String[] entry : TOOLS) {
-            boolean drawing = entry.length == 4;
-            String kind = drawing ? entry[0] : "";
-            boolean chosen = drawing
-                ? board.tool() == BoardView.DRAW && kind.equals(board.stroke())
-                : "⌫".equals(entry[0]) ? board.tool() == BoardView.ERASE : board.tool() == BoardView.MOVE;
-            Runnable pick = drawing ? () -> { board.setStroke(kind); renderTactic(); }
-                : "⌫".equals(entry[0]) ? () -> { board.setTool(BoardView.ERASE); renderTactic(); }
-                : () -> { board.setTool(BoardView.MOVE); renderTactic(); };
+        for (Tool entry : TOOLS) {
+            boolean chosen = board.tool() == entry.mode
+                && (entry.kind.isEmpty() || entry.kind.equals(board.stroke()));
+            Runnable pick = () -> {
+                if (chosen) board.setTool(BoardView.MOVE);
+                else if (!entry.kind.isEmpty()) board.setStroke(entry.kind);
+                else board.setTool(entry.mode);
+                renderTactic();
+            };
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(62), dp(48));
             p.rightMargin = dp(5);
-            toolRow.addView(tool(entry[drawing ? 1 : 0], entry[drawing ? 2 : 1],
-                entry[drawing ? 3 : 2], chosen, pick), p);
+            toolRow.addView(tool(entry, chosen, pick), p);
         }
         tacticPanel.addView(tools, new LinearLayout.LayoutParams(-1, dp(48)));
 
@@ -1681,8 +2365,21 @@ public class MainActivity extends Activity {
         second.addView(wide(full ? "Vider le terrain" : "Remplir le terrain",
             full ? "Retirer tous les joueurs du terrain"
                  : "Placer les 22 joueurs à leur poste, à déplacer ensuite", this::flipBoard));
-        second.addView(wide("+ Joueur", "Ajouter un joueur sur le terrain", this::addToken));
-        second.addView(wide("↶ Tracé", "Effacer le dernier tracé", this::undoStroke));
+        for (String side : new String[]{"home", "away"}) {
+            // Three letters and a badge, where the club's name never fitted: a quarter of this
+            // row is some sixty dp, which « Paris Saint-Germain » leaves as « Paris Sain… ».
+            // No « + » before them: the crest and the club's colour say whose button this is,
+            // and what it does is said in full to whoever asks the screen.
+            JSONObject team = sideTeam(side);
+            String trigram = team == null ? "" : team.optString("tla");
+            Button add = wide(trigram.isEmpty() ? teamName(side) : trigram,
+                "Ajouter un joueur ou un pion — " + teamName(side), () -> addToken(side));
+            add.setMaxLines(1); add.setEllipsize(TextUtils.TruncateAt.END);
+            add.setTextColor(sideColour(side));
+            wearCrest(add, team == null ? "" : team.optString("logo"));
+            second.addView(add);
+        }
+        second.addView(wide("◆ Positions", "Voir, ajouter ou supprimer les positions clés de la piste sélectionnée", this::tacticKeys));
         LinearLayout.LayoutParams secondSize = new LinearLayout.LayoutParams(-1, dp(42));
         secondSize.topMargin = dp(6); tacticPanel.addView(second, secondSize);
 
@@ -1719,14 +2416,270 @@ public class MainActivity extends Activity {
         footerSize.topMargin = dp(6); tacticPanel.addView(footer, footerSize);
     }
 
+    private String seconds(int time) { return String.format(Locale.FRANCE, "%.1f s", time / 10.0); }
+
+    private void tacticTimeline() {
+        LinearLayout row = strip();
+        Button play = button("▶", () -> {});
+        play.setContentDescription("Lire ou mettre en pause la séquence");
+        row.addView(play, new LinearLayout.LayoutParams(dp(48), dp(40)));
+        // Le temps se lit à côté du bouton, pas contre lui, et dans la lettre des boutons : un
+        // TextView nu porte la romaine du système en 14, quand un Button porte la demi-grasse en
+        // 13 — deux polices dans la même rangée pour un texte qui, lui aussi, répond au doigt.
+        TextView label = new TextView(this); label.setTextColor(INK); label.setText(seconds(board.time()));
+        label.setTextSize(13); label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        label.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        label.setPadding(dp(6), 0, dp(6), 0);
+        label.setBackground(tappable(rounded(Color.TRANSPARENT, 10)));
+        label.setContentDescription("Temps actuel, toucher pour saisir un instant précis");
+        label.setOnClickListener(v -> tacticTimeInput("Aller à", board.time(), at -> {
+            board.setTime(at); renderTactic();
+        }));
+        LinearLayout.LayoutParams clockSize = new LinearLayout.LayoutParams(dp(66), dp(40));
+        clockSize.leftMargin = dp(6);
+        row.addView(label, clockSize);
+        SeekBar seek = new SeekBar(this) {
+            private final android.graphics.Paint marks = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            private Track heldTrack;
+            private Track.Key heldKey;
+            private float touchX, touchY;
+            private boolean markerGesture, moved, deleted;
+            private Runnable deleteKey;
+
+            private Track selectedTrack() {
+                int selected = board.selected();
+                return board.tool() == BoardView.BALL ? diagram.ball
+                    : selected >= 0 ? diagram.tokens.get(selected).track : null;
+            }
+            /**
+             * The bar is drawn rather than dressed: a rectangle the width of the row, filled up
+             * to the playhead, with the sequence's key positions as rectangles standing in it
+             * and the playhead as one taller rectangle across it. The platform's own groove and
+             * round thumb are set aside — a slider from a settings screen, and one this row
+             * could never line its buttons up with, its track sitting where the drawable's
+             * padding put it rather than where the eye wants it.
+             */
+            private final int GROOVE = CHIP, PLAYED = Color.rgb(63, 89, 80);
+            private float middle() { return getHeight() / 2f; }
+            private float span() { return dp(6); }
+            private float trackLeft() { return getPaddingLeft(); }
+            private float trackRight() { return getWidth() - getPaddingRight(); }
+            /** Where an instant stands on the bar, never so near the end that its mark is cut. */
+            private float mark(int time) {
+                float left = trackLeft(), right = trackRight();
+                float at = left + (right - left) * time / (float)getMax();
+                return Math.max(left + dp(3), Math.min(right - dp(3), at));
+            }
+            private float keyX(Track.Key key) { return mark(key.time); }
+            /** The instant a finger is pointing at, for a drag the bar took over from a marker. */
+            private int timeAt(float x) {
+                float width = trackRight() - trackLeft();
+                if (width <= 0) return 0;
+                return Math.max(0, Math.min(getMax(),
+                    Math.round((x - trackLeft()) / width * getMax())));
+            }
+            private void cancelDelete() {
+                if (deleteKey != null) removeCallbacks(deleteKey);
+                deleteKey = null;
+            }
+            @Override protected void onDetachedFromWindow() {
+                cancelDelete(); super.onDetachedFromWindow();
+            }
+            @Override public boolean performClick() {
+                super.performClick(); return true;
+            }
+            @Override public boolean onTouchEvent(MotionEvent event) {
+                int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    cancelDelete(); heldTrack = selectedTrack(); heldKey = null;
+                    // Tighter than when the markers stood in a strip of their own: they share
+                    // the bar with the scrub now, and everything not on one of them is a seek.
+                    float nearest = dp(9);
+                    if (heldTrack != null && Math.abs(event.getY() - middle()) <= dp(14)) {
+                        for (Track.Key key : heldTrack.keys) {
+                            float distance = Math.abs(event.getX() - keyX(key));
+                            if (distance < nearest) { nearest = distance; heldKey = key; }
+                        }
+                    }
+                    markerGesture = heldKey != null; moved = false; deleted = false;
+                    if (markerGesture) {
+                        stopTactic(); play.setText("▶");
+                        touchX = event.getX(); touchY = event.getY();
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                        deleteKey = () -> {
+                            deleteKey = null;
+                            if (heldTrack != selectedTrack() || !heldTrack.keys.remove(heldKey)) return;
+                            deleted = true;
+                            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                            toast("Position à " + seconds(heldKey.time) + " supprimée");
+                            boardChanged();
+                        };
+                        postDelayed(deleteKey, android.view.ViewConfiguration.getLongPressTimeout());
+                        return true;
+                    }
+                }
+                if (!markerGesture) return super.onTouchEvent(event);
+                if (action == MotionEvent.ACTION_MOVE) {
+                    if (Math.hypot(event.getX()-touchX, event.getY()-touchY)
+                            > android.view.ViewConfiguration.get(getContext()).getScaledTouchSlop()) {
+                        moved = true; cancelDelete();
+                    }
+                    // A drag that began on a marker was a scrub after all: the bar takes it back
+                    // rather than swallowing the gesture until the finger is lifted.
+                    if (moved && !deleted) setProgress(timeAt(event.getX()));
+                } else if (action == MotionEvent.ACTION_POINTER_DOWN || action == MotionEvent.ACTION_CANCEL) {
+                    moved = true; cancelDelete();
+                } else if (action == MotionEvent.ACTION_UP) {
+                    cancelDelete(); markerGesture = false;
+                    if (!deleted && !moved) { setProgress(heldKey.time); performClick(); }
+                    if (!deleted) renderTactic();
+                }
+                return true;
+            }
+            @Override protected void onDraw(android.graphics.Canvas canvas) {
+                float middle = middle(), span = span();
+                float left = trackLeft(), right = trackRight(), head = mark(getProgress());
+                marks.setColor(GROOVE);
+                canvas.drawRect(left, middle - span, right, middle + span, marks);
+                marks.setColor(PLAYED);
+                canvas.drawRect(left, middle - span, head, middle + span, marks);
+                Track track = selectedTrack();
+                if (track != null) {
+                    marks.setColor(ACCENT);
+                    for (Track.Key key : track.keys)
+                        canvas.drawRect(keyX(key) - dp(2), middle - span, keyX(key) + dp(2), middle + span, marks);
+                }
+                // Taller than the bar and paler than a key: the playhead crosses what it passes.
+                marks.setColor(INK);
+                float thick = dp(5) / 2f;
+                canvas.drawRect(head - thick, middle - span - dp(4), head + thick, middle + span + dp(4), marks);
+            }
+        };
+        // Nothing of the platform's slider is kept but its arithmetic: the bar is painted in
+        // onDraw, on the middle of a view as tall as the row, so it lines up with the buttons
+        // on either side of it instead of floating above them.
+        seek.setThumb(null); seek.setProgressDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+        seek.setSplitTrack(false);
+        seek.setPadding(dp(4), 0, dp(4), 0);
+        seek.setMax(Math.min(Track.END, Math.max(diagram.duration() + 50, board.time())));
+        seek.setProgress(board.time()); seek.setContentDescription("Temps dans la séquence. Touchez un repère pour rejoindre sa position ; appui long pour la supprimer");
+        row.addView(seek, new LinearLayout.LayoutParams(0, dp(56), 1));
+        boolean automatic = board.travel() == BoardView.AUTO;
+        Button duration = button("↝ " + (automatic ? "auto" : seconds(board.travel())), () -> {
+            String[] values = {"Auto — d’après la longueur", "0,5 s", "1 s", "2 s", "3 s", "5 s", "10 s"};
+            int[] times = {BoardView.AUTO, 5, 10, 20, 30, 50, 100};
+            new AlertDialog.Builder(this).setTitle("Durée du prochain trajet")
+                .setItems(values, (d, which) -> {
+                    board.setTravel(times[which]);
+                    prefs.edit().putInt("travel", times[which]).apply();
+                    renderTactic();
+                }).show();
+        });
+        duration.setTextSize(11);
+        duration.setContentDescription("Durée du prochain trajet, " + (automatic
+            ? "automatique d’après la longueur du trait" : seconds(board.travel())));
+        row.addView(duration, new LinearLayout.LayoutParams(dp(84), dp(40)));
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar view, int value, boolean user) {
+                board.setTime(value); label.setText(seconds(value));
+            }
+            public void onStartTrackingTouch(SeekBar view) { stopTactic(); play.setText("▶"); }
+            public void onStopTrackingTouch(SeekBar view) { renderTactic(); }
+        });
+        play.setOnClickListener(v -> {
+            if (tacticPlaying) { stopTactic(); play.setText("▶"); return; }
+            if (board.time() >= diagram.duration()) seek.setProgress(0);
+            tacticPlaying = true; play.setText("Ⅱ");
+            long started = android.os.SystemClock.uptimeMillis();
+            int from = board.time();
+            tacticTick = () -> {
+                if (!tacticPlaying || !board.isAttachedToWindow()) { stopTactic(); return; }
+                int at = Math.min(diagram.duration(), from + (int)((android.os.SystemClock.uptimeMillis()-started)/100));
+                seek.setProgress(at);
+                if (at >= diagram.duration()) { stopTactic(); play.setText("▶"); }
+                else tacticClock.postDelayed(tacticTick, 40);
+            };
+            tacticClock.post(tacticTick);
+        });
+        // Editing during playback freezes the playhead before the gesture changes the model.
+        board.setOnTouchListener((v, event) -> { stopTactic(); play.setText("▶"); return false; });
+        tacticPanel.addView(row, new LinearLayout.LayoutParams(-1, dp(56)));
+    }
+
+    private void tacticTimeInput(String title, int time, java.util.function.IntConsumer accept) {
+        stopTactic();
+        EditText field = new EditText(this);
+        field.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        field.setText(String.format(Locale.US, "%.1f", time / 10.0)); field.selectAll();
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title + " (secondes)")
+            .setView(field).setNegativeButton("Annuler", null).setPositiveButton("Valider", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            try {
+                double value = Double.parseDouble(field.getText().toString().replace(',', '.'));
+                if (!Double.isFinite(value) || value < 0 || value > Track.END / 10.0) throw new NumberFormatException();
+                accept.accept((int)Math.round(value * 10)); dialog.dismiss();
+            } catch (NumberFormatException e) { field.setError("Saisissez un temps entre 0 et 120 secondes"); }
+        }));
+        dialog.show();
+    }
+
+    private void tacticKeys() {
+        stopTactic();
+        int selected = board.selected();
+        boolean ball = board.tool() == BoardView.BALL;
+        if (!ball && selected < 0) {
+            if (!diagram.shapes.isEmpty()) {
+                new AlertDialog.Builder(this).setItems(new String[]{"Effacer le dernier ancien tracé"},
+                    (d, w) -> undoStroke()).show();
+            } else toast("Sélectionnez un joueur ou l’outil Ballon");
+            return;
+        }
+        Diagram.Token token = ball ? null : diagram.tokens.get(selected);
+        Track track = ball ? diagram.ball : token.track;
+        List<String> labels = new ArrayList<>();
+        labels.add("Ajouter / fixer la position à " + seconds(board.time()));
+        Track.Key current = track.at(board.time());
+        if (current != null) {
+            labels.add("Supprimer la position à " + seconds(board.time()));
+            labels.add("Changer le temps de cette position…");
+        }
+        int offset = labels.size();
+        for (Track.Key key : track.keys) labels.add("◆ " + seconds(key.time));
+        new AlertDialog.Builder(this).setTitle(ball ? "Positions du ballon" : "Positions du joueur")
+            .setItems(labels.toArray(new String[0]), (d, which) -> {
+                if (which >= offset) { board.setTime(track.keys.get(which-offset).time); renderTactic(); return; }
+                if (which == 2) {
+                    tacticTimeInput("Déplacer la position vers", current.time, at -> {
+                        if (track.at(at) != null && track.at(at) != current) { toast("Une position existe déjà à cet instant"); return; }
+                        track.keys.remove(current); current.time = at; track.put(current);
+                        board.setTime(at); boardChanged();
+                    }); return;
+                }
+                if (which == 1) track.keys.remove(current);
+                else if (current == null) {
+                    double[] p = ball ? diagram.ballPosition(board.time()) : diagram.position(token, board.time());
+                    if (p == null) p = new double[]{.5, .5};
+                    Track.Key key = new Track.Key(board.time(), p[0], p[1]);
+                    if (ball && diagram.ballHeld(board.time())) {
+                        for (Track.Key k : track.keys) if (k.time <= board.time()) key.owner = k.owner;
+                    }
+                    if (!track.put(key)) { toast("Piste pleine"); return; }
+                }
+                boardChanged();
+            }).show();
+    }
+
     /** What the tool in hand is for, said once, where the selection would otherwise be. */
     private void tacticHint() {
         TextView hint = new TextView(this);
         hint.setText(board.tool() == BoardView.ERASE
             ? "Touchez un joueur ou un tracé pour l’effacer"
             : board.tool() == BoardView.DRAW
-            ? "Tracez d’un joueur à l’autre : les deux bouts s’aimantent"
-            : "Encadrez plusieurs joueurs pour les déplacer ensemble");
+            ? (board.travel() == BoardView.AUTO
+                ? "Tracez le trajet : départ au curseur, durée d’après sa longueur"
+                : "Tracez le trajet : départ au curseur, arrivée après la durée choisie")
+            : board.tool() == BoardView.BALL ? "Touchez un joueur pour lui donner le ballon, ou le terrain"
+            : "Placez les joueurs ; utilisez Course pour les faire avancer");
         hint.setTextSize(12); hint.setTextColor(MUTED); hint.setGravity(Gravity.CENTER_VERTICAL);
         hint.setMaxLines(1); hint.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(SELECTION));
@@ -1760,7 +2713,7 @@ public class MainActivity extends Activity {
         p.rightMargin = dp(6); row.addView(loose, p);
         Button remove = button("×", () -> {
             // Descending, so removing one never renumbers those still to be removed.
-            for (int i = held.size() - 1; i >= 0; i--) diagram.tokens.remove((int)held.get(i));
+            for (int i = held.size() - 1; i >= 0; i--) diagram.removeToken(held.get(i));
             board.select(-1); boardChanged();
         });
         remove.setTextSize(17); remove.setMinHeight(0); remove.setTextColor(MUTED);
@@ -1796,7 +2749,7 @@ public class MainActivity extends Activity {
             p.rightMargin = dp(6); row.addView(act, p);
         }
         Button remove = button("×", () -> {
-            diagram.tokens.remove(index); board.select(-1); boardChanged();
+            diagram.removeToken(index); board.select(-1); boardChanged();
         });
         remove.setTextSize(17); remove.setMinHeight(0); remove.setTextColor(MUTED);
         remove.setContentDescription("Retirer ce joueur du schéma");
@@ -1805,20 +2758,66 @@ public class MainActivity extends Activity {
         p.topMargin = dp(6); tacticPanel.addView(row, p);
     }
 
-    /** A tool: its symbol, its name, and whether it holds the next finger. */
-    private Button tool(String glyph, String name, String described, boolean chosen, Runnable go) {
-        Button cell = button("", go);
-        SpannableString text = new SpannableString(glyph + "\n" + name);
-        text.setSpan(new RelativeSizeSpan(1.5f), 0, glyph.length(), 0);
-        cell.setText(text); cell.setTextSize(10); cell.setPadding(0, dp(2), 0, dp(2));
+    /**
+     * A tool: its mark above its name, and whether it holds the next finger. The mark is a 20 dp
+     * vector whose ink is centred on its own square, so the five of them sit at one height and
+     * leave the same air above the word underneath — which a line of text never did, its glyph
+     * hanging from a baseline with the descent of a letter nobody wrote left empty below it.
+     *
+     * <p>The pair is set two dp lower than the middle of the cell. Centred exactly, it looks
+     * high: the name reserves room under its baseline for a jambage none of the five words has,
+     * so the ink stops short of the bottom while the box does not. The eye reads the ink.
+     */
+    private Button tool(Tool entry, boolean chosen, Runnable go) {
+        Button cell = button(entry.name, go);
+        String described = entry.described
+            + (chosen ? ", toucher à nouveau pour désélectionner" : "");
+        cell.setTextSize(10); cell.setPadding(0, dp(6), 0, dp(2));
         cell.setMinHeight(0); cell.setContentDescription(described);
         cell.setOnLongClickListener(v -> { toast(described); return true; });
         cell.setBackground(rounded(chosen ? ACCENT : CHIP, 12));
         cell.setTextColor(chosen ? ON_ACCENT : INK);
+        cell.setCompoundDrawablesRelativeWithIntrinsicBounds(null,
+            mark(entry, chosen ? ON_ACCENT : INK), null, null);
+        cell.setCompoundDrawablePadding(dp(3));
         return cell;
     }
 
-    /** One of the three board actions, sharing the row evenly. */
+    /**
+     * A tool's mark, boxed in the same 20 dp square whatever it is made of. Four of the five are
+     * vectors of ours, tinted like the word below them. The ball is the system's own ⚽: every
+     * football drawn in one weight of line reads as a target or as a wheel, and the one everybody
+     * already has is rounder than anything a pentagon in a circle will do. Boxed here rather than
+     * set in the line of text, it keeps the height and the colours the system gives it while
+     * sitting exactly where the other four sit.
+     */
+    private Drawable mark(Tool entry, int colour) {
+        int side = dp(20);
+        if (entry.icon != 0) {
+            Drawable icon = getDrawable(entry.icon).mutate();
+            icon.setTint(colour);
+            return icon;
+        }
+        Paint pen = new Paint(Paint.ANTI_ALIAS_FLAG);
+        pen.setTextAlign(Paint.Align.CENTER);
+        // Réglé sur l'encre des vecteurs voisins, pas sur la boîte : un emoji remplit son
+        // cadratin alors qu'une flèche laisse de l'air, et à taille égale il écraserait la rangée.
+        pen.setTextSize(side * .78f);
+        return new Drawable() {
+            @Override public int getIntrinsicWidth() { return side; }
+            @Override public int getIntrinsicHeight() { return side; }
+            @Override public void draw(Canvas canvas) {
+                Paint.FontMetrics metrics = pen.getFontMetrics();
+                canvas.drawText(entry.glyph, getBounds().centerX(),
+                    getBounds().centerY() - (metrics.ascent + metrics.descent) / 2, pen);
+            }
+            @Override public void setAlpha(int alpha) { pen.setAlpha(alpha); }
+            @Override public void setColorFilter(ColorFilter filter) { pen.setColorFilter(filter); }
+            @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+        };
+    }
+
+    /** A board action, sharing the row evenly. */
     private Button wide(String text, String described, Runnable action) {
         Button button = button(text, action);
         button.setTextSize(12); button.setMinHeight(0); button.setContentDescription(described);
@@ -1844,22 +2843,30 @@ public class MainActivity extends Activity {
      * almost always starts from the real shape and departs from it, so the drag that follows is a
      * correction rather than a placement from nothing.
      */
-    private void addToken() {
+    private void addToken(String side) {
         if (diagram.tokens.size() >= Diagram.TOKENS) { toast("Le schéma est plein"); return; }
         Map<String,String> standing = standingNow();
         Set<String> already = playersOnBoard();
         List<String> ids = new ArrayList<>(), items = new ArrayList<>();
         JSONArray players = match.optJSONArray("players");
+        List<JSONObject> available = new ArrayList<>();
         for (int i = 0; players != null && i < players.length(); i++) {
-            String id = players.optJSONObject(i).optString("id");
+            JSONObject player = players.optJSONObject(i);
+            if (player == null || !side.equals(player.optString("team"))) continue;
+            String id = player.optString("id");
             if (already.contains(id) || !standing.containsKey(id)) continue;
-            ids.add(id); items.add(playerName(id));
+            available.add(player);
         }
-        // Anyone the match does not name: the opponent whose only role is to have been eliminated.
-        ids.add("#home"); items.add("Pion — " + teamName("home"));
-        ids.add("#away"); items.add("Pion — " + teamName("away"));
-        ids.add("#neutral"); items.add("Pion — sans équipe");
-        new AlertDialog.Builder(this).setTitle("Ajouter au schéma")
+        available.sort(Comparator.comparingInt((JSONObject player) -> {
+            int number = player.optInt("number", 0);
+            return number > 0 ? number : Integer.MAX_VALUE;
+        }).thenComparing(player -> player.optString("name"), String.CASE_INSENSITIVE_ORDER));
+        for (JSONObject player : available) {
+            String id = player.optString("id");
+            ids.add(id); items.add(shortName(id));
+        }
+        ids.add("#" + side); items.add("Pion — " + teamName(side));
+        new AlertDialog.Builder(this).setTitle("Ajouter — " + teamName(side))
             .setItems(items.toArray(new String[0]), (d, which) -> {
                 String id = ids.get(which);
                 if (id.startsWith("#")) diagram.tokens.add(pawn(id.substring(1)));
@@ -1885,11 +2892,11 @@ public class MainActivity extends Activity {
     private void flipBoard() {
         if (Diagram.FULL.equals(diagram.board)) {
             diagram.board = Diagram.BLANK;
-            diagram.tokens.clear();
+            while (!diagram.tokens.isEmpty()) diagram.removeToken(diagram.tokens.size() - 1);
             toast("Terrain vidé · ↶ le rétablit");
         } else {
             diagram.board = Diagram.FULL;
-            diagram.tokens.clear();
+            while (!diagram.tokens.isEmpty()) diagram.removeToken(diagram.tokens.size() - 1);
             for (Map.Entry<String,String> on : standingNow().entrySet()) {
                 if (diagram.tokens.size() >= Diagram.TOKENS) break;
                 double[] spot = spotOf(on.getValue());
@@ -1912,14 +2919,47 @@ public class MainActivity extends Activity {
      * rubbed out takes the action he was given with him.
      */
     private void boardChanged() {
+        remember();
         entries.keySet().retainAll(playersOnBoard());
         board.invalidate();
         if (writeNote()) renderTactic();
     }
 
-    private void leaveTactic() { closeNote(); showMatch(); }
+    /**
+     * One step back, taken after the change rather than before it: every change comes through
+     * here, so what the board looked like a moment ago is simply what it looked like the last
+     * time we passed. A change that leaves the schema identical — a selection, a replay — is not
+     * a step, or ↶ would need pressing twice to undo one stroke.
+     */
+    private void remember() {
+        String now = drawnJson();
+        if (now.equals(drawnBefore)) return;
+        if (undoable.size() >= UNDOABLE) undoable.remove(0);
+        undoable.add(drawnBefore);
+        drawnBefore = now;
+    }
+
+    /** Puts the board back as it was one change ago, and writes that as any other change. */
+    private void undoTactic() {
+        if (undoable.isEmpty()) { toast("Plus rien à annuler"); return; }
+        String previous = undoable.remove(undoable.size() - 1);
+        Diagram restored;
+        try { restored = Diagram.from(new JSONObject(previous)); }
+        catch (Exception failure) { error(failure); return; }
+        stopTactic();
+        diagram = restored;
+        // Not a step of its own: what it puts back is where the next change starts from.
+        drawnBefore = previous;
+        board.setDiagram(diagram);
+        entries.keySet().retainAll(playersOnBoard());
+        board.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        if (writeNote()) renderTactic();
+    }
+
+    private void leaveTactic() { stopTactic(); closeNote(); showMatch(); }
 
     private void discardTactic() {
+        stopTactic();
         try { record(operation("delete", noteId)); toast("Note supprimée"); }
         catch (Exception e) { error(e); return; }
         closeNote(); showMatch();
@@ -2008,13 +3048,78 @@ public class MainActivity extends Activity {
         });
         return result;
     }
+    /**
+     * What a drawing says, in one line. « Schéma » named the thing and told nobody anything about
+     * it: a list of moments is read to find one again, and every drawn moment looked alike.
+     *
+     * <p>The action the sequence ends on, and only that one. Three good passes and a shot are
+     * remembered as the shot, and whatever a schema was drawn around, it was drawn towards its
+     * last move. Everything is weighed on the one clock the schema already keeps, so a run made
+     * after the ball was played has the last word as readily as the ball does; a ball and a
+     * player arriving at the same instant are named by the ball, which is what the eye follows.
+     * Never the whole sequence: a line in a list is not a sequence, and the note itself is one
+     * touch away.
+     */
+    private String schemaSummary(JSONObject schema) {
+        Diagram drawn = Diagram.from(schema);
+        int last = -1;
+        String said = "";
+        Track.Key previous = null;
+        for (Track.Key key : drawn.ball.keys) {
+            // A kind is written on the arrival, the departure being where the ball was until then.
+            if (previous != null && previous.flight && key.time >= last) {
+                last = key.time;
+                String from = who(drawn, previous.owner), to = who(drawn, key.owner);
+                said = Diagram.SHOT.equals(key.kind)
+                    ? (from.isEmpty() ? "Frappe" : "Frappe de " + from)
+                    : !from.isEmpty() && !to.isEmpty() ? from + " passe à " + to
+                    : !from.isEmpty() ? "Passe de " + from
+                    : !to.isEmpty() ? "Ballon pour " + to : "Ballon joué";
+            }
+            previous = key;
+        }
+        // A player's own trips. Whether one is a carry is read off the ball, exactly as the board
+        // reads it to decide between a dashed line and a waved one.
+        for (Diagram.Token token : drawn.tokens) {
+            int since = 0;
+            for (Track.Key key : token.track.keys) {
+                if (key.time > since && key.time > last) {
+                    last = key.time;
+                    said = (drawn.carrying(token, since, key.time) ? "Conduite de " : "Course de ")
+                        + who(token);
+                }
+                since = key.time;
+            }
+        }
+        if (!said.isEmpty()) return said;
+        // Older schemas carry strokes nobody owns: their shape is all they can be named by.
+        if (!drawn.shapes.isEmpty()) {
+            String kind = drawn.shapes.get(drawn.shapes.size() - 1).kind;
+            return Diagram.SHOT.equals(kind) ? "Tir" : Diagram.RUN.equals(kind) ? "Course"
+                : Diagram.CARRY.equals(kind) ? "Conduite" : "Passe";
+        }
+        int placed = drawn.tokens.size();
+        return placed == 0 ? "Schéma"
+            : "Placement · " + placed + (placed > 1 ? " joueurs" : " joueur");
+    }
+
+    /** The player a token names, or the pion it is, for a sentence rather than for a panel. */
+    private String who(Diagram drawn, String tokenId) {
+        for (Diagram.Token token : drawn.tokens) if (token.id.equals(tokenId)) return who(token);
+        return "";
+    }
+    private String who(Diagram.Token token) {
+        return Diagram.named(token) ? shortName(token.playerId)
+            : token.label.isEmpty() ? "un pion" : "pion " + token.label;
+    }
+
     /** One line: "⚽ 10 Mbappé · → 6 Pogba". */
     private String summary(JSONObject note) {
         List<JSONObject> list = ordered(entriesOf(note));
         String drawn = note.optJSONObject("schema") == null ? "" : "▤  ";
         if (list.isEmpty())
             return note.optString("comment").isEmpty()
-                ? (drawn.isEmpty() ? "Note générale" : "Schéma")
+                ? (drawn.isEmpty() ? "Note générale" : drawn + schemaSummary(note.optJSONObject("schema")))
                 : drawn + note.optString("comment");
         StringBuilder text = new StringBuilder(drawn);
         for (JSONObject entry : list) {
@@ -2028,11 +3133,16 @@ public class MainActivity extends Activity {
     private JSONObject operation(String kind, String noteId) throws Exception {
         return new JSONObject().put("id", UUID.randomUUID().toString()).put("kind", kind).put("note_id", noteId);
     }
+    /** What the match says about one side, or null while none is loaded. */
+    private JSONObject sideTeam(String key) {
+        JSONArray teams = match == null ? null : match.optJSONArray("teams");
+        for (int i = 0; teams != null && i < teams.length(); i++)
+            if (key.equals(teams.optJSONObject(i).optString("key"))) return teams.optJSONObject(i);
+        return null;
+    }
     private String teamName(String key) {
-        JSONArray teams = match.optJSONArray("teams");
-        for (int i = 0; i < teams.length(); i++)
-            if (key.equals(teams.optJSONObject(i).optString("key"))) return teams.optJSONObject(i).optString("name");
-        return key;
+        JSONObject team = sideTeam(key);
+        return team == null ? key : team.optString("name");
     }
     private String formations() {
         JSONArray teams = match.optJSONArray("teams");
@@ -2056,7 +3166,9 @@ public class MainActivity extends Activity {
         JSONObject player = playerById(id);
         return player == null ? id : player.optInt("number") + " " + PlayerName.shorten(player.optString("name"));
     }
-    private List<JSONObject> notes() throws Exception {
+    private List<JSONObject> notes() throws Exception { return notes(match.optString("id")); }
+
+    private List<JSONObject> notes(String matchId) throws Exception {
         LinkedHashMap<String, JSONObject> notes = new LinkedHashMap<>();
         Set<String> deleted = new HashSet<>();
         Map<String,String> comments = new HashMap<>();
@@ -2077,7 +3189,7 @@ public class MainActivity extends Activity {
         List<JSONObject> visible = new ArrayList<>();
         for (Map.Entry<String,JSONObject> entry : notes.entrySet()) {
             if (!deleted.contains(entry.getKey())
-                    && match.optString("id").equals(entry.getValue().optString("match_id"))) {
+                    && (matchId == null || matchId.equals(entry.getValue().optString("match_id")))) {
                 entry.getValue().put("comment", comments.getOrDefault(entry.getKey(), ""));
                 if (schemas.containsKey(entry.getKey()))
                     entry.getValue().put("schema", schemas.get(entry.getKey()));
@@ -2296,7 +3408,8 @@ public class MainActivity extends Activity {
                 List<JSONObject> list = ordered(entriesOf(note));
                 JSONObject schema = note.optJSONObject("schema");
                 StringBuilder text = new StringBuilder(note.optInt("minute") + "′");
-                if (list.isEmpty()) text.append(schema == null ? "  ·  Note générale" : "  ·  Schéma");
+                if (list.isEmpty())
+                    text.append(schema == null ? "  ·  Note générale" : "  ·  " + schemaSummary(schema));
                 for (JSONObject entry : list) {
                     text.append("\n").append(icon(entry.optString("action"))).append("  ")
                         .append(actionName(entry.optString("action"))).append(" — ")
@@ -2399,6 +3512,11 @@ public class MainActivity extends Activity {
         TextView help = label("Les matchs sont accessibles sans compte ni jeton personnel. "
             + "La synchronisation des notes utilise un jeton séparé, facultatif.");
         help.setTextColor(MUTED); help.setTextSize(13); help.setPadding(0, 0, 0, dp(10));
+        CheckBox demo = choice("Mode démo hors ligne (2 matchs fictifs)", prefs.getBoolean("demo_mode", true));
+        demo.setOnCheckedChangeListener((button, checked) -> {
+            prefs.edit().putBoolean("demo_mode", checked).apply();
+            if ("options".equals(screen)) showHome();
+        });
         full("Configurer le serveur", this::settings);
         connectionTest(root, () -> prefs.getString("url", "http://10.0.2.2:8080"));
         markerChoice();

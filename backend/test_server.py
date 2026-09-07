@@ -130,6 +130,19 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(football_path('/v1/football/matches/123', {}), 'matches/123')
         self.assertEqual(football_path('/v1/football/matches/not-a-number', {}), None)
 
+    def test_followed_club_calendar_route(self):
+        from unittest.mock import patch
+        query = {'dateFrom': ['2026-09-07'], 'dateTo': ['2027-09-07'],
+                 'limit': ['100'], 'token': ['must-not-pass']}
+        self.assertEqual(football_path('/v1/football/teams/66/matches', query),
+                         'teams/66/matches?dateFrom=2026-09-07&dateTo=2027-09-07&limit=100')
+        self.assertIsNone(football_path('/v1/football/teams/not-a-number/matches', {}))
+        self.assertIsNone(football_path('/v1/football/teams/66/squad', {}))
+        with patch('backend.server.football_data', return_value={'matches': [{'id': 123}]}) as fetch:
+            self.assertEqual(self.request(token='wrong', path='/v1/football/teams/66/matches?limit=100'),
+                             {'matches': [{'id': 123}]})
+            fetch.assert_called_once_with('teams/66/matches?limit=100', None)
+
     def test_remote_football_data_note_ids_are_accepted(self):
         op = self.note(match_id='fd-123', entries=[dict(player_id='fd-456', action='pass')])
         self.request(op)
@@ -163,6 +176,41 @@ class ServerTest(unittest.TestCase):
     def diagram(self, note_id=None, **fields):
         return dict(id=str(uuid4()), note_id=note_id or str(uuid4()), kind='diagram',
                     schema=self.schema(**fields))
+
+    def animated_schema(self):
+        return dict(version=2, board='blank', shapes=[], tokens=[
+            dict(id='a', team='home', x=.1, y=.2, keys=[dict(t=30, x=.7, y=.2)]),
+            dict(id='b', team='away', x=.3, y=.5, keys=[dict(t=10, x=.3, y=.5), dict(t=40, x=.9, y=.5)])
+        ], ball=[dict(t=0, x=.1, y=.2, owner='a'),
+                 dict(t=30, x=.7, y=.2, owner='a', flight=True),
+                 dict(t=40, x=.9, y=.5, owner='b', kind='pass')])
+
+    def test_independent_tracks_roundtrip(self):
+        op = self.diagram(**self.animated_schema())
+        self.request(op)
+        self.assertEqual(self.request()[0]['operation'], op)
+        self.assertEqual(self.request(op)['operation'], op)
+
+    def test_invalid_tracks_rejected(self):
+        import copy
+        from backend.server import validate_schema
+        good = self.animated_schema()
+        for edit in [
+            lambda s: s['tokens'][1].update(id='a'),
+            lambda s: s['ball'][0].update(owner='missing'),
+            lambda s: s['ball'][0].update(t=True),
+            lambda s: s['ball'][1].update(t=0),
+            lambda s: s['ball'][0].update(x=float('nan')),
+            lambda s: s['ball'][1].update(flight='yes'),
+            lambda s: s['tokens'][0]['keys'][0].update(owner='a'),
+            lambda s: s['tokens'][0]['keys'][0].update(t=1201),
+            lambda s: s['tokens'][0]['keys'][0].update(path=[[0, 0]]),
+            lambda s: s['tokens'][0].update(keys=[dict(t=i, x=0, y=0) for i in range(121)]),
+        ]:
+            broken = copy.deepcopy(good)
+            edit(broken)
+            with self.assertRaises(ValueError):
+                validate_schema(broken)
 
     def test_tactical_note_carries_its_schema_beside_the_note(self):
         note = self.note(entries=[dict(player_id=PLAYERS[0], action='pass')])

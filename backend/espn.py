@@ -86,6 +86,18 @@ def team_colours(home, away):
     return hex_colour(first), hex_colour(apart)
 
 
+def crest(team):
+    """The badge ESPN publishes, preferring the one it drew for a dark background.
+
+    The two are usually the same file — most clubs need no second version — but when they
+    differ, the note is drawn on grass at night and the wrong one arrives as a dark shape on a
+    dark chip.
+    """
+    logos = [logo for logo in team.get('logos') or [] if isinstance(logo, dict) and logo.get('href')]
+    dark = [logo for logo in logos if 'dark' in (logo.get('rel') or [])]
+    return ((dark or logos) + [{}])[0].get('href', '')
+
+
 def name_key(name):
     value = unicodedata.normalize('NFKD', name or '')
     value = ''.join(c for c in value if not unicodedata.combining(c)).lower()
@@ -330,6 +342,17 @@ class Espn:
                 result[side + 'Team']['bench'] = bench(roster, taken)
                 result[side + 'Team']['formation'] = formation
                 result[side + 'Team']['colour'] = colour
+                # Kept, where the abbreviation used to be read for the match and dropped: three
+                # letters and a badge name a club in the width of a button, which its name does
+                # not. Both are ESPN's own — its `TRY` for Troyes, against football-data's `ETR`
+                # — and they land beside `tla` and `crest` rather than over them, a client
+                # choosing which of the two providers it would rather show.
+                abbreviation = (team.get('abbreviation') or '').strip()
+                if abbreviation:
+                    result[side + 'Team']['abbreviation'] = abbreviation
+                badge = crest(team)
+                if badge:
+                    result[side + 'Team']['logo'] = badge
                 sides[str(team.get('id') or '')] = side
             # The run of play is a bonus on top of the composition: it is read after the eleven
             # are secured, so a surprise in it can never cost the pitch its players.

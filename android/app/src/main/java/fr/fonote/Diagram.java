@@ -22,7 +22,11 @@ import java.util.List;
 final class Diagram {
     /** A pitch opened empty, and one opened with everyone on it. Only the first is written small. */
     static final String BLANK = "blank", FULL = "full";
-    /** The four things a line between two points can mean. Order is the order of the toolbar. */
+    /**
+     * What a line between two points can mean. Three of them are drawn, in the toolbar's order;
+     * the fourth is never chosen but read off the ball, a run made by the player who holds it
+     * being a carry. Old schemas that named one still parse, and still say the same thing.
+     */
     static final String PASS = "pass", RUN = "run", CARRY = "carry", SHOT = "shot";
     /** Bounds the log is willing to carry, and the server to accept. */
     static final int TOKENS = 30, SHAPES = 40, POINTS = 32;
@@ -34,12 +38,37 @@ final class Diagram {
      */
     static final class Token {
         String playerId = "", team = "neutral", label = "";
+        String id = java.util.UUID.randomUUID().toString();
+        final Track track = new Track();
         double x, y;
         Token(String playerId, String team, String label, double x, double y) {
             this.playerId = playerId == null ? "" : playerId;
             this.team = team == null ? "neutral" : team;
             this.label = label == null ? "" : label;
             this.x = x; this.y = y;
+        }
+
+        /** Every recorded position participates in placement, independently of the playhead. */
+        double[] bounds() {
+            double[] bounds = {x, y, x, y};
+            for (Track.Key key : track.keys) {
+                include(bounds, key.x, key.y);
+                for (double[] point : key.path) include(bounds, point[0], point[1]);
+            }
+            return bounds;
+        }
+
+        private static void include(double[] bounds, double x, double y) {
+            bounds[0] = Math.min(bounds[0], x); bounds[1] = Math.min(bounds[1], y);
+            bounds[2] = Math.max(bounds[2], x); bounds[3] = Math.max(bounds[3], y);
+        }
+
+        void reposition(double dx, double dy) {
+            x += dx; y += dy;
+            for (Track.Key key : track.keys) {
+                key.x += dx; key.y += dy;
+                for (double[] point : key.path) { point[0] += dx; point[1] += dy; }
+            }
         }
     }
 
@@ -51,10 +80,11 @@ final class Diagram {
     }
 
     String board = BLANK;
+    final Track ball = new Track();
     final List<Token> tokens = new ArrayList<>();
     final List<Shape> shapes = new ArrayList<>();
 
-    boolean isEmpty() { return tokens.isEmpty() && shapes.isEmpty(); }
+    boolean isEmpty() { return tokens.isEmpty() && shapes.isEmpty() && ball.keys.isEmpty(); }
 
     /** The player a token names, or "" for one the match does not know. */
     static boolean named(Token token) { return !token.playerId.isEmpty(); }
@@ -72,6 +102,7 @@ final class Diagram {
         JSONArray placed = new JSONArray();
         for (Token token : tokens) {
             JSONObject one = new JSONObject().put("x", round(token.x)).put("y", round(token.y));
+            one.put("id", token.id).put("keys", keysJson(token.track));
             if (named(token)) one.put("player_id", token.playerId);
             else {
                 one.put("team", token.team);
@@ -86,7 +117,132 @@ final class Diagram {
                 points.put(new JSONArray().put(round(point[0])).put(round(point[1])));
             drawn.put(new JSONObject().put("kind", shape.kind).put("points", points));
         }
-        return new JSONObject().put("board", board).put("tokens", placed).put("shapes", drawn);
+        return new JSONObject().put("version", 2).put("ball", keysJson(ball))
+            .put("board", board).put("tokens", placed).put("shapes", drawn);
+    }
+
+    static JSONArray keysJson(Track track) throws JSONException {
+        JSONArray result = new JSONArray();
+        for (Track.Key key : track.keys) {
+            JSONObject one = new JSONObject().put("t", key.time).put("x", round(key.x)).put("y", round(key.y));
+            // Only the ball carries a kind: what a player's stroke means is read off the ball.
+            if (!RUN.equals(key.kind)) one.put("kind", key.kind);
+            if (!key.owner.isEmpty()) one.put("owner", key.owner);
+            if (key.flight) one.put("flight", true);
+            if (!key.path.isEmpty()) {
+                JSONArray path = new JSONArray();
+                for (double[] p : key.path) path.put(new JSONArray().put(round(p[0])).put(round(p[1])));
+                one.put("path", path);
+            }
+            result.put(one);
+        }
+        return result;
+    }
+
+    /** A kind is the ball's alone; one left on a player's track by an older client is dropped. */
+    private static void readKeys(JSONArray source, Track track, boolean ball) {
+        for (int i = 0; source != null && i < Math.min(source.length(), Track.LIMIT); i++) {
+            JSONObject one = source.optJSONObject(i);
+            if (one == null) continue;
+            int time = one.optInt("t", -1);
+            if (time < 0 || time > Track.END) continue;
+            Track.Key key = new Track.Key(time, one.optDouble("x", .5), one.optDouble("y", .5));
+            if (ball) key.kind = one.optString("kind", RUN);
+            key.owner = one.optString("owner"); key.flight = one.optBoolean("flight");
+            JSONArray path = one.optJSONArray("path");
+            for (int j = 0; path != null && j < Math.min(path.length(), POINTS); j++) {
+                JSONArray point = path.optJSONArray(j);
+                if (point != null && point.length() == 2) key.path.add(new double[]{point.optDouble(0), point.optDouble(1)});
+            }
+            track.put(key);
+        }
+    }
+
+    double[] position(Token token, int time) { return token.track.position(time, token.x, token.y); }
+
+    double[] ballKey(Track.Key key, int time) {
+        for (Token token : tokens) if (token.id.equals(key.owner)) return position(token, time);
+        return new double[]{key.x, key.y};
+    }
+
+    double[] ballPosition(int time) {
+        if (ball.keys.isEmpty() || time < ball.keys.get(0).time) return new double[]{.5, .5};
+        Track.Key previous = ball.keys.get(0);
+        for (Track.Key next : ball.keys) {
+            if (next.time > time) {
+                if (!previous.flight) return ballKey(previous, time);
+                double[] a = ballKey(previous, previous.time), b = ballKey(next, next.time);
+                return Track.route(a[0], a[1], b[0], b[1], next.path,
+                    (time - previous.time) / (double)(next.time - previous.time));
+            }
+            previous = next;
+        }
+        return ballKey(previous, previous.flight ? previous.time : time);
+    }
+
+    /**
+     * Where the ball is going once it leaves the player who holds it, or null when it stays with
+     * him — carried, or simply held to the end. The first key at somebody else's feet, never
+     * simply the next one: a pass is written as a departure and an arrival, and the departure is
+     * still the passer's.
+     */
+    double[] ballNext(int time) {
+        int held = -1;
+        for (int i = 0; i < ball.keys.size(); i++) if (ball.keys.get(i).time <= time) held = i;
+        if (held < 0) return null;
+        Track.Key holder = ball.keys.get(held);
+        double[] here = ballKey(holder, time);
+        for (int i = held + 1; i < ball.keys.size(); i++) {
+            Track.Key key = ball.keys.get(i);
+            // Still at the same feet: a departure is written at the passer — who may well have
+            // run to it — and a ball carried never leaves him at all.
+            if (key.owner.equals(holder.owner)) continue;
+            double[] there = ballKey(key, key.time);
+            if (Math.hypot(there[0] - here[0], there[1] - here[1]) > .01) return there;
+        }
+        return null;
+    }
+
+    boolean ballHeld(int time) {
+        Track.Key previous = null;
+        for (Track.Key key : ball.keys) if (key.time <= time) previous = key;
+        return previous != null && !previous.flight && !previous.owner.isEmpty();
+    }
+
+    /**
+     * Whether a player has the ball at his feet for a whole stretch of his track: what makes a
+     * movement a carry rather than a run. Read off the ball instead of being recorded on the
+     * stroke, because the ball already follows whoever owns it — a run drawn by the player
+     * holding it moves the ball with him, and the drawing has no business saying otherwise.
+     *
+     * <p>The bounds are read the way possession changes hands. A ball leaving at {@code from} —
+     * a pass struck as the run starts — is already gone, so the stretch is a run; one leaving at
+     * {@code to} was carried the whole way there, so it is not.
+     */
+    boolean carrying(Token token, int from, int to) {
+        Track.Key holder = null;
+        for (Track.Key key : ball.keys) if (key.time <= from) holder = key;
+        if (holder == null || holder.flight || !token.id.equals(holder.owner)) return false;
+        for (Track.Key key : ball.keys)
+            if (key.time > from && key.time < to && (key.flight || !token.id.equals(key.owner)))
+                return false;
+        return true;
+    }
+
+    int duration() {
+        int end = 50;
+        for (Token token : tokens) for (Track.Key key : token.track.keys) end = Math.max(end, key.time);
+        for (Track.Key key : ball.keys) end = Math.max(end, key.time);
+        return end;
+    }
+
+    void removeToken(int index) {
+        Token token = tokens.get(index);
+        // Preserve the ball's recorded location when its owner is removed.
+        for (Track.Key key : ball.keys) if (token.id.equals(key.owner)) {
+            double[] p = position(token, key.time); key.x = p[0]; key.y = p[1]; key.owner = "";
+        }
+        tokens.remove(index);
     }
 
     /** Reads back a schema, dropping anything it cannot make sense of rather than failing. */
@@ -98,8 +254,11 @@ final class Diagram {
         for (int i = 0; placed != null && i < placed.length(); i++) {
             JSONObject one = placed.optJSONObject(i);
             if (one == null) continue;
-            diagram.tokens.add(new Token(one.optString("player_id"), one.optString("team", "neutral"),
-                one.optString("label"), one.optDouble("x", .5), one.optDouble("y", .5)));
+            Token token = new Token(one.optString("player_id"), one.optString("team", "neutral"),
+                one.optString("label"), one.optDouble("x", .5), one.optDouble("y", .5));
+            token.id = one.optString("id", token.id);
+            readKeys(one.optJSONArray("keys"), token.track, false);
+            diagram.tokens.add(token);
         }
         JSONArray drawn = source.optJSONArray("shapes");
         for (int i = 0; drawn != null && i < drawn.length(); i++) {
@@ -114,6 +273,7 @@ final class Diagram {
             }
             if (shape.points.size() >= 2) diagram.shapes.add(shape);
         }
+        readKeys(source.optJSONArray("ball"), diagram.ball, true);
         return diagram;
     }
 }

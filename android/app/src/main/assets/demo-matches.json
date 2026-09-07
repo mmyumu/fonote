@@ -1,0 +1,1423 @@
+[
+  {
+    "id": 401876469,
+    "utcDate": "2026-09-04T19:05Z",
+    "competition": {
+      "name": "Ligue 1",
+      "code": "FL1"
+    },
+    "stage": "J3",
+    "status": "SCHEDULED",
+    "homeTeam": {
+      "name": "Paris Saint-Germain",
+      "abbreviation": "PSG",
+      "color": "011F68",
+      "alternateColor": "ffffff",
+      "logos": [
+        {
+          "href": "https://a.espncdn.com/i/teamlogos/soccer/500/160.png",
+          "width": 500,
+          "height": 500,
+          "alt": "",
+          "rel": [
+            "full",
+            "default"
+          ],
+          "lastUpdated": "2019-05-08T16:07Z"
+        },
+        {
+          "href": "https://a.espncdn.com/i/teamlogos/soccer/500-dark/160.png",
+          "width": 500,
+          "height": 500,
+          "alt": "",
+          "rel": [
+            "full",
+            "dark"
+          ],
+          "lastUpdated": "2019-05-08T16:07Z"
+        }
+      ],
+      "lineup": [
+        {
+          "id": 248699,
+          "fonote_id": "espn-248699",
+          "name": "Matvei Safonov",
+          "shirtNumber": "39",
+          "position": "Goalkeeper",
+          "formationPlace": "1",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "2",
+            "saves": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 240233,
+          "fonote_id": "espn-240233",
+          "name": "Achraf Hakimi",
+          "shirtNumber": "2",
+          "position": "Right Back",
+          "formationPlace": "2",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "2",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "1",
+            "totalGoals": "0",
+            "totalShots": "4"
+          }
+        },
+        {
+          "id": 345581,
+          "fonote_id": "espn-345581",
+          "name": "Warren Zaïre-Emery",
+          "shirtNumber": "33",
+          "position": "Left Back",
+          "formationPlace": "3",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "2",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 355061,
+          "fonote_id": "espn-355061",
+          "name": "João Neves",
+          "shirtNumber": "87",
+          "position": "Defensive Midfielder",
+          "formationPlace": "4",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "3",
+            "foulsSuffered": "2",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "2",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "2"
+          }
+        },
+        {
+          "id": 159047,
+          "fonote_id": "espn-159047",
+          "name": "Marquinhos",
+          "shirtNumber": "5",
+          "position": "Center Right Defender",
+          "formationPlace": "5",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "2",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "1",
+            "totalGoals": "1",
+            "totalShots": "1"
+          }
+        },
+        {
+          "id": 287005,
+          "fonote_id": "espn-287005",
+          "name": "Willian Pacho",
+          "shirtNumber": "51",
+          "position": "Center Left Defender",
+          "formationPlace": "6",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "1",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "2",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 288897,
+          "fonote_id": "espn-288897",
+          "name": "Vitinha",
+          "shirtNumber": "17",
+          "position": "Right Midfielder",
+          "formationPlace": "7",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "2",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "1",
+            "totalGoals": "0",
+            "totalShots": "3"
+          }
+        },
+        {
+          "id": 329690,
+          "fonote_id": "espn-329690",
+          "name": "Maghnes Akliouche",
+          "shirtNumber": "11",
+          "position": "Attacking Midfielder",
+          "formationPlace": "8",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "2",
+            "foulsSuffered": "1",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "1",
+            "totalGoals": "0",
+            "totalShots": "1"
+          }
+        },
+        {
+          "id": 274745,
+          "fonote_id": "espn-274745",
+          "name": "Khvicha Kvaratskhelia",
+          "shirtNumber": "7",
+          "position": "Center Left Forward",
+          "formationPlace": "9",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "1",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "1",
+            "offsides": "2",
+            "shotsOnTarget": "2",
+            "totalGoals": "0",
+            "totalShots": "3"
+          }
+        },
+        {
+          "id": 336388,
+          "fonote_id": "espn-336388",
+          "name": "Désiré Doué",
+          "shirtNumber": "14",
+          "position": "Center Right Forward",
+          "formationPlace": "10",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "3",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "1",
+            "shotsOnTarget": "2",
+            "totalGoals": "0",
+            "totalShots": "3"
+          }
+        },
+        {
+          "id": 214596,
+          "fonote_id": "espn-214596",
+          "name": "Fabián Ruiz",
+          "shirtNumber": "8",
+          "position": "Left Midfielder",
+          "formationPlace": "11",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "1",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "2",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "1",
+            "totalGoals": "0",
+            "totalShots": "1"
+          }
+        }
+      ],
+      "bench": [
+        {
+          "id": 288925,
+          "fonote_id": "espn-288925",
+          "name": "Lucas Chevalier",
+          "shirtNumber": "30",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "0",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "saves": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 403578,
+          "fonote_id": "espn-403578",
+          "name": "Dro Fernández",
+          "shirtNumber": "27",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 304503,
+          "fonote_id": "espn-304503",
+          "name": "Illia Zabarnyi",
+          "shirtNumber": "6",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "0",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 316128,
+          "fonote_id": "espn-316128",
+          "name": "Lucas Beraldo",
+          "shirtNumber": "4",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "0",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 196200,
+          "fonote_id": "espn-196200",
+          "name": "Lucas Hernández",
+          "shirtNumber": "21",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "1",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 265869,
+          "fonote_id": "espn-265869",
+          "name": "Ferran Torres",
+          "shirtNumber": "9",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 379088,
+          "fonote_id": "espn-379088",
+          "name": "Senny Mayulu",
+          "shirtNumber": "24",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "0",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 353363,
+          "fonote_id": "espn-353363",
+          "name": "Mika Godts",
+          "shirtNumber": "22",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "3"
+          }
+        },
+        {
+          "id": 229744,
+          "fonote_id": "espn-229744",
+          "name": "Ousmane Dembélé",
+          "shirtNumber": "10",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "2",
+            "shotsOnTarget": "1",
+            "totalGoals": "0",
+            "totalShots": "2"
+          }
+        }
+      ],
+      "formation": "4-1-2-1-2",
+      "colour": "#808FB4",
+      "logo": "asset://logos/home-160.png"
+    },
+    "awayTeam": {
+      "name": "AS Monaco",
+      "abbreviation": "MON",
+      "color": "E91514",
+      "alternateColor": "004c37",
+      "logos": [
+        {
+          "href": "https://a.espncdn.com/i/teamlogos/soccer/500/174.png",
+          "width": 500,
+          "height": 500,
+          "alt": "",
+          "rel": [
+            "full",
+            "default"
+          ],
+          "lastUpdated": "2019-05-08T16:07Z"
+        },
+        {
+          "href": "https://a.espncdn.com/i/teamlogos/soccer/500-dark/174.png",
+          "width": 500,
+          "height": 500,
+          "alt": "",
+          "rel": [
+            "full",
+            "dark"
+          ],
+          "lastUpdated": "2019-05-08T16:07Z"
+        }
+      ],
+      "lineup": [
+        {
+          "id": 134169,
+          "fonote_id": "espn-134169",
+          "name": "Lukas Hradecky",
+          "shirtNumber": "1",
+          "position": "Goalkeeper",
+          "formationPlace": "1",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "saves": "9",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 310640,
+          "fonote_id": "espn-310640",
+          "name": "Vanderson",
+          "shirtNumber": "2",
+          "position": "Right Back",
+          "formationPlace": "2",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "1",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 316559,
+          "fonote_id": "espn-316559",
+          "name": "Názinho",
+          "shirtNumber": "20",
+          "position": "Left Back",
+          "formationPlace": "3",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "2",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "1",
+            "totalGoals": "1",
+            "totalShots": "1"
+          }
+        },
+        {
+          "id": 222628,
+          "fonote_id": "espn-222628",
+          "name": "Denis Zakaria",
+          "shirtNumber": "6",
+          "position": "Left Midfielder",
+          "formationPlace": "4",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 362288,
+          "fonote_id": "espn-362288",
+          "name": "Sadibou Sané",
+          "shirtNumber": "72",
+          "position": "Center Right Defender",
+          "formationPlace": "5",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 155532,
+          "fonote_id": "espn-155532",
+          "name": "Eric Dier",
+          "shirtNumber": "15",
+          "position": "Center Left Defender",
+          "formationPlace": "6",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 208518,
+          "fonote_id": "espn-208518",
+          "name": "Mamadou Coulibaly",
+          "shirtNumber": "28",
+          "position": "Attacking Midfielder Right",
+          "formationPlace": "7",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "2",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 38721,
+          "fonote_id": "espn-38721",
+          "name": "Lamine Camara",
+          "shirtNumber": "8",
+          "position": "Right Midfielder",
+          "formationPlace": "8",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "3",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 365789,
+          "fonote_id": "espn-365789",
+          "name": "Paris Brunner",
+          "shirtNumber": "29",
+          "position": "Forward",
+          "formationPlace": "9",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "2",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "1"
+          }
+        },
+        {
+          "id": 195501,
+          "fonote_id": "espn-195501",
+          "name": "Aleksandr Golovin",
+          "shirtNumber": "10",
+          "position": "Attacking Midfielder",
+          "formationPlace": "10",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "2",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "1",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 356925,
+          "fonote_id": "espn-356925",
+          "name": "Stanis Idumbo",
+          "shirtNumber": "17",
+          "position": "Attacking Midfielder Left",
+          "formationPlace": "11",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "1",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "1",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "1",
+            "totalGoals": "1",
+            "totalShots": "2"
+          }
+        }
+      ],
+      "bench": [
+        {
+          "id": 397994,
+          "fonote_id": "espn-397994",
+          "name": "Mathys Detourbet",
+          "shirtNumber": "7",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "0",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 240660,
+          "fonote_id": "espn-240660",
+          "name": "Jordan Teze",
+          "shirtNumber": "4",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "1",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "1",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 258875,
+          "fonote_id": "espn-258875",
+          "name": "Philipp Köhn",
+          "shirtNumber": "16",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "0",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "saves": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 308552,
+          "fonote_id": "espn-308552",
+          "name": "Mika Biereth",
+          "shirtNumber": "14",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "0",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 3124795,
+          "fonote_id": "espn-3124795",
+          "name": "Anis Soubeir",
+          "shirtNumber": "46",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 318389,
+          "fonote_id": "espn-318389",
+          "name": "Matthis Abline",
+          "shirtNumber": "11",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 3124794,
+          "fonote_id": "espn-3124794",
+          "name": "Safouane Benzahra",
+          "shirtNumber": "47",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 411027,
+          "fonote_id": "espn-411027",
+          "name": "Ilane Touré",
+          "shirtNumber": "49",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "0",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "0",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        },
+        {
+          "id": 350525,
+          "fonote_id": "espn-350525",
+          "name": "Christian Mawissa",
+          "shirtNumber": "13",
+          "position": "Substitute",
+          "stats": {
+            "appearances": "1",
+            "foulsCommitted": "0",
+            "foulsSuffered": "0",
+            "ownGoals": "0",
+            "redCards": "0",
+            "subIns": "1",
+            "yellowCards": "0",
+            "goalsConceded": "0",
+            "shotsFaced": "0",
+            "goalAssists": "0",
+            "offsides": "0",
+            "shotsOnTarget": "0",
+            "totalGoals": "0",
+            "totalShots": "0"
+          }
+        }
+      ],
+      "formation": "4-2-3-1",
+      "colour": "#EE504F",
+      "logo": "asset://logos/away-174.png"
+    },
+    "timeline": [
+      {
+        "kind": "kickoff",
+        "label": "Kickoff",
+        "minute": 0,
+        "period": 1,
+        "team": null,
+        "players": [],
+        "scoring": false,
+        "text": "",
+        "at": "2026-09-04T19:05:12Z"
+      },
+      {
+        "kind": "goal",
+        "label": "Goal",
+        "minute": 31,
+        "period": 1,
+        "team": "home",
+        "players": [
+          "espn-159047",
+          "espn-274745"
+        ],
+        "scoring": true,
+        "text": "Goal! Paris Saint Germain 1, Monaco 0. Marquinhos (Paris Saint Germain) with an attempt from very close range to the high centre of the goal. Assisted by Khvicha Kvaratskhelia following a corner.",
+        "at": "2026-09-04T19:35:50Z"
+      },
+      {
+        "kind": "start-delay",
+        "label": "Start Delay",
+        "minute": 32,
+        "period": 1,
+        "team": "home",
+        "players": [],
+        "scoring": false,
+        "text": "",
+        "at": "2026-09-04T19:36:37Z"
+      },
+      {
+        "kind": "end-delay",
+        "label": "End Delay",
+        "minute": 33,
+        "period": 1,
+        "team": "home",
+        "players": [],
+        "scoring": false,
+        "text": "",
+        "at": "2026-09-04T19:37:49Z"
+      },
+      {
+        "kind": "halftime",
+        "label": "Halftime",
+        "minute": 48,
+        "period": 1,
+        "team": null,
+        "players": [],
+        "scoring": false,
+        "text": "First Half ends, Paris Saint Germain 1, Monaco 0.",
+        "at": "2026-09-04T19:52:15Z"
+      },
+      {
+        "kind": "start-2nd-half",
+        "label": "Start 2nd Half",
+        "minute": 45,
+        "period": 2,
+        "team": null,
+        "players": [],
+        "scoring": false,
+        "text": "",
+        "at": "2026-09-04T20:09:15Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 52,
+        "period": 2,
+        "team": "away",
+        "players": [
+          "espn-240660",
+          "espn-310640"
+        ],
+        "scoring": false,
+        "text": "Substitution, Monaco. Jordan Teze replaces Vanderson.",
+        "at": "2026-09-04T20:16:07Z"
+      },
+      {
+        "kind": "goal---header",
+        "label": "Goal - Header",
+        "minute": 58,
+        "period": 2,
+        "team": "away",
+        "players": [
+          "espn-316559",
+          "espn-240660"
+        ],
+        "scoring": true,
+        "text": "Goal! Paris Saint Germain 1, Monaco 1. Flávio Nazinho (Monaco) header from very close range to the bottom left corner. Assisted by Jordan Teze.",
+        "at": "2026-09-04T20:21:46Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 63,
+        "period": 2,
+        "team": "home",
+        "players": [
+          "espn-265869",
+          "espn-336388"
+        ],
+        "scoring": false,
+        "text": "Substitution, Paris Saint Germain. Ferran Torres replaces Désiré Doué.",
+        "at": "2026-09-04T20:27:06Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 64,
+        "period": 2,
+        "team": "home",
+        "players": [
+          "espn-196200",
+          "espn-345581"
+        ],
+        "scoring": false,
+        "text": "Substitution, Paris Saint Germain. Lucas Hernández replaces Warren Zaïre-Emery.",
+        "at": "2026-09-04T20:27:22Z"
+      },
+      {
+        "kind": "yellow-card",
+        "label": "Yellow Card",
+        "minute": 68,
+        "period": 2,
+        "team": "home",
+        "players": [
+          "espn-196200"
+        ],
+        "scoring": false,
+        "text": "Lucas Hernández (Paris Saint Germain) is shown the yellow card for a bad foul.",
+        "at": "2026-09-04T20:31:23Z"
+      },
+      {
+        "kind": "yellow-card",
+        "label": "Yellow Card",
+        "minute": 68,
+        "period": 2,
+        "team": "away",
+        "players": [
+          "espn-240660"
+        ],
+        "scoring": false,
+        "text": "Jordan Teze (Monaco) is shown the yellow card.",
+        "at": "2026-09-04T20:31:28Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 68,
+        "period": 2,
+        "team": "home",
+        "players": [
+          "espn-353363",
+          "espn-274745"
+        ],
+        "scoring": false,
+        "text": "Substitution, Paris Saint Germain. Mika Godts replaces Khvicha Kvaratskhelia.",
+        "at": "2026-09-04T20:32:15Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 69,
+        "period": 2,
+        "team": "home",
+        "players": [
+          "espn-229744",
+          "espn-329690"
+        ],
+        "scoring": false,
+        "text": "Substitution, Paris Saint Germain. Ousmane Dembélé replaces Maghnes Akliouche.",
+        "at": "2026-09-04T20:32:24Z"
+      },
+      {
+        "kind": "goal",
+        "label": "Goal",
+        "minute": 72,
+        "period": 2,
+        "team": "away",
+        "players": [
+          "espn-356925",
+          "espn-195501"
+        ],
+        "scoring": true,
+        "text": "Goal! Paris Saint Germain 1, Monaco 2. Stanis Idumbo (Monaco) left footed shot from a difficult angle on the left to the top left corner. Assisted by Aleksandr Golovin.",
+        "at": "2026-09-04T20:35:22Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 73,
+        "period": 2,
+        "team": "away",
+        "players": [
+          "espn-3124795",
+          "espn-208518"
+        ],
+        "scoring": false,
+        "text": "Substitution, Monaco. Anis Soubeir replaces Mamadou Coulibaly.",
+        "at": "2026-09-04T20:36:37Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 73,
+        "period": 2,
+        "team": "away",
+        "players": [
+          "espn-318389",
+          "espn-365789"
+        ],
+        "scoring": false,
+        "text": "Substitution, Monaco. Matthis Abline replaces Paris Brunner.",
+        "at": "2026-09-04T20:36:45Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 76,
+        "period": 2,
+        "team": "home",
+        "players": [
+          "espn-403578",
+          "espn-214596"
+        ],
+        "scoring": false,
+        "text": "Substitution, Paris Saint Germain. Dro Fernández replaces Fabián Ruiz.",
+        "at": "2026-09-04T20:39:17Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 87,
+        "period": 2,
+        "team": "away",
+        "players": [
+          "espn-3124794",
+          "espn-195501"
+        ],
+        "scoring": false,
+        "text": "Substitution, Monaco. Safouane Benzahra replaces Aleksandr Golovin.",
+        "at": "2026-09-04T20:50:23Z"
+      },
+      {
+        "kind": "substitution",
+        "label": "Substitution",
+        "minute": 87,
+        "period": 2,
+        "team": "away",
+        "players": [
+          "espn-350525",
+          "espn-356925"
+        ],
+        "scoring": false,
+        "text": "Substitution, Monaco. Christian Mawissa replaces Stanis Idumbo.",
+        "at": "2026-09-04T20:50:27Z"
+      },
+      {
+        "kind": "end-regular-time",
+        "label": "End Regular Time",
+        "minute": 96,
+        "period": 2,
+        "team": null,
+        "players": [],
+        "scoring": false,
+        "text": "",
+        "at": "2026-09-04T21:00:14Z"
+      }
+    ],
+    "clock": {
+      "kickoff": "2026-09-04T19:05:12Z",
+      "halftime": "2026-09-04T19:52:15Z",
+      "second_half": "2026-09-04T20:09:15Z",
+      "end": "2026-09-04T21:00:14Z",
+      "end_minute": 96
+    },
+    "team_stats": {},
+    "ground": {
+      "venue": "Parc des Princes",
+      "attendance": 0,
+      "referee": "Jerome Brisard"
+    },
+    "lineup_status": "available",
+    "lineup_source": "ESPN",
+    "espn_event_id": "401876469",
+    "score": {
+      "fullTime": {
+        "home": "1",
+        "away": "2"
+      }
+    }
+  },
+  {
+    "id": 401876458,
+    "utcDate": "2026-09-12T15:15Z",
+    "competition": {
+      "name": "Ligue 1",
+      "code": "FL1"
+    },
+    "stage": "J4",
+    "status": "SCHEDULED",
+    "homeTeam": {
+      "name": "Strasbourg",
+      "abbreviation": "STR",
+      "color": "0000bf",
+      "alternateColor": "ffffff",
+      "logos": [
+        {
+          "href": "https://a.espncdn.com/i/teamlogos/soccer/500/180.png",
+          "width": 500,
+          "height": 500,
+          "alt": "",
+          "rel": [
+            "full",
+            "default"
+          ],
+          "lastUpdated": "2019-05-08T16:07Z"
+        },
+        {
+          "href": "https://a.espncdn.com/i/teamlogos/soccer/500-dark/180.png",
+          "width": 500,
+          "height": 500,
+          "alt": "",
+          "rel": [
+            "full",
+            "dark"
+          ],
+          "lastUpdated": "2019-05-08T16:07Z"
+        }
+      ],
+      "lineup": [],
+      "bench": [],
+      "formation": "",
+      "colour": "#8080DF",
+      "logo": "asset://logos/home-180.png"
+    },
+    "awayTeam": {
+      "name": "AS Monaco",
+      "abbreviation": "MON",
+      "color": "E91514",
+      "alternateColor": "004c37",
+      "logos": [
+        {
+          "href": "https://a.espncdn.com/i/teamlogos/soccer/500/174.png",
+          "width": 500,
+          "height": 500,
+          "alt": "",
+          "rel": [
+            "full",
+            "default"
+          ],
+          "lastUpdated": "2019-05-08T16:07Z"
+        },
+        {
+          "href": "https://a.espncdn.com/i/teamlogos/soccer/500-dark/174.png",
+          "width": 500,
+          "height": 500,
+          "alt": "",
+          "rel": [
+            "full",
+            "dark"
+          ],
+          "lastUpdated": "2019-05-08T16:07Z"
+        }
+      ],
+      "lineup": [],
+      "bench": [],
+      "formation": "",
+      "colour": "#EE504F",
+      "logo": "asset://logos/away-174.png"
+    },
+    "timeline": [],
+    "clock": {},
+    "team_stats": {},
+    "ground": {
+      "venue": "Stade de la Meinau",
+      "attendance": null,
+      "referee": ""
+    },
+    "lineup_status": "unavailable",
+    "lineup_source": "ESPN",
+    "espn_event_id": "401876458",
+    "score": {
+      "fullTime": {
+        "home": "",
+        "away": ""
+      }
+    }
+  }
+]

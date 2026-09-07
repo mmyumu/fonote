@@ -37,8 +37,11 @@ def events():
 
 
 def summary(home_colour='21304D', away_colour='ED1C24', away_alternate='FFFFFF', keyEvents=None):
-    colours = {'home': {'color': home_colour, 'id': '160'},
-               'away': {'color': away_colour, 'alternateColor': away_alternate, 'id': '174'}}
+    colours = {'home': {'color': home_colour, 'id': '160', 'abbreviation': 'PSG',
+                        'logos': [{'href': 'https://espn/160.png', 'rel': ['full', 'default']},
+                                  {'href': 'https://espn/160-dark.png', 'rel': ['full', 'dark']}]},
+               'away': {'color': away_colour, 'alternateColor': away_alternate, 'id': '174',
+                        'abbreviation': 'ASM', 'logos': [{'href': 'https://espn/174.png'}]}}
     return {'keyEvents': events() if keyEvents is None else keyEvents,
             'boxscore': {'teams': [
                 {'team': {'id': '160'}, 'statistics': [{'name': 'possessionPct', 'displayValue': '68.2'},
@@ -213,6 +216,24 @@ class EspnTest(unittest.TestCase):
         self.assertEqual(result['team_stats'], {})
         self.assertEqual(result['ground'], {'venue': '', 'attendance': None, 'referee': ''})
         self.assertEqual(result['homeTeam']['lineup'][0]['stats'], {})
+
+    def test_trigram_and_crest_travel_beside_the_composition(self):
+        result = self.adapter().enrich(fixture())
+        self.assertEqual(result['homeTeam']['abbreviation'], 'PSG')
+        self.assertEqual(result['awayTeam']['abbreviation'], 'ASM')
+        # The badge drawn for a dark background wins; a club with only one keeps that one.
+        self.assertEqual(result['homeTeam']['logo'], 'https://espn/160-dark.png')
+        self.assertEqual(result['awayTeam']['logo'], 'https://espn/174.png')
+
+    def test_a_club_without_trigram_or_crest_still_composes(self):
+        data = summary()
+        for roster in data['rosters']:
+            roster['team'].pop('abbreviation'), roster['team'].pop('logos')
+        result = self.adapter(data).enrich(fixture())
+        self.assertEqual(result['lineup_status'], 'available')
+        # Absent rather than empty: football-data's own `tla` keeps its say.
+        self.assertNotIn('abbreviation', result['homeTeam'])
+        self.assertNotIn('logo', result['homeTeam'])
 
     def test_club_colours_stay_readable_and_distinct(self):
         result = self.adapter().enrich(fixture())

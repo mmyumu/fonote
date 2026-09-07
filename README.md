@@ -1,5 +1,55 @@
 # Fonote
 
+## Navigation et recherche
+
+Trois cartes : **Mes matchs annotés** à gauche, **Accueil** au centre et **Calendrier** à droite.
+Depuis l’accueil, glisser vers la droite ouvre les matchs annotés ; vers la gauche, le calendrier.
+Les matchs annotés regroupent les rencontres avec au moins une note non supprimée, même terminées,
+y compris les démonstrations et les notes synchronisées. La recherche filtre équipes, compétition,
+date et texte des notes, sans distinction de casse ou d’accents. Un match dont les détails manquent
+reste accessible par son identifiant. Le calendrier dispose d’une recherche dans la semaine affichée,
+conservée lorsque l’on change de semaine. Les champs restent visibles au-dessus des listes.
+Les favoris de l’accueil montrent uniquement les matchs programmés, en cours ou à la pause ;
+les étoiles des matchs terminés sont conservées mais leurs cartes sont masquées à l’accueil.
+
+## Accueil personnalisé
+
+L’étoile d’un match dans le calendrier l’ajoute à **Mes matchs favoris** sur l’accueil ;
+un second appui le retire. Les favoris sont conservés sur cet appareil. Ajouter un favori
+lance aussi le téléchargement de son détail si le serveur répond, pour préparer les notes hors ligne.
+**Prochains matchs de mes clubs** affiche la rencontre à venir la plus proche pour chaque club choisi
+dans **Mes suivis**, sans doublonner une rencontre entre deux clubs suivis. Les matchs terminés,
+annulés, reportés ou déjà en cours sont exclus de cette section ; **Aujourd’hui** reste disponible.
+
+Le serveur expose `/v1/football/teams/{id}/matches`, vers le
+[calendrier d’un club de football-data.org](https://docs.football-data.org/general/v4/team.html#_matches).
+Le client demande l’année à venir (100 rencontres maximum par club), puis choisit le prochain match
+par date. Les réponses rejoignent les calendriers enregistrés pour l’usage hors ligne. Un club sans
+rencontre future connue est signalé, et les chargements réussis ne sont pas répétés avant cinq minutes
+au cours d’une même session. Redémarrer le serveur après cette mise à jour pour activer la nouvelle route.
+
+## Utilisation hors ligne
+
+L’application conserve automatiquement les calendriers consultés, les détails des matchs ouverts
+(compositions, faits et statistiques), le catalogue des compétitions consulté et les écussons affichés.
+L’accueil propose **Matchs enregistrés**, y compris en mode démo : cette liste reste accessible après
+fermeture de l’application, sans serveur, sans filtre de suivis ni limite de date. Un match connu
+seulement par son calendrier permet déjà de prendre des notes générales ; sa composition nécessite
+un premier téléchargement en ligne.
+
+Les copies locales s’affichent immédiatement. Hors mode démo, les calendriers sont actualisés en
+arrière-plan si le serveur répond ; les matchs ouverts le sont également, sans remplacer une note
+en cours. Les données peuvent rester anciennes hors ligne. Une réponse sans composition ne supprime
+pas une composition déjà enregistrée. Les matchs d’une même période sont fusionnés par identifiant,
+et chaque détail est remplacé à son actualisation, sans historique des réponses. Les matchs enregistrés
+ne sont pas purgés automatiquement. Les notes restent dans leur journal SQLite indépendant ; la
+migration conserve les notes existantes et leur état de synchronisation. La synchronisation des notes
+avec les autres appareils reste manuelle et nécessite le serveur et son jeton.
+
+Vérification sur émulateur démarré : `bash scripts/check-offline-android.sh` (sans dépendance de test à télécharger).
+Les contrôles utilisent une base de test séparée : migration depuis la version 1, conservation des
+notes, réouverture, calendriers chevauchants, conservation des compositions et transactions invalides.
+
 ## Compositions ESPN (usage personnel)
 
 Le calendrier utilise la clé `FOOTBALL_DATA_TOKEN` du `.env`. À l’ouverture d’un match,
@@ -25,6 +75,16 @@ du fournisseur (`possessionPct`, `wonCorners`…) : les nommer en français est 
 comme pour les codes de compétition. Rien de tout cela n’entre dans le journal d’opérations :
 les faits du fournisseur s’affichent à côté des notes, jamais dedans, pour que le bilan continue
 de ne mesurer que ce qui a été relevé.
+
+Le trigramme du club et son écusson voyagent avec la composition, dans `abbreviation` et `logo`
+de chaque équipe. Ils viennent d’ESPN et se posent à côté des `tla` et `crest` de football-data,
+jamais par-dessus : les deux fournisseurs ne disent pas la même chose — `TRY` contre `ETR` pour
+Troyes, et un `RC ` complété d’une espace pour Strasbourg — et c’est au client de choisir. Il
+préfère ESPN, dont les trois lettres se lisent mieux, et retombe sur football-data pour une
+compétition qu’ESPN ne couvre pas. Des deux écussons, seul celui d’ESPN est toujours une image
+matricielle ; football-data sert la moitié des siens en SVG, que `BitmapFactory` ne lit pas.
+L’écusson choisi est celui qu’ESPN dessine pour un fond sombre quand il en publie un — les deux
+fichiers sont souvent identiques, mais la note se dessine sur une pelouse de nuit. Le client conserve les écussons téléchargés sur disque, à la taille d’affichage, pour les retrouver hors ligne.
 
 Les compositions indisponibles ou les erreurs du fournisseur n’empêchent plus d’ouvrir
 les notes générales. Les positions sur le terrain sont schématiques, pas des positions
@@ -96,16 +156,15 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
   sur le terrain. Seule la surface change, et elle prend tout l'écran — un tableau qui partage la
   place avec un panneau est un tableau sur lequel on ne peut pas dessiner.
   - Deux plateaux : **terrain vierge**, où l'on pose les trois ou quatre joueurs qui comptent
-    (« + Joueur » les place à leur poste réel, y compris un remplaçant à la place qu'il occupe à
+    (les boutons « + équipe » les placent à leur poste réel, y compris un remplaçant à la place qu'il occupe à
     cette minute, et la suite du geste est une correction plutôt qu'un placement à partir de rien),
     et **terrain complet**, les 22 dans leur formation, qu'on déplace. On passe de l'un à l'autre à
-    tout moment ; vider le terrain se rattrape par `↶`. Un pion sans nom — « Pion — Strasbourg »,
-    « Pion — sans équipe » — sert pour l'adversaire dont le seul rôle est d'avoir été éliminé.
-  - Deux outils explicites plutôt qu'un geste malin : `↔ Déplacer` traîne les joueurs, les quatre
+    tout moment ; vider le terrain se rattrape par `↶`. Un pion sans nom — « Pion — Strasbourg » — sert pour l'adversaire dont le seul rôle est d'avoir été éliminé.
+  - Sans outil sélectionné, glisser déplace les joueurs ; les quatre
     tracés dessinent. Un doigt qui glisse est ambigu — « il était plus à gauche » ou « le ballon est
     parti là-bas » — et deviner faux coûte soit un tracé perdu, soit un joueur déplacé qui était
     bien placé. Le dire coûte un tap avant une série de tracés et ne coûte jamais une erreur.
-  - **Déplacement par lots.** En mode Déplacer, glisser sur la pelouse **vide** encadre : tous les
+  - **Déplacement par lots.** Sans outil sélectionné, glisser sur la pelouse **vide** encadre : tous les
     joueurs pris dans le rectangle sont sélectionnés, et glisser l'un d'eux les emmène tous. Un
     schéma est très souvent un bloc — une défense qui remonte, un milieu qui coulisse — et les
     bouger un par un est la façon la plus sûre de renoncer au dessin. Le geste était libre : dans
@@ -136,12 +195,63 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
   - Quatre tracés, distingués par la **forme** du trait et jamais par sa couleur — la couleur nomme
     déjà une équipe : passe (trait plein), course sans ballon (pointillés), conduite de balle
     (ondulé), tir (trait double). Chacun part d'un ballon sauf la course, qui se fait sans lui.
+    Quatre des cinq marques de la palette (passe, course, tir, gomme) sont des `VectorDrawable`
+    du projet, dessinés comme le tableau dessine : le trait plein et sa pointe, les pointillés,
+    les deux rails. La cinquième est le ⚽ du système, gardé parce qu'aucun ballon tracé d'un
+    seul trait ne fait un ballon — un pentagone dans un cercle se lit comme une cible, avec ses
+    coutures comme une roue. Toutes tiennent dans le même carré de 20 dp, quelle que soit leur
+    matière : la marque est posée là comme une image et non dans la ligne de texte, sinon les
+    cinq cases ne s'alignaient pas — un glyphe pend à une ligne de base et laisse dessous le
+    jambage d'une lettre que personne n'a écrite, et un emoji remplit son cadratin quand une
+    flèche y laisse de l'air. Le ⚽ est réglé sur l'encre de ses voisines, pas sur la boîte, sans
+    quoi il écrase la rangée. Le couple marque + nom est posé deux dp sous le milieu de la case :
+    exactement centré, il paraît haut, le nom réservant sous sa ligne de base la place d'un
+    jambage qu'aucun des cinq mots n'a — l'encre s'arrête avant le bas, la boîte non, et c'est
+    l'encre qu'on lit.
     Le trait suit le doigt : un glissé droit donne une droite, un glissé courbe garde sa courbe.
-  - Les deux bouts d'un tracé **s'aimantent** au joueur qui se trouve à côté, donc « de Ripart vers
-    Yassine » est exact sans viser au pixel ; le trait est ensuite reculé du disque qu'il touche,
-    sinon la pointe de flèche disparaît sous le joueur qu'elle désigne. Un tracé garde les
-    coordonnées avec lesquelles il a été dessiné : un schéma enregistre où le ballon est allé à un
-    instant, pas un lien qui suivrait un joueur.
+    Le tremblement du doigt, lui, ne survit pas : chaque point relevé entre les deux bouts est
+    ramené deux fois à mi-chemin du milieu de ses voisins, ce qui efface exactement ce qui alterne
+    d'un échantillon au suivant — la définition d'un tremblement. Le déplacement est plafonné à un
+    centième de terrain, donc un angle voulu est arrondi et non coupé, et les deux bouts ne bougent
+    jamais : ce sont les joueurs auxquels le tracé s'est aimanté. Le lissage se fait au tracé
+    (`Track.eased`) et non à l'enregistrement, si bien que le ballon et le joueur suivent la ligne
+    même que le tableau dessine, et que les notes prises avant se relisent comme celles d'après.
+  - Le départ d'un tracé **s'aimante** au joueur qui se trouve à côté, et l'arrivée aussi quand
+    c'est le ballon qui voyage : « de Ripart vers Yassine » est ainsi exact sans viser au pixel,
+    et la passe part bien des pieds de Yassine à l'instant où il la reçoit. **L'arrivée d'une
+    course, elle, ne s'aimante pas** : elle se pose là où le doigt s'est levé. Un joueur qui court
+    le long d'un partenaire ne lui est pas rentré dedans, et le déposer pile sur lui met deux
+    maillots sur le même brin d'herbe — un placement que personne n'a demandé. Le trait est ensuite
+    reculé du disque qu'il touche, sinon la pointe de flèche disparaît sous le joueur qu'elle
+    désigne. Un tracé garde les coordonnées avec lesquelles il a été dessiné : un schéma enregistre
+    où le ballon est allé à un instant, pas un lien qui suivrait un joueur.
+  - Les deux boutons qui ajoutent un joueur portent l’écusson du club et son trigramme — « PSG »,
+    « MON » — là où son nom n’a jamais tenu : un quart de cette rangée fait une soixantaine de
+    dp, et « Paris Saint-Germain » s’y termine en « Paris Sain… ». Le nom complet reste dit à qui
+    écoute l’écran. L’écusson rejoint les trois lettres quand il arrive : une note s’ouvre bien
+    avant qu’une image se charge, et le bouton n’attend pas après elle pour être utilisable.
+  - Les pastilles du tableau tactique sont nettement plus petites que celles du terrain : 22 dp au
+    lieu de 32. Un joueur mesure un mètre sur une pelouse de 68, soit cinq dp — une pastille à
+    l'échelle serait un point, et elle a un numéro à porter. Vingt-deux dp valent encore trois
+    fois un homme, mais quatre joueurs dans un coin restent quatre joueurs et une passe entre
+    voisins reste une passe, ce que trente-deux — six bons mètres de gazon — ne permettait pas.
+    Le ballon et son décalage suivent la même réduction ; le terrain de l'écran match, lui, ne
+    change pas : on y désigne un joueur du doigt, on n'y dessine pas. Les rayons de préhension
+    (26 dp) et d'aimantation (34 dp) sont indépendants du dessin et restent à la taille d'un
+    doigt.
+  - **↶**, dans la barre de la note, annule le dernier geste : un tracé raté, un joueur déplacé
+    par erreur, une gomme qui a pris le joueur au lieu de la ligne. Le journal enregistre bien
+    chaque état — c'est ce que le ↶ de l'écran match remonte — mais pas pendant qu'une note est
+    encore ouverte, et il faudrait quitter la note pour annuler un trait qu'on vient d'y faire.
+    L'historique garde donc les schémas entiers, quarante pas au plus : un schéma est borné par
+    construction (trente pions, quarante tracés, cent vingt clés), un pas coûte quelques kilo-octets,
+    et rien ne peut se désynchroniser du tableau comme le ferait une opération inverse écrite à la
+    main. Le pas est pris **après** le changement, puisque tout changement passe par le même
+    point : l'état d'avant est simplement celui du passage précédent. Un changement qui laisse le
+    schéma identique n'est pas un pas, sinon il faudrait appuyer deux fois. Chaque note s'ouvre
+    sur son propre historique, et le bouton s'éteint quand il n'y a plus rien à reprendre. Le
+    retour en arrière s'écrit dans le journal comme n'importe quel changement : là aussi,
+    l'annulation écrit l'opération qui compense.
   - Toucher un joueur du tableau ouvre la palette complète pour lui, ou « Aucune action ». Ce qui
     est sur le tableau **est** la note : gommer un joueur emporte l'action qu'on lui avait donnée.
   - Pas de bouton d'enregistrement ici non plus : chaque tracé, chaque déplacement, chaque gomme
@@ -152,6 +262,19 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
   ne dit presque rien d'un moment dont tout l'intérêt était la ligne prise par le ballon. La carte
   porte donc le tableau lui-même, en petit, et la toucher rouvre le tableau — la boîte de dialogue
   que toute autre note ouvre au toucher est ici sur l'appui long.
+- Une note qui ne porte qu'un schéma se résume par **la dernière action de la séquence** —
+  « 17 Vitinha passe à 29 P. Brunner », « Frappe de 9 Mbappé », « Conduite de 10 Golovin »,
+  « Course de 2 Hakimi » — au lieu du mot « Schéma », qui nommait la chose sans rien en dire : on
+  relit une liste de moments pour en retrouver un, et tous les moments dessinés se ressemblaient.
+  La dernière, parce que trois bonnes passes et une frappe se retiennent comme la frappe, et
+  qu'un schéma est dessiné vers son dernier geste quoi qu'il raconte avant. Tout se pèse sur
+  l'horloge que la séquence tient déjà, donc une course faite après la passe a le dernier mot
+  aussi bien que le ballon ; à instant égal, c'est le ballon qui nomme, puisque c'est lui que
+  l'œil suit. Jamais la séquence entière : une ligne dans une liste n'est pas une séquence, et la
+  note est à un doigt de là. La conduite se lit sur le ballon, exactement comme le tableau la lit
+  pour choisir entre un trait pointillé et un trait ondulé ; les vieux schémas, dont les tracés
+  n'appartiennent à personne, se nomment par leur forme seule (« Passe », « Tir »), et un tableau
+  où l'on n'a fait que poser des joueurs annonce leur nombre.
 - Le résumé d'une note suit toujours le même ordre, quel que soit l'ordre de saisie : le plus fort d'abord, le bon avant le mauvais, départages par l'ordre de la palette. Il se déduit des poids d'actions, sans table supplémentaire, et s'applique au rendu seulement — le journal garde l'ordre réel de saisie, donc changer d'avis sur cet ordre ne réécrit aucune note.
 - Le geste retour défait l'écran courant au lieu de quitter : il ferme la note ouverte en la gardant, puis ramène de « Notes » ou « Bilan » au match, et ne sort de l'application qu'en dernier recours.
 - Retirer un joueur de la note se fait par **appui long sur le terrain**, là où on l'a mis — la croix de sa pastille fait la même chose. Un tap sur un joueur déjà dans la note vise sa ligne pour corriger son action, ce qui interdisait le double-clic. Retirer le dernier joueur d'une note l'efface.
@@ -261,6 +384,11 @@ Le premier script compile et lance Lint ; le second ouvre Android Studio sur le 
 
 APK : `android/app/build/outputs/apk/debug/app-debug.apk`. L'application cible actuellement API 34 pour ce prototype et fonctionne à partir d'Android 8 (API 26) ; publication Play Store hors périmètre.
 
+Le mode **Démo hors ligne** est activé par défaut dans les Options. L'accueil propose alors deux
+matchs locaux : PSG–Monaco (terminé, 1–2, 4 septembre 2026) et Strasbourg–Monaco (à venir, 12 septembre
+2026 à 17 h 15). Aucun serveur ni réseau n'est nécessaire pour les ouvrir et y prendre des notes.
+Décochez ce mode dans Options pour utiliser un serveur personnel configuré.
+
 Pour utiliser les outils dans un terminal :
 
 ```bash
@@ -291,7 +419,7 @@ Compatibilité de l'outillage : [AGP 8.7 / Gradle 8.9 / JDK 17](https://develope
 ```bash
 python3 -m unittest discover -s backend -v
 source scripts/android-env.sh
-javac -d /tmp/fonote-checks android/app/src/main/java/fr/fonote/{Formation,Lineup,MatchClock,PlayerName}.java android/checks/fr/fonote/*.java
+javac -d /tmp/fonote-checks android/app/src/main/java/fr/fonote/{Formation,Lineup,MatchClock,PlayerName}.java android/checks/fr/fonote/{Formation,Lineup,MatchClock,PlayerName}Check.java
 for check in Formation Lineup MatchClock PlayerName; do java -ea -cp /tmp/fonote-checks fr.fonote.${check}Check; done
 ```
 
@@ -325,7 +453,9 @@ Une opération possède `id` (UUID), `note_id` (UUID) et `kind`. Étendre une no
   est une note qui se trouve aussi être dessinée, et le journal ne connaît qu'une sorte de note.
   Un pion vaut `{player_id, x, y}` pour un joueur du match, ou `{team, label?, x, y}` avec `team`
   parmi `home`, `away`, `neutral` pour un pion sans nom ; un tracé vaut `{kind, points}` avec `kind`
-  parmi `pass`, `run`, `carry`, `shot` et 2 à 32 couples de coordonnées. Les coordonnées sont des
+  parmi `pass`, `run`, `carry`, `shot` et 2 à 32 couples de coordonnées. `carry` n'est plus écrit —
+  une course du porteur du ballon est une conduite, déduite du ballon — mais le journal étant
+  immuable, il reste accepté en lecture. Les coordonnées sont des
   fractions du terrain (0 à 1), l'équipe recevante attaquant vers le bas — le repère dans lequel
   `match.json` écrit déjà sa composition. Bornes : 30 pions, 40 tracés. Volontairement de la
   géométrie et rien d'autre : un pion nomme un joueur et s'arrête là, donc rien ici ne peut
@@ -344,3 +474,90 @@ python3 -c "import sqlite3; source=sqlite3.connect('fonote.sqlite3'); target=sql
 ## Prochaines étapes
 
 Validation sur téléphone et matchs personnels. Les suivis et les statistiques du fournisseur sont en place ; l’interface Quest ne l’est pas encore. Aucune donnée de fournisseur n'est collectée ni archivée à ce stade ; les notes originales restent indépendantes de leurs éventuelles conditions de conservation.
+
+## Séquences tactiques et positions clés
+
+Dans une note tactique, la barre indique le temps écoulé **dans l’action**, indépendamment de
+la minute du match. Toucher le temps permet de saisir un instant précis. Chaque joueur possède
+ses propres positions clés ; les repères dans la barre indiquent celles du joueur sélectionné
+(ou du ballon avec l’outil Ballon). Un toucher sur un repère rejoint sa position ; un appui long
+le supprime. Déplacer le doigt annule la suppression — et reprend le déplacement du temps, plutôt
+que d’immobiliser le doigt jusqu’à ce qu’il se lève.
+
+La barre est peinte par le client, pas habillée : un rectangle de la largeur de la rangée, rempli
+jusqu’au temps courant, les positions clés dressées dedans, et le temps courant en un rectangle
+plus haut que la barre et plus clair qu’un repère. Le curseur de la plateforme n’en garde que
+l’arithmétique. Il apportait deux choses dont la rangée ne voulait pas : la pastille ronde d’un
+écran de réglages, et une piste posée là où le remplissage de son dessin la mettait — dix dp
+au-dessus des boutons qui l’encadrent, sans moyen de l’aligner sur eux.
+
+- Chaque équipe a son bouton **+**, qui propose uniquement ses joueurs présents à la minute de
+  la note et pas encore placés, par numéro croissant, puis un pion générique de cette équipe.
+  Le pion sans équipe n’est plus proposé.
+- **Sans outil sélectionné**, le terrain sert à sélectionner et repositionner les joueurs, sans
+  créer de clé ni de flèche. Retoucher l’outil actif le désélectionne.
+  Si un joueur possède déjà une trajectoire, son placement et toute sa trajectoire sont décalés
+  ensemble, en conservant les temps. Cela fonctionne aussi pour une sélection de plusieurs joueurs.
+  Pour le faire attendre avant un appel, fixer une position au début de l’appel avec **◆ Positions**,
+  puis tracer sa **Course**.
+- **↝** donne la durée du prochain trajet, et vaut **auto** par défaut : la durée se déduit alors
+  de la longueur du trait, à l’allure de ce qu’il représente — une passe à 15 m/s, un tir à 25,
+  un joueur qui court à 6,5. Un terrain fait 105 mètres sur 68, donc une fraction du tableau vaut
+  plus dans la longueur que dans la largeur, et les deux axes sont pesés séparément avant que la
+  distance ne devienne un temps. La longueur mesurée est celle qui sera parcourue — la polyligne
+  lissée, pas la corde entre les deux bouts — si bien qu’une course qui contourne un adversaire
+  prend le temps qu’elle fait. Rien n’est chronométré dans une action qu’on note de mémoire, mais
+  un ballon long est plus lent qu’un une-deux et une course de trente mètres n’est pas celle de
+  deux : le trait le dit déjà. Les durées fixes (0,5 à 10 s) restent là pour la séquence qui doit
+  être exacte, et le choix est retenu d’une note à l’autre.
+- **Course** enregistre un trajet depuis un joueur, entre le curseur et la fin de la durée choisie
+  avec **↝**. Le curseur avance à l’arrivée. Revenir en arrière permet de tracer l’appel simultané
+  d’un autre joueur. Un trajet contenant déjà des clés intermédiaires est refusé pour éviter de les
+  écraser.
+- Il n’y a pas d’outil **Conduite** : une course est dessinée pointillée, et ondulée si le joueur a
+  le ballon dans les pieds pendant tout le trajet. Le ballon suit déjà son porteur, donc c’est lui
+  qui décide, pas l’outil choisi. Un ballon frappé au départ du trajet est déjà parti — c’est une
+  course ; frappé à l’arrivée, il a été conduit jusque-là.
+- **Ballon** permet de donner le ballon à un joueur, ou de le placer librement sur le terrain :
+  c’est ainsi qu’on met le ballon dans les pieds d’un joueur avant de lui tracer une conduite.
+  Un ballon tenu se dessine du côté où son porteur va le jouer, pas toujours à sa droite : un
+  décalage fixe ne dit rien, et il le dit même quand le jeu part à gauche. Jamais sous lui, en
+  revanche — c’est là qu’est écrit son nom, et un nom à moitié couvert par un ballon est pire
+  qu’un ballon du mauvais côté : une passe vers le bas pose donc le ballon à côté du joueur, du
+  côté où elle part. Le ballon d’un joueur qui le conduit, ou qui le garde jusqu’à la fin, se
+  pose au-dessus de lui — le seul côté que la plaque du nom laisse libre. Un ballon que personne
+  ne tient reste où il est.
+  Une **Passe** vers un joueur vise sa position à la réception et lui donne ensuite le ballon.
+  Un **Tir** termine sur un point libre.
+- **▶** lit la séquence, et le temps se lit à côté — toucher ce temps permet de saisir un instant
+  précis. Il est écrit dans la lettre des boutons de la rangée, demi-grasse en 13, et non dans
+  celle qu’un `TextView` nu prend par défaut : la romaine du système en 14 mettait deux polices
+  dans la même rangée. Comme il répond au doigt, il répond aussi à l’appui, la règle de toutes
+  les surfaces cliquables ici. **◆ Positions** permet de retrouver, ajouter, supprimer ou changer le
+  temps d’une clé. La gomme retire un joueur, une passe ou la position d’arrivée du trajet touché.
+
+Les temps sont enregistrés en dixièmes de seconde, jusqu’à 120 secondes, avec au plus 120 clés
+par piste. Ils décrivent la séquence saisie ; les durées proposées pour dessiner ne sont pas des
+mesures automatiques du match. Ces trajectoires préparent une future heatmap des actions notées ;
+la heatmap elle-même n’est pas encore calculée.
+
+Le schéma `version: 2` conserve `board`, `tokens`, `shapes` (anciens tracés statiques), et ajoute
+`ball`. Chaque pion reçoit un `id` stable dans le schéma et une liste `keys`. Chaque clé contient
+`t` (dixièmes de seconde), `x`, `y`, et éventuellement `path` (trajet arrivant à cette clé). Seules
+les clés du ballon portent `kind`, ainsi que `owner` (identifiant du pion) et `flight` (trajet vers
+la clé suivante, sinon position libre ou suivi du porteur) ; un `kind` laissé par un ancien client
+sur la piste d’un joueur est ignoré à la lecture. Les pistes sont triées et leurs temps
+uniques. Les anciens schémas sans version restent acceptés et sont convertis lors de l’édition.
+Le serveur mis à jour accepte ces schémas et des opérations jusqu’à 4 Mio ; il doit être mis à jour
+avant de synchroniser les nouvelles séquences. Un ancien client ne sait pas conserver ces pistes
+lors d’une réédition : mettre les clients à jour ensemble.
+
+Vérification des pistes et de leur sérialisation (avec une bibliothèque `org.json` disponible) :
+
+```bash
+source scripts/android-env.sh
+FONOTE_JSON_JAR="$FONOTE_ROOT/.tooling/android-studio/plugins/grazie/lib/org.json-json.jar"
+javac -cp "$FONOTE_JSON_JAR" -d /tmp/fonote-checks android/app/src/main/java/fr/fonote/{Track,Diagram}.java android/checks/fr/fonote/{Track,Diagram}Check.java
+java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.TrackCheck
+java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.DiagramCheck json
+```

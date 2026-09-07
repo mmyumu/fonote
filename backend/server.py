@@ -29,6 +29,8 @@ ACTIONS = {'positive', 'goal', 'assist', 'pass', 'dribble', 'shot_on', 'defense'
            'duel_lost', 'save_missed', 'yellow', 'red'}
 # What a stroke on a tactical schema can mean. Meaning is carried by the shape of the line the
 # client draws — solid, dashed, waved, doubled — never by a colour, which already names a team.
+# 'carry' is no longer written: a run made by the player holding the ball is drawn waved, read
+# off the ball itself. The journal being immutable, what was written before is still accepted.
 STROKES = {'pass', 'run', 'carry', 'shot'}
 # Bounds a hand-drawn schema stays well inside; anything past them is a client gone wrong,
 # not a moment of football. Twenty-two players is the whole pitch.
@@ -82,6 +84,12 @@ def football_path(route, query):
     parts = route.strip('/').split('/')
     if len(parts) == 5 and parts[:3] == ['v1', 'football', 'competitions'] and parts[4] == 'teams':
         return 'competitions/' + urllib.parse.quote(parts[3], safe='') + '/teams'
+    if (len(parts) == 5 and parts[:3] == ['v1', 'football', 'teams']
+            and parts[3].isdigit() and parts[4] == 'matches'):
+        allowed = {key: values[-1] for key, values in query.items()
+                   if key in {'dateFrom', 'dateTo', 'limit'} and values}
+        return 'teams/' + parts[3] + '/matches' + (
+            ('?' + urllib.parse.urlencode(allowed)) if allowed else '')
     if len(parts) == 4 and parts[:3] == ['v1', 'football', 'matches'] and parts[3].isdigit():
         return 'matches/' + parts[3]
     return None
@@ -149,13 +157,44 @@ def fraction(value):
     return value
 
 
+def validate_keys(keys, ids, ball=False):
+    if not isinstance(keys, list) or len(keys) > 120:
+        raise ValueError('Positions clés invalides')
+    previous = -1
+    for key in keys:
+        allowed = {'t', 'x', 'y', 'path', 'kind'} | ({'owner', 'flight'} if ball else set())
+        if not isinstance(key, dict) or not {'t', 'x', 'y'} <= key.keys() or not key.keys() <= allowed:
+            raise ValueError('Position clé invalide')
+        if type(key['t']) is not int or not previous < key['t'] <= 1200:
+            raise ValueError('Temps invalide')
+        previous = key['t']
+        fraction(key['x'])
+        fraction(key['y'])
+        if 'kind' in key and key['kind'] not in STROKES:
+            raise ValueError('Trajet inconnu')
+        if 'owner' in key and (not isinstance(key['owner'], str) or key['owner'] not in ids):
+            raise ValueError('Porteur inconnu')
+        if 'flight' in key and type(key['flight']) is not bool:
+            raise ValueError('Trajet de ballon invalide')
+        if 'path' in key:
+            if not isinstance(key['path'], list) or not 2 <= len(key['path']) <= MAX_POINTS:
+                raise ValueError('Trajet invalide')
+            for point in key['path']:
+                if not isinstance(point, list) or len(point) != 2:
+                    raise ValueError('Point invalide')
+                fraction(point[0])
+                fraction(point[1])
+
+
 def validate_schema(schema):
     """The geometry of a tactical note: who stands where, and the run of play between them.
 
     Deliberately geometry alone. A token names a player and stops there, so nothing here can
     disagree with the composition, the bilan or the journal about who he is or what he did.
     """
-    if not isinstance(schema, dict) or set(schema) != {'board', 'tokens', 'shapes'}:
+    versioned = isinstance(schema, dict) and type(schema.get('version')) is int and schema.get('version') == 2
+    expected = {'board', 'tokens', 'shapes', 'version', 'ball'} if versioned else {'board', 'tokens', 'shapes'}
+    if not isinstance(schema, dict) or set(schema) != expected:
         raise ValueError('Schéma invalide')
     if schema['board'] not in {'blank', 'full'}:
         raise ValueError('Terrain inconnu')
@@ -164,8 +203,18 @@ def validate_schema(schema):
         raise ValueError('Joueurs du schéma invalides')
     if not isinstance(shapes, list) or len(shapes) > MAX_SHAPES:
         raise ValueError('Tracés du schéma invalides')
+    ids = set()
+    if versioned:
+        for token in tokens:
+            if not isinstance(token, dict) or not isinstance(token.get('id'), str) or not 1 <= len(token['id']) <= 64 or token['id'] in ids:
+                raise ValueError('Identifiant de pion invalide')
+            ids.add(token['id'])
+        validate_keys(schema['ball'], ids, ball=True)
     known = {p['id'] for p in json.loads(DEMO.read_text())['players']}
     for token in tokens:
+        if versioned:
+            validate_keys(token.get('keys'), ids)
+            token = {k: v for k, v in token.items() if k not in {'id', 'keys'}}
         if not isinstance(token, dict) or not {'x', 'y'} <= set(token):
             raise ValueError('Joueur du schéma invalide')
         fraction(token['x'])
@@ -277,7 +326,7 @@ def make_server(host, port, path, token, football_token=None):
                 return self.reply(404, {'error': 'Route inconnue'})
             try:
                 length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= 16384:
+                if not 0 < length <= 4 * 1024 * 1024:
                     return self.reply(413, {'error': 'Taille de requête invalide'})
                 op = json.loads(self.rfile.read(length))
                 with connect(path) as db:

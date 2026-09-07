@@ -1,9 +1,11 @@
 package fr.fonote;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 
@@ -17,6 +19,10 @@ import android.widget.LinearLayout;
  * should not need a gesture across the whole display. Anything that scrolls sideways inside a
  * page — the action palette, the row of players in a note — claims the gesture for itself by
  * asking its parents not to intercept, so the two never fight over the same finger.
+ *
+ * <p>Which page shows is decided here and nowhere else: a scroller normally slides sideways to
+ * reveal whatever descendant asks for it, which would carry the reader off to another card the
+ * moment a field there took the caret back.
  */
 final class Pager extends HorizontalScrollView {
     /** How far a page must be dragged before releasing it means "turn". */
@@ -50,16 +56,37 @@ final class Pager extends HorizontalScrollView {
         page = target;
         int x = target * getWidth();
         if (smooth) smoothScrollTo(x, 0); else scrollTo(x, 0);
-        if (turned && watcher != null) watcher.run();
+        if (!turned) return;
+        // The page left behind keeps the caret otherwise, and the keyboard goes on writing into
+        // a search field nobody can see any more.
+        clearFocus();
+        InputMethodManager keyboard =
+            (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(getWindowToken(), 0);
+        if (watcher != null) watcher.run();
     }
 
-    @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
-        super.onSizeChanged(width, height, oldWidth, oldHeight);
-        if (width == oldWidth) return;
+    /**
+     * A page never drags the pager to itself. Focus, a moving caret or a keyboard opening all ask
+     * the nearest scroller to reveal a rectangle; left alone, a field on the card next door would
+     * slide that card into view as if the reader had asked for it.
+     */
+    @Override protected int computeScrollDeltaToGetChildRectOnScreen(Rect rect) { return 0; }
+
+    @Override protected void onMeasure(int widthSpec, int heightSpec) {
+        // A page is exactly a screen wide, and it has to be that wide before the track is
+        // measured: a track no wider than the window has nowhere to scroll, and every page but
+        // the first is then unreachable.
+        int width = MeasureSpec.getSize(widthSpec);
         for (int i = 0; i < pages(); i++) track.getChildAt(i).getLayoutParams().width = width;
-        track.requestLayout();
-        // The scroll position means nothing until the pages have their new width.
-        post(() -> scrollTo(page * getWidth(), 0));
+        super.onMeasure(widthSpec, heightSpec);
+    }
+
+    @Override protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        // Where a page rests is only knowable once it has its width, so the page asked for before
+        // the first layout — the home card, on the way in — is placed here rather than there.
+        if (changed) scrollTo(page * getWidth(), 0);
     }
 
     @Override public boolean onTouchEvent(MotionEvent event) {
