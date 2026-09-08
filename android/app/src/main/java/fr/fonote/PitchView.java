@@ -32,6 +32,8 @@ final class PitchView extends FrameLayout {
     private final JSONObject match;
     /** Which of the two looks the player picked in the options. */
     private final boolean glass;
+    /** The two ends of the ring a player is lifted in while a note holds him. */
+    private final int held, heldEnd;
     private final java.util.Map<String,Integer> colours = new java.util.HashMap<>();
     /** What each player carries right now: an action symbol while composing, a mark otherwise. */
     private java.util.Map<String,String> marks = new java.util.HashMap<>();
@@ -47,10 +49,10 @@ final class PitchView extends FrameLayout {
     private final java.util.List<JSONObject> roster = new java.util.ArrayList<>();
     private final java.util.List<LinearLayout> markers = new java.util.ArrayList<>();
     private final java.util.List<TextView> labels = new java.util.ArrayList<>();
-    PitchView(Context context, JSONObject match, boolean glass, int minute,
+    PitchView(Context context, JSONObject match, boolean glass, int held, int heldEnd, int minute,
               Consumer<String> select, Consumer<String> pull) {
         super(context);
-        this.match = match; this.glass = glass;
+        this.match = match; this.glass = glass; this.held = held; this.heldEnd = heldEnd;
         setWillNotDraw(false);
         grass = new Pitch(context);
         setBackground(Pitch.turf(20, getResources().getDisplayMetrics().density));
@@ -153,18 +155,26 @@ final class PitchView extends FrameLayout {
      *
      * <p>Static because the options screen shows the same shirt it is offering, drawn by this code
      * rather than by a picture of it that could drift.
+     *
+     * <p>The grass and the shirts belong to the match, so no theme touches them; the ring that
+     * lifts a player out of them belongs to the application, and carries the reader's accent —
+     * paler again for the one player the palette is about to qualify.
      */
-    static Drawable shirt(Context context, boolean glass, int base, boolean active, boolean lifted) {
+    static Drawable shirt(Context context, boolean glass, int base, boolean active, boolean lifted,
+                          int held, int heldEnd) {
         float density = context.getResources().getDisplayMetrics().density;
         int inset = Math.round(density * FACE);
-        int ring = active ? Color.rgb(213, 255, 170) : lifted ? Color.rgb(207, 240, 160) : base;
+        int ring = active ? Skin.paler(held) : lifted ? held : base;
+        // A skin that signs with a gradient spends it here and nowhere else.
+        boolean signed = (active || lifted) && heldEnd != held;
         GradientDrawable front = new GradientDrawable();
         front.setShape(GradientDrawable.OVAL);
         if (!glass) {
             front.setColor(lifted ? Color.WHITE : base);
             front.setStroke(Math.round(density * (active ? 3 : lifted ? 2 : 1)),
                 active || lifted ? ring : Color.argb(110, 255, 255, 255));
-            return new InsetDrawable(front, inset);
+            return signed ? signature(front, density, inset, active, held, heldEnd)
+                : new InsetDrawable(front, inset);
         }
         if (lifted) front.setColor(Color.WHITE);
         else front.setColors(new int[]{Color.argb(234, 22, 48, 40), Color.argb(234, 10, 26, 22)});
@@ -175,8 +185,28 @@ final class PitchView extends FrameLayout {
         halo.setGradientRadius(density * SHIRT * .5f);
         halo.setColors(new int[]{Color.argb(active || lifted ? 150 : 120,
             Color.red(ring), Color.green(ring), Color.blue(ring)), Color.TRANSPARENT});
+        if (signed) return signature(front, density, inset, active, held, heldEnd);
         LayerDrawable stack = new LayerDrawable(new Drawable[]{halo, front});
         stack.setLayerInset(1, inset, inset, inset, inset);
+        return stack;
+    }
+    /**
+     * The shirt inside a ring painted right round it, one colour turning into the other and back.
+     * A band rather than a stroke, because a stroke carries one colour: the disc is set inside a
+     * sweep-filled oval and what shows past its edge is the ring. It replaces the halo where
+     * there was one — a gradient ring is already the light behind the player.
+     */
+    private static Drawable signature(GradientDrawable front, float density, int inset,
+                                      boolean active, int held, int heldEnd) {
+        GradientDrawable band = new GradientDrawable();
+        band.setShape(GradientDrawable.OVAL);
+        band.setGradientType(GradientDrawable.SWEEP_GRADIENT);
+        band.setColors(new int[]{held, heldEnd, held});
+        front.setStroke(0, Color.TRANSPARENT);
+        int width = Math.round(density * (active ? 3.5f : 2.5f));
+        LayerDrawable stack = new LayerDrawable(new Drawable[]{band, front});
+        stack.setLayerInset(0, inset, inset, inset, inset);
+        stack.setLayerInset(1, inset + width, inset + width, inset + width, inset + width);
         return stack;
     }
     /**
@@ -205,7 +235,7 @@ final class PitchView extends FrameLayout {
             Integer tint = tints.get(id);
             int base = colours.get(player.optString("team"));
             TextView shirt = (TextView)marker.getChildAt(0);
-            shirt.setBackground(shirt(getContext(), glass, base, active, lifted));
+            shirt.setBackground(shirt(getContext(), glass, base, active, lifted, held, heldEnd));
             // Glass owes its depth to the halo; a painted disc still wants its shadow.
             shirt.setElevation(glass ? 0 : dp(2));
             shirt.setTextColor(glass && !lifted ? base : Color.rgb(15, 35, 33));

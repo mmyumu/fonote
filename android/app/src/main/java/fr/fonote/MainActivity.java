@@ -46,11 +46,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
 public class MainActivity extends Activity {
-    private static final int BACKGROUND = Color.rgb(16, 27, 32), SURFACE = Color.rgb(20, 34, 31),
-        CHIP = Color.rgb(33, 48, 45), ACCENT = Color.rgb(207, 240, 160), ON_ACCENT = Color.rgb(25, 48, 28),
-        INK = Color.rgb(229, 238, 231), MUTED = Color.rgb(156, 179, 164),
-        /** A stand-in kit colour: the shirt preview belongs to no team in particular. */
-        SAMPLE_KIT = Color.rgb(126, 178, 235);
+    /**
+     * The look everything outside the pitch is drawn in, read from the reader's choice at
+     * startup. Held rather than looked up: every colour, corner and control style on every
+     * screen comes from here, so a skin changes by assigning this field and redrawing.
+     */
+    private Skin skin = Skin.of(null);
+    /** A stand-in kit colour: the shirt preview belongs to no team in particular. */
+    private static final int SAMPLE_KIT = Color.rgb(126, 178, 235);
     private Store store;
     private SharedPreferences prefs;
     private JSONObject match;
@@ -176,6 +179,9 @@ public class MainActivity extends Activity {
         super.onCreate(saved);
         store = new Store(getApplicationContext());
         prefs = getSharedPreferences("fonote", MODE_PRIVATE);
+        skin = Skin.of(prefs.getString("skin", null));
+        // The window shows for an instant before the first page is built; in its own colour.
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(skin.background));
         // Weight carries the polarity: colour, palette side and the balance all derive from it,
         // instead of asking for "good" or "bad" as if it were a separate action.
         action("positive", "+", "Bonne action", "Bon", 1);
@@ -248,7 +254,10 @@ public class MainActivity extends Activity {
     private Pager browsePager;
     private FrameLayout homeCard, calendarCard, annotatedCard;
     private LinearLayout homeRoot, calendarRoot, annotatedRoot;
-    private String calendarSearch = "", annotatedSearch = "";
+    private String calendarSearch = "", annotatedSearch = "", followSearch = "";
+    private LinearLayout profileRoot;
+    private Runnable profileBack = this::showHome;
+    private JSONObject followCatalogue = new JSONObject(), followFixtures = new JSONObject();
     private JSONArray calendarFixtures = new JSONArray();
     private LocalDate calendarCentre = LocalDate.now();
 
@@ -285,6 +294,8 @@ public class MainActivity extends Activity {
             if (!noteId.isEmpty()) { closeNote(); return; }
             showHome(); return;
         }
+        // The arrow and the system gesture lead to the same place, wherever the reader came from.
+        if ("profile".equals(screen)) { profileBack.run(); return; }
         if (!"home".equals(screen)) { showHome(); return; }
         super.onBackPressed();
     }
@@ -379,7 +390,7 @@ public class MainActivity extends Activity {
     }
     private LinearLayout frame() {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(16), dp(16), dp(16)); box.setBackgroundColor(BACKGROUND);
+        box.setPadding(dp(16), dp(16), dp(16), dp(16)); box.setBackgroundColor(skin.background);
         return box;
     }
     private LinearLayout page(String title) { return page(title, null); }
@@ -395,9 +406,8 @@ public class MainActivity extends Activity {
     private LinearLayout page(String title, Runnable back, int card) {
         ScrollView scroll = new ScrollView(this);
         // Without this the page ends where its content does and the window shows through.
-        scroll.setFillViewport(true); scroll.setBackgroundColor(BACKGROUND);
-        // The system bars are part of the page: a black strip above the title is a seam.
-        getWindow().setStatusBarColor(BACKGROUND); getWindow().setNavigationBarColor(BACKGROUND);
+        scroll.setFillViewport(true); scroll.setBackgroundColor(skin.background);
+        dressWindow();
         root = frame(); root.setPadding(dp(16), dp(10), dp(16), dp(24));
         scroll.addView(root);
         if (card < 0) setContentView(scroll);
@@ -408,9 +418,7 @@ public class MainActivity extends Activity {
         }
         LinearLayout bar = strip(); root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
         if (back != null) bar.addView(barAction(R.drawable.ic_arrow_back, "Revenir", back), barSize(0));
-        TextView heading = new TextView(this);
-        heading.setText(title); heading.setTextSize(26); heading.setTextColor(Color.WHITE);
-        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView heading = headline(title, 26);
         heading.setPadding(back == null ? 0 : dp(10), dp(8), 0, dp(8));
         bar.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         return bar;
@@ -423,9 +431,10 @@ public class MainActivity extends Activity {
     private ImageButton barAction(int icon, String described, Runnable action) {
         ImageButton button = new ImageButton(this);
         button.setImageResource(icon);
-        button.setImageTintList(ColorStateList.valueOf(INK));
+        button.setImageTintList(ColorStateList.valueOf(skin.ink));
         button.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        button.setBackground(tappable(rounded(CHIP, 22)));
+        button.setBackground(tappable(skin.flat
+            ? rounded(Color.TRANSPARENT, skin.pill) : control(skin.chip, skin.pill)));
         button.setPadding(dp(11), dp(11), dp(11), dp(11));
         button.setContentDescription(described);
         button.setOnClickListener(v -> action.run());
@@ -438,41 +447,111 @@ public class MainActivity extends Activity {
     }
     /** Touch feedback: a surface that answers the finger is the cheapest sign of a live control. */
     private Drawable tappable(Drawable surface) {
-        return new RippleDrawable(ColorStateList.valueOf(Color.argb(60, 255, 255, 255)), surface, null);
+        return new RippleDrawable(ColorStateList.valueOf(skin.ripple), surface, null);
     }
+    /**
+     * A heading in the skin's own voice. Three of the five set their titles in the plain family
+     * at the plain width; one draws them tighter, and one shouts them in spaced capitals the way
+     * a broadcast graphic does. The words are the same words either way.
+     */
+    private TextView headline(String text, float size) {
+        TextView heading = new TextView(this);
+        heading.setText(text); heading.setTextSize(size); heading.setTextColor(skin.ink);
+        heading.setTypeface(Typeface.create(skin.face, Typeface.BOLD), Typeface.BOLD);
+        heading.setAllCaps(skin.capitals); heading.setLetterSpacing(skin.tracking);
+        return heading;
+    }
+    /** Both bars are part of the page, and a light page wants its icons drawn in ink. */
+    private void dressWindow() {
+        getWindow().setStatusBarColor(skin.background);
+        getWindow().setNavigationBarColor(skin.background);
+        View decor = getWindow().getDecorView();
+        int lit = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        decor.setSystemUiVisibility(skin.light
+            ? decor.getSystemUiVisibility() | lit : decor.getSystemUiVisibility() & ~lit);
+    }
+    /**
+     * A dialog in the reader's skin. The platform would otherwise hand out whatever the device
+     * is set to, and a light sheet dropped on a dark application reads as another application
+     * answering for it.
+     */
+    private AlertDialog.Builder dialog() {
+        return new AlertDialog.Builder(this, skin.light
+            ? android.R.style.Theme_Material_Light_Dialog_Alert
+            : android.R.style.Theme_Material_Dialog_Alert);
+    }
+    /**
+     * An ordinary control, drawn the way this skin draws them: a flat fill, a fill under a
+     * hairline, or nothing but the hairline. The fill given is the one a filled skin uses —
+     * an outlined skin lets the page show through it instead.
+     */
+    private GradientDrawable control(int fill, int radius) {
+        GradientDrawable shape = rounded(
+            skin.controls == Skin.OUTLINED ? Color.TRANSPARENT : fill, radius);
+        if (skin.controls != Skin.FILLED) shape.setStroke(dp(1), skin.hairline);
+        return shape;
+    }
+    /** A card: the skin's own corner, and its edge when it asks for one. */
+    private GradientDrawable panel(int fill) {
+        GradientDrawable shape = rounded(skin.flat ? Color.TRANSPARENT : fill, skin.card);
+        if (skin.bordered && !skin.flat) shape.setStroke(dp(1), skin.hairline);
+        return shape;
+    }
+    /**
+     * What holds a flat list together in place of the cards it does without. Nothing at all on
+     * a skin that draws cards: two separations for one list would be one too many.
+     */
+    private void separator() {
+        if (!skin.flat) return;
+        View line = new View(this); line.setBackgroundColor(skin.hairline);
+        root.addView(line, new LinearLayout.LayoutParams(-1, Math.max(1, dp(1))));
+    }
+    /** The gap a list leaves between its rows: air between cards, nothing between filets. */
+    private int gap(int between) { return dp(skin.flat ? 0 : between); }
     /** A section heading, with an optional text action on its right the way lists do it. */
     private LinearLayout section(String title, String action, Runnable go) {
         LinearLayout row = strip();
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
         p.topMargin = dp(14); p.bottomMargin = dp(6); root.addView(row, p);
-        TextView heading = new TextView(this);
-        heading.setText(title); heading.setTextSize(20); heading.setTextColor(Color.WHITE);
-        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        row.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(headline(title, 20), new LinearLayout.LayoutParams(0, -2, 1));
         if (action != null) row.addView(link(action, go));
         return row;
     }
     /** A text action: modern shorthand for "there is more this way". */
     private Button link(String text, Runnable action) {
         Button button = button(text, action);
-        button.setTextSize(13); button.setTextColor(ACCENT);
-        button.setBackground(tappable(rounded(Color.TRANSPARENT, 12)));
+        button.setTextSize(13); button.setTextColor(skin.accent);
+        button.setBackground(tappable(rounded(Color.TRANSPARENT, skin.control)));
         button.setPadding(dp(10), 0, dp(10), 0); button.setMinHeight(dp(40));
         return button;
     }
     private TextView label(String text) {
         TextView view = new TextView(this); view.setText(text); view.setTextSize(16);
-        view.setTextColor(Color.WHITE); view.setPadding(0, dp(8), 0, dp(8)); root.addView(view); return view;
+        view.setTextColor(skin.ink); view.setPadding(0, dp(8), 0, dp(8)); root.addView(view); return view;
     }
     private Button button(String text, Runnable action) {
         Button button = new Button(this); button.setText(text); button.setAllCaps(false);
-        button.setTextSize(13); button.setTextColor(INK);
-        button.setBackground(tappable(rounded(CHIP, 12)));
+        button.setTextSize(13); button.setTextColor(skin.ink);
+        button.setBackground(tappable(control(skin.chip, skin.control)));
         button.setPadding(dp(8), dp(6), dp(8), dp(6));
         button.setMinHeight(dp(48)); button.setOnClickListener(v -> action.run()); return button;
     }
+    /**
+     * The one button that leads somewhere: solid whatever the skin does with the others, because
+     * an outlined main action beside outlined side actions is no main action at all. Where the
+     * skin's accent travels, it is painted end to end.
+     */
     private Button accent(Button button) {
-        button.setBackground(tappable(rounded(ACCENT, 12))); button.setTextColor(ON_ACCENT); return button;
+        button.setBackground(tappable(leading(skin.control))); button.setTextColor(skin.onAccent);
+        return button;
+    }
+    private GradientDrawable leading(int radius) {
+        GradientDrawable shape = rounded(skin.accent, radius);
+        if (skin.travelling()) {
+            shape.setOrientation(GradientDrawable.Orientation.LEFT_RIGHT);
+            shape.setColors(new int[]{skin.accent, skin.accentEnd});
+        }
+        return shape;
     }
     private GradientDrawable rounded(int color, int radius) {
         GradientDrawable drawable = new GradientDrawable(); drawable.setColor(color); drawable.setCornerRadius(dp(radius)); return drawable;
@@ -504,7 +583,7 @@ public class MainActivity extends Activity {
     /** Small inline control living on a line of text. */
     private Button mini(String text, String described, Runnable action) {
         Button button = button(text, action);
-        button.setTextSize(11); button.setTextColor(MUTED); button.setMinHeight(0);
+        button.setTextSize(11); button.setTextColor(skin.muted); button.setMinHeight(0);
         button.setPadding(dp(4), 0, dp(4), 0); button.setContentDescription(described);
         return button;
     }
@@ -512,11 +591,13 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL); return row;
     }
     private void full(String text, Runnable action) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = gap(8);
         Button button = button(text, action);
+        if (skin.flat) button.setBackground(tappable(rounded(Color.TRANSPARENT, skin.control)));
         button.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         button.setPadding(dp(14), dp(10), dp(14), dp(10));
         root.addView(button, p);
+        separator();
     }
 
     // ——— Accueil, calendrier et préférences ———
@@ -562,7 +643,7 @@ public class MainActivity extends Activity {
         TextView date = new TextView(this);
         DateTimeFormatter span = DateTimeFormatter.ofPattern("d MMM", Locale.FRANCE);
         date.setText("du " + centre.minusDays(3).format(span) + " au " + centre.plusDays(3).format(span));
-        date.setTextColor(INK); date.setTextSize(15); date.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        date.setTextColor(skin.ink); date.setTextSize(15); date.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         date.setGravity(Gravity.CENTER);
         dates.addView(date, new LinearLayout.LayoutParams(0, -2, 1));
         dates.addView(barAction(R.drawable.ic_chevron_right, "Semaine suivante",
@@ -572,7 +653,7 @@ public class MainActivity extends Activity {
         root.removeView(title); root.removeView(dates);
         calendarCard.removeAllViews();
         LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(BACKGROUND);
+        layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(skin.background);
         LinearLayout header = frame();
         header.setPadding(dp(16), dp(10), dp(16), dp(12));
         header.addView(title); header.addView(dates, row);
@@ -586,7 +667,7 @@ public class MainActivity extends Activity {
             renderFixtures(calendarFixtures, false); root = previous;
         }), search);
         layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
-        View divider = new View(this); divider.setBackgroundColor(CHIP);
+        View divider = new View(this); divider.setBackgroundColor(skin.chip);
         layout.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
         root.setPadding(dp(16), 0, dp(16), dp(24));
         layout.addView(fixtures, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -596,7 +677,7 @@ public class MainActivity extends Activity {
 
     private EditText searchField(String hint, String value, java.util.function.Consumer<String> changed) {
         EditText field = new EditText(this);
-        field.setSingleLine(true); field.setTextColor(INK); field.setHintTextColor(MUTED);
+        field.setSingleLine(true); field.setTextColor(skin.ink); field.setHintTextColor(skin.muted);
         field.setTextSize(15); field.setHint(hint); field.setText(value);
         field.setInputType(InputType.TYPE_CLASS_TEXT);
         field.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
@@ -612,7 +693,7 @@ public class MainActivity extends Activity {
             }
             return true;
         });
-        field.setBackground(rounded(CHIP, 12));
+        field.setBackground(control(skin.chip, skin.control));
         field.setPadding(dp(12), dp(8), dp(12), dp(8));
         field.setContentDescription(hint);
         field.addTextChangedListener(new android.text.TextWatcher() {
@@ -629,7 +710,7 @@ public class MainActivity extends Activity {
         ScrollView list = (ScrollView) root.getParent();
         root.removeView(title); annotatedCard.removeAllViews();
         LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setBackgroundColor(BACKGROUND);
+        layout.setBackgroundColor(skin.background);
         LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
         header.addView(title);
         header.addView(searchField("Équipe, compétition, date ou note", annotatedSearch, query -> {
@@ -675,7 +756,7 @@ public class MainActivity extends Activity {
                 for (JSONObject note : item.getValue())
                     found |= FixtureSelection.contains(note.optString("comment"), annotatedSearch);
                 if (!found) continue;
-                label(item.getValue().size() + (item.getValue().size() == 1 ? " note" : " notes")).setTextColor(MUTED);
+                label(item.getValue().size() + (item.getValue().size() == 1 ? " note" : " notes")).setTextColor(skin.muted);
                 fixtureDate(fixture); fixtureCard(fixture, !id.startsWith("fd-")); shown++;
             }
             if (shown == 0) label(byMatch.isEmpty() ? "Les matchs où vous prenez des notes apparaîtront ici, même une fois terminés."
@@ -683,15 +764,43 @@ public class MainActivity extends Activity {
         } catch (Exception error) { error(error); }
     }
 
-    private void profile() {
-        screen = "profile"; page("Mes suivis", this::showHome);
-        TextView help = label("Choisissez des compétitions et/ou des clubs. Un match est affiché s’il correspond à au moins un de vos choix.");
-        help.setTextColor(MUTED); help.setTextSize(13);
+    private void profile() { profile(this::showHome); }
+
+    /**
+     * The competitions and clubs a calendar is filtered by. The arrow leads back where the reader
+     * came from — the home screen, or the options that sent them here.
+     *
+     * <p>Title and search field stand still while the list under them is rebuilt on every letter:
+     * a field that is destroyed to be redrawn loses the caret and the keyboard with it.
+     */
+    private void profile(Runnable back) {
+        screen = "profile"; profileBack = back;
+        // A filter left over from a visit made an hour ago reads as a catalogue gone missing.
+        followSearch = "";
+        LinearLayout title = page("Mes suivis", back);
+        ScrollView list = (ScrollView) root.getParent();
+        root.removeView(title);
+        ((android.view.ViewGroup) list.getParent()).removeView(list);
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(skin.background);
+        LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
+        header.addView(title);
+        // Hundreds of clubs come back from a season's calendars: typing a name beats a long thumb.
+        header.addView(searchField("Compétition ou club", followSearch, query -> {
+            followSearch = query;
+            renderProfile(followCatalogue, followFixtures);
+        }));
+        layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        View divider = new View(this); divider.setBackgroundColor(skin.chip);
+        layout.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+        root.setPadding(dp(16), 0, dp(16), dp(24));
+        layout.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(layout);
+        profileRoot = root;
         try {
             String cached = store.downloaded("/v1/football/competitions");
             renderProfile(cached == null ? new JSONObject() : new JSONObject(cached),
                 new JSONObject().put("matches", store.fixtures()));
-            label("Vos suivis sont conservés sur cet appareil. Catalogue actualisé si le serveur est disponible.");
         } catch (Exception error) { error(error); }
         if (!hasServer()) return;
         worker.execute(() -> {
@@ -704,27 +813,27 @@ public class MainActivity extends Activity {
     }
 
     private void renderProfile(JSONObject catalogue, JSONObject fixtureData) {
-        page("Mes suivis", this::showHome);
+        // Kept so a letter typed into the search redraws the list without asking the server again.
+        followCatalogue = catalogue; followFixtures = fixtureData;
+        root = profileRoot; root.removeAllViews();
         Set<String> competitionIds = new HashSet<>(prefs.getStringSet("follow_competitions", Collections.emptySet()));
         Set<String> teamIds = new HashSet<>(prefs.getStringSet("follow_teams", Collections.emptySet()));
         // Both lists arrive in the order a server or a calendar happened to hold them, and a list
         // you pick from is searched by eye: alphabetical, and by a collator rather than by code
         // point, so that Évian sits with the E's and not after Z.
         Collator alphabet = Collator.getInstance(Locale.FRANCE);
-        section("Compétitions", null, null);
+        boolean searching = !followSearch.trim().isEmpty();
+        if (!searching) {
+            TextView help = label("Choisissez des compétitions et/ou des clubs. Un match est affiché s’il correspond à au moins un de vos choix.");
+            help.setTextColor(skin.muted); help.setTextSize(13);
+        }
         JSONArray competitions = catalogue.optJSONArray("competitions");
         List<JSONObject> named = new ArrayList<>();
         if (competitions != null) for (int i = 0; i < competitions.length(); i++) {
             JSONObject item = competitions.optJSONObject(i);
-            if (item != null) named.add(item);
+            if (item != null && FixtureSelection.contains(item.optString("name"), followSearch)) named.add(item);
         }
         named.sort((one, other) -> alphabet.compare(one.optString("name"), other.optString("name")));
-        for (JSONObject item : named) {
-            String id = String.valueOf(item.optInt("id"));
-            CheckBox choice = choice(item.optString("name"), competitionIds.contains(id));
-            choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_competitions", id, checked));
-        }
-        section("Clubs des matchs enregistrés", null, null);
         LinkedHashMap<String,String> teams = new LinkedHashMap<>();
         JSONArray fixtures = fixtureData.optJSONArray("matches");
         if (fixtures != null) for (int i = 0; i < fixtures.length(); i++) {
@@ -733,19 +842,37 @@ public class MainActivity extends Activity {
             if (home != null) teams.put(String.valueOf(home.optInt("id")), home.optString("name"));
             if (away != null) teams.put(String.valueOf(away.optInt("id")), away.optString("name"));
         }
-        List<Map.Entry<String,String>> clubs = new ArrayList<>(teams.entrySet());
+        List<Map.Entry<String,String>> clubs = new ArrayList<>();
+        for (Map.Entry<String,String> team : teams.entrySet())
+            if (FixtureSelection.contains(team.getValue(), followSearch)) clubs.add(team);
         clubs.sort((one, other) -> alphabet.compare(one.getValue(), other.getValue()));
-        for (Map.Entry<String,String> team : clubs) {
-            CheckBox choice = choice(team.getValue(), teamIds.contains(team.getKey()));
-            choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_teams", team.getKey(), checked));
+        // A heading over nothing reads as a list that failed to load, so an empty side is left out.
+        if (!named.isEmpty()) {
+            section("Compétitions", null, null);
+            for (JSONObject item : named) {
+                String id = String.valueOf(item.optInt("id"));
+                CheckBox choice = choice(item.optString("name"), competitionIds.contains(id));
+                choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_competitions", id, checked));
+            }
         }
-        TextView note = label("Les clubs des calendriers consultés restent disponibles sans connexion.");
-        note.setTextColor(MUTED); note.setTextSize(12);
+        if (!clubs.isEmpty()) {
+            section("Clubs des matchs enregistrés", null, null);
+            for (Map.Entry<String,String> team : clubs) {
+                CheckBox choice = choice(team.getValue(), teamIds.contains(team.getKey()));
+                choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_teams", team.getKey(), checked));
+            }
+        }
+        if (named.isEmpty() && clubs.isEmpty())
+            label(searching ? "Aucune compétition ni club ne correspond à cette recherche."
+                : "Le catalogue des compétitions arrive avec le serveur, les clubs avec les calendriers consultés.");
+        TextView note = label("Vos suivis sont conservés sur cet appareil. "
+            + "Les clubs des calendriers consultés restent disponibles sans connexion.");
+        note.setTextColor(skin.muted); note.setTextSize(12);
     }
 
     private CheckBox choice(String text, boolean checked) {
         CheckBox box = new CheckBox(this); box.setText(text); box.setChecked(checked);
-        box.setTextColor(INK); box.setTextSize(15); box.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
+        box.setTextColor(skin.ink); box.setTextSize(15); box.setButtonTintList(android.content.res.ColorStateList.valueOf(skin.accent));
         box.setPadding(dp(4), dp(5), dp(4), dp(5)); root.addView(box, new LinearLayout.LayoutParams(-1, dp(48)));
         return box;
     }
@@ -825,7 +952,7 @@ public class MainActivity extends Activity {
         showHomeShell();
         for (JSONObject demo : demoMatches) fixtureCard(demo, true);
         TextView offline = label("Mode démo hors ligne · ces deux matchs sont disponibles sans serveur.");
-        offline.setTextColor(MUTED); offline.setTextSize(12);
+        offline.setTextColor(skin.muted); offline.setTextSize(12);
     }
 
     /** Two self-contained fixtures so a freshly installed app remains useful without a server. */
@@ -973,7 +1100,7 @@ public class MainActivity extends Activity {
     private void dayHeader(String named) {
         TextView header = new TextView(this);
         header.setText(named.toUpperCase(Locale.FRANCE));
-        header.setTextSize(11); header.setTextColor(MUTED); header.setLetterSpacing(.09f);
+        header.setTextSize(11); header.setTextColor(skin.muted); header.setLetterSpacing(.09f);
         header.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
         p.topMargin = dp(14); p.bottomMargin = dp(6); root.addView(header, p);
@@ -982,10 +1109,10 @@ public class MainActivity extends Activity {
     private void loading(String message) {
         LinearLayout row = strip(); row.setPadding(dp(2), dp(20), 0, dp(20));
         ProgressBar spinner = new ProgressBar(this);
-        spinner.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
+        spinner.setIndeterminateTintList(ColorStateList.valueOf(skin.accent));
         row.addView(spinner, new LinearLayout.LayoutParams(dp(22), dp(22)));
         TextView text = new TextView(this); text.setText(message);
-        text.setTextColor(MUTED); text.setTextSize(14); text.setPadding(dp(12), 0, 0, 0);
+        text.setTextColor(skin.muted); text.setTextSize(14); text.setPadding(dp(12), 0, 0, 0);
         row.addView(text); root.addView(row);
     }
 
@@ -993,9 +1120,9 @@ public class MainActivity extends Activity {
     private void empty(String message, String action, Runnable go) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL); box.setGravity(Gravity.CENTER);
-        box.setPadding(dp(16), dp(26), dp(16), dp(20)); box.setBackground(rounded(SURFACE, 16));
+        box.setPadding(dp(16), dp(26), dp(16), dp(20)); box.setBackground(panel(skin.surface));
         TextView text = new TextView(this); text.setText(message);
-        text.setTextColor(MUTED); text.setTextSize(14); text.setGravity(Gravity.CENTER);
+        text.setTextColor(skin.muted); text.setTextSize(14); text.setGravity(Gravity.CENTER);
         box.addView(text);
         if (action != null) box.addView(link(action, go));
         root.addView(box, new LinearLayout.LayoutParams(-1, -2));
@@ -1009,7 +1136,7 @@ public class MainActivity extends Activity {
         bar.addView(barAction(R.drawable.ic_star, "Mes suivis", this::profile), barSize(8));
         bar.addView(barAction(R.drawable.ic_settings, "Options", this::options), barSize(8));
         TextView intro = label("Les matchs que vous suivez, prêts à être notés.");
-        intro.setTextColor(MUTED); intro.setTextSize(14); intro.setPadding(0, 0, 0, 0);
+        intro.setTextColor(skin.muted); intro.setTextSize(14); intro.setPadding(0, 0, 0, 0);
         full("Matchs enregistrés", this::savedMatches);
         homeFollows();
         section("Aujourd’hui", "Calendrier ›", () -> calendar(LocalDate.now()));
@@ -1026,7 +1153,7 @@ public class MainActivity extends Activity {
                 if (!favorites.contains(fixture.optString("id")) || !FixtureSelection.unfinished(fixture)) continue;
                 fixtureDate(fixture); fixtureCard(fixture, false); shown++;
             }
-            if (shown == 0) label("Aucun favori à venir ou en cours. Ajoutez-en avec l’étoile du calendrier.").setTextColor(MUTED);
+            if (shown == 0) label("Aucun favori à venir ou en cours. Ajoutez-en avec l’étoile du calendrier.").setTextColor(skin.muted);
 
             Set<String> clubs = prefs.getStringSet("follow_teams", Collections.emptySet());
             section("Prochains matchs de mes clubs", "Mes suivis ›", this::profile);
@@ -1036,9 +1163,9 @@ public class MainActivity extends Activity {
                 if (!displayed.add(fixture.optString("id"))) continue;
                 fixtureDate(fixture); fixtureCard(fixture, false);
             }
-            if (clubs.isEmpty()) label("Suivez un club pour afficher son prochain match.").setTextColor(MUTED);
+            if (clubs.isEmpty()) label("Suivez un club pour afficher son prochain match.").setTextColor(skin.muted);
             else if (next.size() < clubs.size())
-                label("Prochain match encore inconnu pour certains clubs. Actualisation à la connexion au serveur.").setTextColor(MUTED);
+                label("Prochain match encore inconnu pour certains clubs. Actualisation à la connexion au serveur.").setTextColor(skin.muted);
         } catch (Exception error) { error(error); }
     }
 
@@ -1088,7 +1215,7 @@ public class MainActivity extends Activity {
     private void favoriteAppearance(ImageButton star, String id, String title) {
         boolean selected = prefs.getStringSet("follow_matches", Collections.emptySet()).contains(id);
         star.setImageResource(selected ? R.drawable.ic_star_filled : R.drawable.ic_star);
-        star.setImageTintList(ColorStateList.valueOf(selected ? ACCENT : MUTED));
+        star.setImageTintList(ColorStateList.valueOf(selected ? skin.accent : skin.muted));
         star.setSelected(selected);
         star.setContentDescription((selected ? "Ne plus suivre " : "Suivre ") + title);
     }
@@ -1149,7 +1276,7 @@ public class MainActivity extends Activity {
         }
         LinearLayout card = new LinearLayout(this); card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(dp(14), dp(12), dp(12), dp(12));
-        card.setBackground(tappable(rounded(SURFACE, 16)));
+        card.setBackground(tappable(panel(skin.surface)));
         card.setClickable(true); card.setFocusable(true);
         card.setOnClickListener(v -> { if (demo) { match = fixture; openMatch(); } else openRemoteMatch(fixture); });
         card.setContentDescription(homeName + " contre " + awayName + ", " + subtitle
@@ -1162,13 +1289,13 @@ public class MainActivity extends Activity {
         first.setText(state != null ? state : kickoff == null ? "—" : kickoff.format(HOUR));
         first.setTextSize(state != null ? 11 : 17); first.setGravity(Gravity.CENTER);
         first.setTypeface(state != null ? Typeface.DEFAULT_BOLD : Typeface.MONOSPACE, Typeface.BOLD);
-        first.setTextColor(live || demo ? ACCENT : INK);
+        first.setTextColor(live || demo ? skin.accent : skin.ink);
         when.addView(first, new LinearLayout.LayoutParams(-1, -2));
         if (kickoff != null) {
             TextView second = new TextView(this);
             second.setText(state == null ? kickoff.format(DateTimeFormatter.ofPattern("d MMM", Locale.FRANCE))
                 : kickoff.format(HOUR));
-            second.setTextSize(11); second.setTextColor(MUTED); second.setGravity(Gravity.CENTER);
+            second.setTextSize(11); second.setTextColor(skin.muted); second.setGravity(Gravity.CENTER);
             when.addView(second, new LinearLayout.LayoutParams(-1, -2));
         }
         card.addView(when, new LinearLayout.LayoutParams(dp(56), -2));
@@ -1181,7 +1308,7 @@ public class MainActivity extends Activity {
         sides.addView(side(homeName, demo ? fixture.optString("demo_score_home", "") : goals == null ? "" : goals.optString("home", "")));
         sides.addView(side(awayName, demo ? fixture.optString("demo_score_away", "") : goals == null ? "" : goals.optString("away", "")));
         TextView note = new TextView(this); note.setText(subtitle);
-        note.setTextSize(12); note.setTextColor(MUTED); note.setPadding(0, dp(3), 0, 0);
+        note.setTextSize(12); note.setTextColor(skin.muted); note.setPadding(0, dp(3), 0, 0);
         note.setMaxLines(1); note.setEllipsize(TextUtils.TruncateAt.END);
         sides.addView(note);
         card.addView(sides, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1196,23 +1323,24 @@ public class MainActivity extends Activity {
         } else {
             ImageView chevron = new ImageView(this);
             chevron.setImageResource(R.drawable.ic_chevron_right);
-            chevron.setImageTintList(ColorStateList.valueOf(MUTED));
+            chevron.setImageTintList(ColorStateList.valueOf(skin.muted));
             card.addView(chevron, new LinearLayout.LayoutParams(dp(16), dp(16)));
         }
 
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-        p.bottomMargin = dp(10); root.addView(card, p);
+        p.bottomMargin = gap(10); root.addView(card, p);
+        separator();
     }
 
     private LinearLayout side(String name, String goals) {
         LinearLayout row = strip();
         TextView team = new TextView(this); team.setText(name);
-        team.setTextSize(15.5f); team.setTextColor(INK);
+        team.setTextSize(15.5f); team.setTextColor(skin.ink);
         team.setMaxLines(1); team.setEllipsize(TextUtils.TruncateAt.END);
         row.addView(team, new LinearLayout.LayoutParams(0, -2, 1));
         if (!goals.isEmpty() && !"null".equals(goals)) {
             TextView count = new TextView(this); count.setText(goals);
-            count.setTextSize(15.5f); count.setTextColor(Color.WHITE);
+            count.setTextSize(15.5f); count.setTextColor(skin.ink);
             count.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
             count.setPadding(dp(8), 0, 0, 0);
             row.addView(count);
@@ -1592,7 +1720,7 @@ public class MainActivity extends Activity {
     }
 
     private void remoteError(Exception error) {
-        label(error.getMessage() == null ? "Impossible de charger les matchs." : error.getMessage()).setTextColor(Color.rgb(240,186,120));
+        label(error.getMessage() == null ? "Impossible de charger les matchs." : error.getMessage()).setTextColor(skin.bad);
     }
 
     private void showMatch() {
@@ -1610,34 +1738,36 @@ public class MainActivity extends Activity {
             String info = "provider_error".equals(match.optString("lineup_status"))
                 ? "Source des compositions injoignable. Notes générales disponibles avec + ; réessayez plus tard."
                 : "Composition indisponible auprès des sources. Vous pouvez prendre des notes générales avec +.";
-            TextView notice = label(info); notice.setTextSize(12); notice.setTextColor(MUTED);
+            TextView notice = label(info); notice.setTextSize(12); notice.setTextColor(skin.muted);
         }
-        getWindow().setStatusBarColor(BACKGROUND); getWindow().setNavigationBarColor(BACKGROUND);
+        dressWindow();
         LinearLayout header = strip(); root.addView(header);
         TextView fixture = new TextView(this); fixture.setText(
             (teamName("home") + "  /  " + teamName("away")).toUpperCase(java.util.Locale.FRANCE)
             + "\n" + match.optString("stage") + " · " + (period == 1 ? "1re" : "2e") + " mi-temps");
-        fixture.setTextSize(13); fixture.setTextColor(Color.rgb(194, 208, 198)); fixture.setLineSpacing(dp(5),1);
+        fixture.setTextSize(13); fixture.setTextColor(skin.muted); fixture.setLineSpacing(dp(5),1);
         header.addView(fixture, new LinearLayout.LayoutParams(0, -2, 1));
         clockLabel = new TextView(this); clockLabel.setTextSize(20); clockLabel.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);
-        clockLabel.setTextColor(Color.rgb(209,242,162)); clockLabel.setGravity(Gravity.CENTER);
-        clockLabel.setPadding(dp(12),0,dp(12),0); clockLabel.setBackground(rounded(Color.rgb(32,49,41),12));
+        clockLabel.setTextColor(skin.accent); clockLabel.setGravity(Gravity.CENTER);
+        clockLabel.setPadding(dp(12),0,dp(12),0); clockLabel.setBackground(control(skin.chip, skin.control));
         clockLabel.setContentDescription("Chronomètre du match, toucher pour ajuster ou changer de période");
         clockLabel.setOnClickListener(v -> clock()); header.addView(clockLabel,new LinearLayout.LayoutParams(-2,dp(48)));
-        pitch = new PitchView(this, match, glassMarkers(), minute, this::tapPlayer, this::pullPlayer);
+        pitch = new PitchView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
+            Skin.onGrass(skin.ringEnd), minute, this::tapPlayer, this::pullPlayer);
         pitch.setMinimumHeight(dp(300));
         LinearLayout.LayoutParams pitchSize = new LinearLayout.LayoutParams(-1, 0, 1);
         pitchSize.topMargin = dp(8); pitchSize.bottomMargin = dp(8);
         root.addView(pitch, pitchSize);
         composer = new LinearLayout(this); composer.setOrientation(LinearLayout.VERTICAL);
-        composer.setBackground(rounded(SURFACE, 16)); composer.setPadding(dp(10), dp(8), dp(10), dp(8));
+        composer.setBackground(skin.flat ? rounded(skin.chip, 16) : panel(skin.surface));
+        composer.setPadding(dp(10), dp(8), dp(10), dp(8));
         root.addView(composer, new LinearLayout.LayoutParams(-1, dp(COMPOSER)));
         String source = match.optBoolean("lineup_available")
             ? "  ·  " + match.optString("lineup_source", "ESPN") + ", placement schématique" : "";
         LinearLayout footer = strip(); root.addView(footer, new LinearLayout.LayoutParams(-1, -2));
         status = new TextView(this);
         status.setText(formations() + source + "  ·  " + match.optString("competition"));
-        status.setTextSize(12); status.setTextColor(Color.rgb(177,198,184));
+        status.setTextSize(12); status.setTextColor(skin.muted);
         status.setPadding(0, dp(8), 0, dp(8));
         status.setMaxLines(1); status.setEllipsize(TextUtils.TruncateAt.END);
         footer.addView(status, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1645,7 +1775,7 @@ public class MainActivity extends Activity {
         if (told() || counted()) {
             TextView hint = new TextView(this);
             hint.setText(told() ? "Faits  ›" : "Statistiques  ›");
-            hint.setTextSize(12); hint.setTextColor(ACCENT);
+            hint.setTextSize(12); hint.setTextColor(skin.accent);
             hint.setPadding(dp(10), dp(8), 0, dp(8));
             hint.setContentDescription((told() ? "Faits du match" : "Statistiques")
                 + ", ou balayer vers la gauche");
@@ -1655,7 +1785,7 @@ public class MainActivity extends Activity {
         LinearLayout navigation = strip(); root.addView(navigation);
         String[] titles = {"↶", "≡ Notes", "☆ Bilan", "•••"};
         String[] described = {"Annuler la dernière action", "Mes observations", "Bilan par joueur", "Autres actions"};
-        Runnable[] clicks = {this::undo, this::history, this::standings, () -> new AlertDialog.Builder(this).setTitle("Mon match")
+        Runnable[] clicks = {this::undo, this::history, this::standings, () -> dialog().setTitle("Mon match")
             .setItems(new String[]{"Accueil", "Synchroniser", "Configurer le serveur", "Exporter mes observations"}, (d,n) -> {
                 if(n==0) showHome(); else if(n==1) sync(); else if(n==2) settings(); else export();
             }).show()};
@@ -1711,7 +1841,7 @@ public class MainActivity extends Activity {
         title.setTextSize(24); title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         TextView caveat = label("Relevé du fournisseur, à côté de vos notes. Rien ici n’entre dans "
             + "votre journal ni dans votre bilan.");
-        caveat.setTextSize(12); caveat.setTextColor(MUTED);
+        caveat.setTextSize(12); caveat.setTextColor(skin.muted);
         JSONObject score = match.optJSONObject("score");
         String home = score == null ? "" : score.optString("home"), away = score == null ? "" : score.optString("away");
         if (!home.isEmpty() || !away.isEmpty()) {
@@ -1738,7 +1868,7 @@ public class MainActivity extends Activity {
         title.setTextSize(24); title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         TextView caveat = label("Compteurs " + match.optString("lineup_source", "du fournisseur")
             + ", à côté de vos notes. Rien ici n’entre dans votre journal ni dans votre bilan.");
-        caveat.setTextSize(12); caveat.setTextColor(MUTED);
+        caveat.setTextSize(12); caveat.setTextColor(skin.muted);
         countedSection();
         crumbs("‹  Balayer vers la droite pour revenir "
             + (told() ? "aux faits" : "au terrain"), null, 0);
@@ -1751,11 +1881,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
         p.topMargin = dp(14); root.addView(row, p);
         TextView here = new TextView(this);
-        here.setText(back); here.setTextSize(12); here.setTextColor(MUTED);
+        here.setText(back); here.setTextSize(12); here.setTextColor(skin.muted);
         row.addView(here, new LinearLayout.LayoutParams(0, -2, 1));
         if (forward == null) return;
         TextView next = new TextView(this);
-        next.setText(forward); next.setTextSize(12); next.setTextColor(ACCENT);
+        next.setText(forward); next.setTextSize(12); next.setTextColor(skin.accent);
         next.setPadding(dp(10), dp(6), 0, dp(6));
         next.setContentDescription(forward.replace("  ›", "") + ", ou balayer vers la gauche");
         next.setOnClickListener(v -> pager.show(page, true));
@@ -1774,7 +1904,7 @@ public class MainActivity extends Activity {
             if (!titled) { section("Le fil du match", null, null); titled = true; }
             LinearLayout row = strip();
             TextView when = new TextView(this);
-            when.setText(event.optInt("minute") + "’"); when.setTextSize(13); when.setTextColor(MUTED);
+            when.setText(event.optInt("minute") + "’"); when.setTextSize(13); when.setTextColor(skin.muted);
             row.addView(when, new LinearLayout.LayoutParams(dp(38), -2));
             TextView what = new TextView(this); what.setText(mark); what.setTextSize(13);
             row.addView(what, new LinearLayout.LayoutParams(dp(34), -2));
@@ -1807,7 +1937,7 @@ public class MainActivity extends Activity {
             row.addView(figure(left + stat[2], Gravity.END, sideColour("home")),
                 new LinearLayout.LayoutParams(dp(74), -2));
             TextView label = new TextView(this); label.setText(stat[1]);
-            label.setTextSize(13); label.setTextColor(MUTED); label.setGravity(Gravity.CENTER);
+            label.setTextSize(13); label.setTextColor(skin.muted); label.setGravity(Gravity.CENTER);
             row.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
             row.addView(figure(right + stat[2], Gravity.START, sideColour("away")),
                 new LinearLayout.LayoutParams(dp(74), -2));
@@ -1829,7 +1959,7 @@ public class MainActivity extends Activity {
         if (lines.isEmpty()) return;
         section("La rencontre", null, null);
         TextView text = label(String.join("\n", lines));
-        text.setTextSize(13); text.setTextColor(Color.rgb(194, 208, 198));
+        text.setTextSize(13); text.setTextColor(skin.muted);
     }
 
     private TextView figure(String text, int gravity, int colour) {
@@ -1871,9 +2001,15 @@ public class MainActivity extends Activity {
         return names;
     }
 
+    /**
+     * A club's colour, moved just far enough to be read on the page it is written on. The colour
+     * belongs to the club and the page belongs to the reader's theme: a mustard yellow that reads
+     * on night green disappears on white paper, and neither of the two is going to give way.
+     */
     private int sideColour(String side) {
         JSONObject team = sideTeam(side);
-        return team == null ? Color.WHITE : Color.parseColor(team.optString("colour"));
+        return team == null ? skin.ink
+            : Skin.readable(Color.parseColor(team.optString("colour")), skin.background);
     }
 
     // ——— Composition d'une note ———
@@ -1887,13 +2023,12 @@ public class MainActivity extends Activity {
     private int weight(String key) { String[] a = actions.get(key); return a == null ? 0 : Integer.parseInt(a[3]); }
     private boolean good(String key) { return weight(key) > 0; }
     /** Muted background of an action, by polarity. */
-    private int fill(String key) { return good(key) ? Color.rgb(30, 56, 42) : Color.rgb(58, 40, 28); }
+    private int fill(String key) { return good(key) ? skin.goodFill : skin.badFill; }
     /** Readable foreground on that background, and the colour of the mark on the pitch. */
-    private int tint(String key) { return good(key) ? Color.rgb(178, 230, 168) : Color.rgb(240, 186, 120); }
-    private int solid(String key) { return good(key) ? ACCENT : Color.rgb(240, 186, 120); }
-    private int onSolid(String key) { return good(key) ? ON_ACCENT : Color.rgb(48, 28, 12); }
-    private int balanceTint(int sum) { return sum > 0 ? Color.rgb(178, 230, 168)
-        : sum < 0 ? Color.rgb(240, 186, 120) : MUTED; }
+    private int tint(String key) { return good(key) ? skin.good : skin.bad; }
+    private int solid(String key) { return good(key) ? skin.accent : skin.bad; }
+    private int onSolid(String key) { return good(key) ? skin.onAccent : skin.onBad; }
+    private int balanceTint(int sum) { return sum > 0 ? skin.good : sum < 0 ? skin.bad : skin.muted; }
     /**
      * A note open means the panel collects: every player touched joins it. With no note open, a
      * player opens one. There is no save button — each action rewrites the note straight away —
@@ -2003,7 +2138,7 @@ public class MainActivity extends Activity {
         updateClock();
         EditText input = new EditText(this); input.setHint("Ce que je veux noter");
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
-        new AlertDialog.Builder(this).setTitle("Note sans joueur · " + minute + "′").setView(input)
+        dialog().setTitle("Note sans joueur · " + minute + "′").setView(input)
             .setNegativeButton("Annuler", null).setPositiveButton("Noter", (d,w) -> {
                 if (input.getText().toString().trim().isEmpty()) { toast("Note vide, rien n’a été écrit"); return; }
                 noteId = UUID.randomUUID().toString(); entries.clear();
@@ -2024,7 +2159,7 @@ public class MainActivity extends Activity {
             for (Map.Entry<String,String> entry : entries.entrySet()) {
                 String action = entry.getValue();
                 marks.put(entry.getKey(), action.isEmpty() ? "?" : icon(action));
-                tints.put(entry.getKey(), action.isEmpty() ? ACCENT : solid(action));
+                tints.put(entry.getKey(), Skin.onGrass(action.isEmpty() ? skin.accent : solid(action)));
             }
         } else {
             // The signed balance, not the mark out of ten: beside a shirt number, "10" would
@@ -2032,7 +2167,7 @@ public class MainActivity extends Activity {
             try {
                 for (Map.Entry<String,int[]> entry : balances().entrySet()) {
                     marks.put(entry.getKey(), balanceText(entry.getValue()[0]));
-                    tints.put(entry.getKey(), balanceTint(entry.getValue()[0]));
+                    tints.put(entry.getKey(), Skin.onGrass(balanceTint(entry.getValue()[0])));
                 }
             } catch (Exception e) { error(e); }
         }
@@ -2046,11 +2181,11 @@ public class MainActivity extends Activity {
     private void renderIdle() {
         TextView prompt = new TextView(this);
         prompt.setText("↑   Touche un joueur sur le terrain");
-        prompt.setTextSize(15); prompt.setTextColor(Color.WHITE);
+        prompt.setTextSize(15); prompt.setTextColor(skin.ink);
         composer.addView(prompt);
         TextView how = new TextView(this);
         how.setText("puis son action — la note s’écrit aussitôt");
-        how.setTextSize(12); how.setTextColor(MUTED); how.setPadding(0, dp(3), 0, dp(4));
+        how.setTextSize(12); how.setTextColor(skin.muted); how.setPadding(0, dp(3), 0, dp(4));
         composer.addView(how);
         try {
             List<JSONObject> recent = notes();
@@ -2059,7 +2194,7 @@ public class MainActivity extends Activity {
                 LinearLayout line = strip();
                 TextView text = new TextView(this);
                 text.setText(note.optInt("minute") + "′   " + summary(note));
-                text.setTextSize(12); text.setTextColor(i == 0 ? INK : MUTED);
+                text.setTextSize(12); text.setTextColor(i == 0 ? skin.ink : skin.muted);
                 // The newest note shares its line with two controls, so let it breathe over two.
                 text.setMaxLines(i == 0 ? 2 : 1); text.setEllipsize(TextUtils.TruncateAt.END);
                 line.addView(text, new LinearLayout.LayoutParams(0, -1, 1));
@@ -2096,7 +2231,7 @@ public class MainActivity extends Activity {
         minuteButton.setContentDescription("Minute de la note, toucher pour corriger");
         // A panel left open is the one risk of collecting: the match moving on says so.
         if (minute - noteMinute >= 2) {
-            minuteButton.setTextColor(Color.rgb(240, 186, 120));
+            minuteButton.setTextColor(skin.bad);
             minuteButton.setContentDescription("Note ouverte depuis " + (minute - noteMinute)
                 + " minutes, toucher pour corriger sa minute");
         }
@@ -2107,7 +2242,7 @@ public class MainActivity extends Activity {
         if (entries.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText("↑  Touche un joueur pour l’ajouter");
-            empty.setTextSize(12); empty.setTextColor(MUTED); empty.setGravity(Gravity.CENTER_VERTICAL);
+            empty.setTextSize(12); empty.setTextColor(skin.muted); empty.setGravity(Gravity.CENTER_VERTICAL);
             chipRow.addView(empty, new LinearLayout.LayoutParams(-2, dp(44)));
         }
         for (Map.Entry<String,String> entry : entries.entrySet()) addChip(chipRow, entry.getKey(), entry.getValue());
@@ -2139,8 +2274,8 @@ public class MainActivity extends Activity {
         Button note = button("💬", this::editDraft);
         note.setTextSize(15);
         if (!draft.isEmpty()) {
-            GradientDrawable carries = rounded(CHIP, 12); carries.setStroke(dp(1), ACCENT);
-            note.setBackground(carries); note.setTextColor(ACCENT);
+            GradientDrawable carries = rounded(skin.chip, skin.control); carries.setStroke(dp(1), skin.accent);
+            note.setBackground(carries); note.setTextColor(skin.accent);
         }
         note.setContentDescription(draft.isEmpty() ? "Ajouter un commentaire"
             : "Commentaire écrit, toucher pour le modifier");
@@ -2165,10 +2300,10 @@ public class MainActivity extends Activity {
     /** An outlined control: present, reachable, and visibly not the main road. */
     private Button ghost(String text, String described, Runnable action) {
         Button button = button(text, action);
-        button.setTextSize(12); button.setTextColor(MUTED); button.setMinHeight(0);
+        button.setTextSize(12); button.setTextColor(skin.muted); button.setMinHeight(0);
         button.setPadding(dp(6), 0, dp(6), 0); button.setContentDescription(described);
-        GradientDrawable outline = rounded(SURFACE, 10);
-        outline.setStroke(dp(1), Color.argb(60, 255, 255, 255));
+        GradientDrawable outline = rounded(skin.surface, skin.control);
+        outline.setStroke(dp(1), skin.hairline);
         button.setBackground(outline);
         return button;
     }
@@ -2180,26 +2315,26 @@ public class MainActivity extends Activity {
         cell.setText(text); cell.setTextSize(10); cell.setPadding(0, dp(2), 0, dp(2));
         cell.setMinHeight(0); cell.setContentDescription(actionName(key));
         cell.setOnLongClickListener(v -> { toast(actionName(key)); return true; });
-        cell.setBackground(rounded(chosen ? solid(key) : fill(key), 12));
+        cell.setBackground(rounded(chosen ? solid(key) : fill(key), skin.control));
         cell.setTextColor(chosen ? onSolid(key) : tint(key));
         return cell;
     }
     private void addChip(LinearLayout row, String id, String action) {
         boolean waiting = action.isEmpty(), aimed = id.equals(focus);
         LinearLayout chip = new LinearLayout(this); chip.setGravity(Gravity.CENTER_VERTICAL);
-        GradientDrawable shape = rounded(waiting ? CHIP : fill(action), 12);
-        shape.setStroke(dp(aimed ? 2 : 1), waiting ? ACCENT
-            : aimed ? solid(action) : Color.argb(60, 255, 255, 255));
+        GradientDrawable shape = rounded(waiting ? skin.chip : fill(action), skin.control);
+        shape.setStroke(dp(aimed ? 2 : 1), waiting ? skin.accent
+            : aimed ? solid(action) : skin.hairline);
         chip.setBackground(shape);
         TextView name = new TextView(this);
         name.setText((waiting ? "?" : icon(action)) + "  " + shortName(id));
-        name.setTextSize(13); name.setTextColor(waiting ? ACCENT : tint(action));
+        name.setTextSize(13); name.setTextColor(waiting ? skin.accent : tint(action));
         name.setGravity(Gravity.CENTER_VERTICAL); name.setPadding(dp(10), 0, dp(4), 0);
         name.setContentDescription(shortName(id) + (waiting ? ", action à choisir" : ", " + actionName(action)));
         name.setOnClickListener(v -> { focus = id; renderComposer(); });
         chip.addView(name, new LinearLayout.LayoutParams(-2, -1));
         TextView remove = new TextView(this);
-        remove.setText("×"); remove.setTextSize(18); remove.setTextColor(MUTED);
+        remove.setText("×"); remove.setTextSize(18); remove.setTextColor(skin.muted);
         remove.setGravity(Gravity.CENTER); remove.setContentDescription("Retirer " + shortName(id));
         remove.setOnClickListener(v -> {
             entries.remove(id);
@@ -2216,7 +2351,7 @@ public class MainActivity extends Activity {
     private void editNoteMinute() {
         NumberPicker picker = new NumberPicker(this); picker.setMinValue(0); picker.setMaxValue(150);
         picker.setValue(noteMinute); picker.setWrapSelectorWheel(false);
-        new AlertDialog.Builder(this).setTitle("Minute de cette note").setView(picker)
+        dialog().setTitle("Minute de cette note").setView(picker)
             .setPositiveButton("Appliquer", (d,w) -> {
                 picker.clearFocus(); noteMinute = picker.getValue();
                 // A minute corrected on a note already written has to reach the log to mean anything.
@@ -2228,7 +2363,7 @@ public class MainActivity extends Activity {
         EditText input = new EditText(this); input.setHint("Commentaire facultatif");
         input.setText(draft);
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
-        new AlertDialog.Builder(this).setTitle("Commentaire").setView(input)
+        dialog().setTitle("Commentaire").setView(input)
             .setNegativeButton("Annuler", null).setPositiveButton("Enregistrer", (d,w) -> {
                 draft = input.getText().toString();
                 // A tactical note may carry nothing else, so its comment is written straight away.
@@ -2262,14 +2397,12 @@ public class MainActivity extends Activity {
     private void showTactic() {
         stopTactic();
         screen = "tactic";
-        getWindow().setStatusBarColor(BACKGROUND); getWindow().setNavigationBarColor(BACKGROUND);
+        dressWindow();
         LinearLayout page = frame(); page.setPadding(dp(12), dp(10), dp(12), dp(12));
         setContentView(page); root = page;
         LinearLayout bar = strip(); page.addView(bar, new LinearLayout.LayoutParams(-1, -2));
         bar.addView(barAction(R.drawable.ic_arrow_back, "Revenir au terrain", this::leaveTactic), barSize(0));
-        TextView heading = new TextView(this);
-        heading.setText("Note tactique"); heading.setTextSize(21); heading.setTextColor(Color.WHITE);
-        heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        TextView heading = headline("Note tactique", 21);
         heading.setPadding(dp(10), dp(8), 0, dp(8));
         bar.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         tacticUndo = button("↶", this::undoTactic);
@@ -2282,7 +2415,8 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams minuteSize = new LinearLayout.LayoutParams(dp(58), dp(44));
         minuteSize.leftMargin = dp(6);
         bar.addView(tacticMinute, minuteSize);
-        board = new BoardView(this, match, glassMarkers(), true, false);
+        board = new BoardView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
+            Skin.onGrass(skin.ringEnd), true, false);
         board.setDiagram(diagram);
         board.setTime(tacticTime);
         board.setTravel(prefs.getInt("travel", BoardView.AUTO));
@@ -2394,8 +2528,8 @@ public class MainActivity extends Activity {
         Button comment = button("💬", this::editDraft);
         comment.setTextSize(15);
         if (!draft.isEmpty()) {
-            GradientDrawable carries = rounded(CHIP, 12); carries.setStroke(dp(1), ACCENT);
-            comment.setBackground(carries); comment.setTextColor(ACCENT);
+            GradientDrawable carries = rounded(skin.chip, skin.control); carries.setStroke(dp(1), skin.accent);
+            comment.setBackground(carries); comment.setTextColor(skin.accent);
         }
         comment.setContentDescription(draft.isEmpty() ? "Ajouter un commentaire"
             : "Commentaire écrit, toucher pour le modifier");
@@ -2426,11 +2560,11 @@ public class MainActivity extends Activity {
         // Le temps se lit à côté du bouton, pas contre lui, et dans la lettre des boutons : un
         // TextView nu porte la romaine du système en 14, quand un Button porte la demi-grasse en
         // 13 — deux polices dans la même rangée pour un texte qui, lui aussi, répond au doigt.
-        TextView label = new TextView(this); label.setTextColor(INK); label.setText(seconds(board.time()));
+        TextView label = new TextView(this); label.setTextColor(skin.ink); label.setText(seconds(board.time()));
         label.setTextSize(13); label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         label.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         label.setPadding(dp(6), 0, dp(6), 0);
-        label.setBackground(tappable(rounded(Color.TRANSPARENT, 10)));
+        label.setBackground(tappable(rounded(Color.TRANSPARENT, skin.control)));
         label.setContentDescription("Temps actuel, toucher pour saisir un instant précis");
         label.setOnClickListener(v -> tacticTimeInput("Aller à", board.time(), at -> {
             board.setTime(at); renderTactic();
@@ -2459,7 +2593,8 @@ public class MainActivity extends Activity {
              * could never line its buttons up with, its track sitting where the drawable's
              * padding put it rather than where the eye wants it.
              */
-            private final int GROOVE = CHIP, PLAYED = Color.rgb(63, 89, 80);
+            private final int GROOVE = skin.chip, PLAYED = Color.argb(110,
+                Color.red(skin.accent), Color.green(skin.accent), Color.blue(skin.accent));
             private float middle() { return getHeight() / 2f; }
             private float span() { return dp(6); }
             private float trackLeft() { return getPaddingLeft(); }
@@ -2545,12 +2680,12 @@ public class MainActivity extends Activity {
                 canvas.drawRect(left, middle - span, head, middle + span, marks);
                 Track track = selectedTrack();
                 if (track != null) {
-                    marks.setColor(ACCENT);
+                    marks.setColor(skin.accent);
                     for (Track.Key key : track.keys)
                         canvas.drawRect(keyX(key) - dp(2), middle - span, keyX(key) + dp(2), middle + span, marks);
                 }
                 // Taller than the bar and paler than a key: the playhead crosses what it passes.
-                marks.setColor(INK);
+                marks.setColor(skin.ink);
                 float thick = dp(5) / 2f;
                 canvas.drawRect(head - thick, middle - span - dp(4), head + thick, middle + span + dp(4), marks);
             }
@@ -2568,7 +2703,7 @@ public class MainActivity extends Activity {
         Button duration = button("↝ " + (automatic ? "auto" : seconds(board.travel())), () -> {
             String[] values = {"Auto — d’après la longueur", "0,5 s", "1 s", "2 s", "3 s", "5 s", "10 s"};
             int[] times = {BoardView.AUTO, 5, 10, 20, 30, 50, 100};
-            new AlertDialog.Builder(this).setTitle("Durée du prochain trajet")
+            dialog().setTitle("Durée du prochain trajet")
                 .setItems(values, (d, which) -> {
                     board.setTravel(times[which]);
                     prefs.edit().putInt("travel", times[which]).apply();
@@ -2611,7 +2746,7 @@ public class MainActivity extends Activity {
         EditText field = new EditText(this);
         field.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         field.setText(String.format(Locale.US, "%.1f", time / 10.0)); field.selectAll();
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title + " (secondes)")
+        AlertDialog dialog = dialog().setTitle(title + " (secondes)")
             .setView(field).setNegativeButton("Annuler", null).setPositiveButton("Valider", null).create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             try {
@@ -2629,7 +2764,7 @@ public class MainActivity extends Activity {
         boolean ball = board.tool() == BoardView.BALL;
         if (!ball && selected < 0) {
             if (!diagram.shapes.isEmpty()) {
-                new AlertDialog.Builder(this).setItems(new String[]{"Effacer le dernier ancien tracé"},
+                dialog().setItems(new String[]{"Effacer le dernier ancien tracé"},
                     (d, w) -> undoStroke()).show();
             } else toast("Sélectionnez un joueur ou l’outil Ballon");
             return;
@@ -2645,7 +2780,7 @@ public class MainActivity extends Activity {
         }
         int offset = labels.size();
         for (Track.Key key : track.keys) labels.add("◆ " + seconds(key.time));
-        new AlertDialog.Builder(this).setTitle(ball ? "Positions du ballon" : "Positions du joueur")
+        dialog().setTitle(ball ? "Positions du ballon" : "Positions du joueur")
             .setItems(labels.toArray(new String[0]), (d, which) -> {
                 if (which >= offset) { board.setTime(track.keys.get(which-offset).time); renderTactic(); return; }
                 if (which == 2) {
@@ -2680,7 +2815,7 @@ public class MainActivity extends Activity {
                 : "Tracez le trajet : départ au curseur, arrivée après la durée choisie")
             : board.tool() == BoardView.BALL ? "Touchez un joueur pour lui donner le ballon, ou le terrain"
             : "Placez les joueurs ; utilisez Course pour les faire avancer");
-        hint.setTextSize(12); hint.setTextColor(MUTED); hint.setGravity(Gravity.CENTER_VERTICAL);
+        hint.setTextSize(12); hint.setTextColor(skin.muted); hint.setGravity(Gravity.CENTER_VERTICAL);
         hint.setMaxLines(1); hint.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(SELECTION));
         p.topMargin = dp(6); tacticPanel.addView(hint, p);
@@ -2701,13 +2836,13 @@ public class MainActivity extends Activity {
         SpannableString text = new SpannableString(held.size() + " joueurs · glissez-en un, ils suivent"
             + "\nappui long sur un joueur pour l’ôter ou l’ajouter");
         int first = String.valueOf(held.size()).length() + 9;
-        text.setSpan(new ForegroundColorSpan(MUTED), first, text.length(), 0);
+        text.setSpan(new ForegroundColorSpan(skin.muted), first, text.length(), 0);
         who.setText(text);
-        who.setTextSize(11); who.setTextColor(INK); who.setMaxLines(2);
+        who.setTextSize(11); who.setTextColor(skin.ink); who.setMaxLines(2);
         who.setLineSpacing(dp(2), 1); who.setEllipsize(TextUtils.TruncateAt.END);
         row.addView(who, new LinearLayout.LayoutParams(0, -2, 1));
         Button loose = button("Aucun", () -> { board.select(-1); renderTactic(); });
-        loose.setTextSize(12); loose.setMinHeight(0); loose.setTextColor(MUTED);
+        loose.setTextSize(12); loose.setMinHeight(0); loose.setTextColor(skin.muted);
         loose.setContentDescription("Relâcher la sélection");
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(74), dp(38));
         p.rightMargin = dp(6); row.addView(loose, p);
@@ -2716,7 +2851,7 @@ public class MainActivity extends Activity {
             for (int i = held.size() - 1; i >= 0; i--) diagram.removeToken(held.get(i));
             board.select(-1); boardChanged();
         });
-        remove.setTextSize(17); remove.setMinHeight(0); remove.setTextColor(MUTED);
+        remove.setTextSize(17); remove.setMinHeight(0); remove.setTextColor(skin.muted);
         remove.setContentDescription("Retirer ces " + held.size() + " joueurs du schéma");
         row.addView(remove, new LinearLayout.LayoutParams(dp(42), dp(38)));
         LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, dp(SELECTION));
@@ -2732,7 +2867,7 @@ public class MainActivity extends Activity {
         LinearLayout row = strip();
         TextView who = new TextView(this);
         who.setText(Diagram.named(token) ? shortName(token.playerId) : "Pion " + token.label);
-        who.setTextSize(13); who.setTextColor(INK); who.setMaxLines(1);
+        who.setTextSize(13); who.setTextColor(skin.ink); who.setMaxLines(1);
         who.setEllipsize(TextUtils.TruncateAt.END);
         row.addView(who, new LinearLayout.LayoutParams(0, -2, 1));
         if (Diagram.named(token)) {
@@ -2743,7 +2878,7 @@ public class MainActivity extends Activity {
             act.setContentDescription(current.isEmpty() ? "Donner une action à ce joueur"
                 : actionName(current) + ", toucher pour changer");
             if (!current.isEmpty()) {
-                act.setBackground(rounded(fill(current), 12)); act.setTextColor(tint(current));
+                act.setBackground(rounded(fill(current), skin.control)); act.setTextColor(tint(current));
             }
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(124), dp(38));
             p.rightMargin = dp(6); row.addView(act, p);
@@ -2751,7 +2886,7 @@ public class MainActivity extends Activity {
         Button remove = button("×", () -> {
             diagram.removeToken(index); board.select(-1); boardChanged();
         });
-        remove.setTextSize(17); remove.setMinHeight(0); remove.setTextColor(MUTED);
+        remove.setTextSize(17); remove.setMinHeight(0); remove.setTextColor(skin.muted);
         remove.setContentDescription("Retirer ce joueur du schéma");
         row.addView(remove, new LinearLayout.LayoutParams(dp(42), dp(38)));
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(SELECTION));
@@ -2775,10 +2910,10 @@ public class MainActivity extends Activity {
         cell.setTextSize(10); cell.setPadding(0, dp(6), 0, dp(2));
         cell.setMinHeight(0); cell.setContentDescription(described);
         cell.setOnLongClickListener(v -> { toast(described); return true; });
-        cell.setBackground(rounded(chosen ? ACCENT : CHIP, 12));
-        cell.setTextColor(chosen ? ON_ACCENT : INK);
+        cell.setBackground(chosen ? leading(skin.control) : control(skin.chip, skin.control));
+        cell.setTextColor(chosen ? skin.onAccent : skin.ink);
         cell.setCompoundDrawablesRelativeWithIntrinsicBounds(null,
-            mark(entry, chosen ? ON_ACCENT : INK), null, null);
+            mark(entry, chosen ? skin.onAccent : skin.ink), null, null);
         cell.setCompoundDrawablePadding(dp(3));
         return cell;
     }
@@ -2832,7 +2967,7 @@ public class MainActivity extends Activity {
         items[0] = "Aucune action";
         for (int i = 0; i < keys.size(); i++)
             items[i + 1] = icon(keys.get(i)) + "   " + actionName(keys.get(i));
-        new AlertDialog.Builder(this).setTitle(shortName(playerId)).setItems(items, (d, which) -> {
+        dialog().setTitle(shortName(playerId)).setItems(items, (d, which) -> {
             if (which == 0) entries.remove(playerId); else entries.put(playerId, keys.get(which - 1));
             if (writeNote()) renderTactic();
         }).show();
@@ -2866,7 +3001,7 @@ public class MainActivity extends Activity {
             ids.add(id); items.add(shortName(id));
         }
         ids.add("#" + side); items.add("Pion — " + teamName(side));
-        new AlertDialog.Builder(this).setTitle("Ajouter — " + teamName(side))
+        dialog().setTitle("Ajouter — " + teamName(side))
             .setItems(items.toArray(new String[0]), (d, which) -> {
                 String id = ids.get(which);
                 if (id.startsWith("#")) diagram.tokens.add(pawn(id.substring(1)));
@@ -3260,7 +3395,7 @@ public class MainActivity extends Activity {
         TextView caveat = label("Calculé sur mes seules notes : ce que j’ai remarqué, pas le match complet. "
             + "Base 6, une demi-note par point. La ligne grise est le compte du fournisseur, "
             + "montré à côté et jamais compris dans la note.");
-        caveat.setTextSize(12); caveat.setTextColor(MUTED);
+        caveat.setTextSize(12); caveat.setTextColor(skin.muted);
         try {
             Map<String,int[]> balance = balances();
             Map<String,LinkedHashMap<String,Integer>> detail = new HashMap<>();
@@ -3303,7 +3438,7 @@ public class MainActivity extends Activity {
                 text.setSpan(new RelativeSizeSpan(1.5f), 0, scoreText(cell[0]).length(), 0);
                 // The provider's line is set back a shade: it is context, not the mark.
                 if (!theirs.isEmpty())
-                    text.setSpan(new ForegroundColorSpan(MUTED), mine.length(), text.length(), 0);
+                    text.setSpan(new ForegroundColorSpan(skin.muted), mine.length(), text.length(), 0);
                 card(text, balanceTint(cell[0]));
             }
             int silent = match.optJSONArray("players").length() - ranked.size();
@@ -3312,8 +3447,8 @@ public class MainActivity extends Activity {
     }
     private void card(CharSequence text, int accentColour) {
         TextView view = new TextView(this); view.setText(text); view.setTextSize(13);
-        view.setTextColor(INK); view.setLineSpacing(dp(4), 1);
-        GradientDrawable shape = rounded(CHIP, 12);
+        view.setTextColor(skin.ink); view.setLineSpacing(dp(4), 1);
+        GradientDrawable shape = rounded(skin.chip, skin.card);
         shape.setStroke(dp(1), accentColour);
         view.setBackground(shape); view.setPadding(dp(14), dp(10), dp(14), dp(10));
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8);
@@ -3416,7 +3551,7 @@ public class MainActivity extends Activity {
                         .append(playerName(entry.optString("player_id")));
                 }
                 if (!note.optString("comment").isEmpty()) text.append("\n").append(note.optString("comment"));
-                Runnable edit = () -> new AlertDialog.Builder(this).setTitle("Modifier la note")
+                Runnable edit = () -> dialog().setTitle("Modifier la note")
                     .setItems(new String[]{"Commentaire", "Supprimer"}, (dialog, which) -> {
                         if (which == 0) comment(note);
                         else try { record(operation("delete", note.getString("note_id"))); history(); }
@@ -3435,15 +3570,16 @@ public class MainActivity extends Activity {
      */
     private void drawnNote(JSONObject note, JSONObject schema, String text, Runnable edit) {
         LinearLayout card = strip();
-        card.setBackground(tappable(rounded(CHIP, 12)));
+        card.setBackground(tappable(panel(skin.chip)));
         card.setPadding(dp(10), dp(10), dp(10), dp(10));
-        BoardView preview = new BoardView(this, match, glassMarkers(), false, true);
+        BoardView preview = new BoardView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
+            Skin.onGrass(skin.ringEnd), false, true);
         preview.setDiagram(Diagram.from(schema));
         LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(150), dp(190));
         size.rightMargin = dp(12);
         card.addView(preview, size);
         TextView caption = new TextView(this);
-        caption.setText(text); caption.setTextSize(13); caption.setTextColor(INK);
+        caption.setText(text); caption.setTextSize(13); caption.setTextColor(skin.ink);
         caption.setLineSpacing(dp(4), 1);
         card.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
         card.setClickable(true); card.setFocusable(true);
@@ -3452,14 +3588,15 @@ public class MainActivity extends Activity {
             + ". Toucher pour rouvrir le schéma, appui long pour commenter ou supprimer.");
         card.setOnClickListener(v -> amend(note));
         card.setOnLongClickListener(v -> { edit.run(); return true; });
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = gap(8);
         root.addView(card, p);
+        separator();
     }
     private void comment(JSONObject note) {
         EditText input = new EditText(this); input.setHint("Commentaire facultatif");
         input.setText(note.optString("comment"));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
-        new AlertDialog.Builder(this).setTitle("Commentaire").setView(input)
+        dialog().setTitle("Commentaire").setView(input)
             .setNegativeButton("Annuler", null).setPositiveButton("Enregistrer", (d,w) -> {
                 try { record(operation("comment", note.getString("note_id")).put("text", input.getText().toString())); history(); }
                 catch (Exception e) { error(e); }
@@ -3476,7 +3613,7 @@ public class MainActivity extends Activity {
         // No adjustment is a dead end: where the provider has published its marks, the match's
         // own time is one tap away, whatever the chrono was set to in the meantime.
         if (published != null) choices.add("Resynchroniser sur le match (" + reading(published) + ")");
-        new AlertDialog.Builder(this).setTitle("Chronomètre du match")
+        dialog().setTitle("Chronomètre du match")
             .setItems(choices.toArray(new String[0]), (d,n) -> {
                 if(n==5) { syncClock(published); showMatch(); return; }
                 if(n==4) { adjustClock(); return; }
@@ -3500,7 +3637,7 @@ public class MainActivity extends Activity {
         NumberPicker picker = new NumberPicker(this); picker.setMinValue(0); picker.setMaxValue(150);
         updateClock();
         picker.setValue(minute); picker.setWrapSelectorWheel(false);
-        new AlertDialog.Builder(this).setTitle("Minute affichée sur ta diffusion").setView(picker)
+        dialog().setTitle("Minute affichée sur ta diffusion").setView(picker)
             .setPositiveButton("Appliquer", (d,w) -> {
                 picker.clearFocus(); clockBase=picker.getValue()*60L; clockAnchor=System.currentTimeMillis();
                 saveClock(); showMatch();
@@ -3508,10 +3645,13 @@ public class MainActivity extends Activity {
     }
     private void options() {
         screen = "options"; page("Options", this::showHome);
+        full("Mes suivis", () -> profile(this::options));
+        skinChoice();
+        markerChoice();
         section("Serveur", null, null);
         TextView help = label("Les matchs sont accessibles sans compte ni jeton personnel. "
             + "La synchronisation des notes utilise un jeton séparé, facultatif.");
-        help.setTextColor(MUTED); help.setTextSize(13); help.setPadding(0, 0, 0, dp(10));
+        help.setTextColor(skin.muted); help.setTextSize(13); help.setPadding(0, 0, 0, dp(10));
         CheckBox demo = choice("Mode démo hors ligne (2 matchs fictifs)", prefs.getBoolean("demo_mode", true));
         demo.setOnCheckedChangeListener((button, checked) -> {
             prefs.edit().putBoolean("demo_mode", checked).apply();
@@ -3519,7 +3659,91 @@ public class MainActivity extends Activity {
         });
         full("Configurer le serveur", this::settings);
         connectionTest(root, () -> prefs.getString("url", "http://10.0.2.2:8080"));
-        markerChoice();
+    }
+
+    /**
+     * The five looks, each shown in its own. A theme picker that names its themes and colours a
+     * dot beside each name asks the reader to imagine the rest; these draw the two controls that
+     * differ most from one skin to the next — the button that leads somewhere and the chip beside
+     * it — in the candidate's colours, corners and control style, on the candidate's own ground.
+     * Choosing redraws the page under the new skin, which is the last of the preview.
+     */
+    private void skinChoice() {
+        section("Thème", null, null);
+        TextView help = label("Le terrain garde le vert de la pelouse et les maillots les couleurs "
+            + "des clubs : un thème habille tout ce qu’il y a autour.");
+        help.setTextColor(skin.muted); help.setTextSize(13); help.setPadding(0, 0, 0, dp(2));
+        LinearLayout row = null;
+        for (Skin candidate : Skin.ALL) {
+            if (row == null) { row = strip(); row.setGravity(Gravity.TOP); root.addView(row); }
+            row.addView(skinCard(candidate), half());
+            if (row.getChildCount() == 2) row = null;
+        }
+        // An odd skin out would otherwise stretch across the page and read as the chosen one.
+        if (row != null) row.addView(new View(this), half());
+    }
+
+    private LinearLayout skinCard(Skin candidate) {
+        boolean chosen = candidate.key.equals(skin.key);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        GradientDrawable back = rounded(candidate.background, skin.card);
+        back.setStroke(dp(chosen ? 2 : 1), chosen ? skin.accent : skin.hairline);
+        card.setBackground(back);
+        LinearLayout sample = strip();
+        LinearLayout.LayoutParams leading = new LinearLayout.LayoutParams(0, dp(30), 1);
+        leading.rightMargin = dp(6);
+        sample.addView(swatch(candidate, "Note", true), leading);
+        sample.addView(swatch(candidate, "23′", false), new LinearLayout.LayoutParams(dp(44), dp(30)));
+        card.addView(sample, new LinearLayout.LayoutParams(-1, dp(30)));
+        TextView name = new TextView(this);
+        name.setText(candidate.name); name.setTextSize(15);
+        name.setTypeface(Typeface.create(candidate.face, Typeface.BOLD), Typeface.BOLD);
+        name.setAllCaps(candidate.capitals); name.setLetterSpacing(candidate.tracking);
+        name.setTextColor(chosen ? candidate.accent : candidate.ink);
+        name.setPadding(0, dp(10), 0, 0);
+        card.addView(name);
+        TextView blurb = new TextView(this);
+        blurb.setText(candidate.blurb); blurb.setTextSize(11.5f);
+        blurb.setTextColor(candidate.muted); blurb.setLineSpacing(dp(2), 1);
+        blurb.setPadding(0, dp(2), 0, 0);
+        card.addView(blurb);
+        for (int i = 0; i < card.getChildCount(); i++)
+            card.getChildAt(i).setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        card.setContentDescription("Thème " + candidate.name + " : " + candidate.blurb
+            + (chosen ? " Sélectionné." : ""));
+        card.setClickable(true); card.setFocusable(true); card.setMinimumHeight(dp(48));
+        card.setOnClickListener(v -> {
+            if (chosen) return;
+            prefs.edit().putString("skin", candidate.key).apply();
+            skin = candidate;
+            options();
+        });
+        return card;
+    }
+
+    /** One control as a skin would draw it: its fill, its corner, its edge, its lettering. */
+    private TextView swatch(Skin candidate, String text, boolean leading) {
+        TextView view = new TextView(this);
+        view.setText(text); view.setTextSize(11); view.setGravity(Gravity.CENTER);
+        view.setTextColor(leading ? candidate.onAccent : candidate.ink);
+        GradientDrawable shape;
+        if (leading) {
+            shape = new GradientDrawable();
+            shape.setCornerRadius(dp(candidate.control));
+            if (candidate.travelling()) {
+                shape.setOrientation(GradientDrawable.Orientation.LEFT_RIGHT);
+                shape.setColors(new int[]{candidate.accent, candidate.accentEnd});
+            } else shape.setColor(candidate.accent);
+        } else {
+            shape = new GradientDrawable();
+            shape.setCornerRadius(dp(candidate.control));
+            shape.setColor(candidate.controls == Skin.OUTLINED ? Color.TRANSPARENT : candidate.chip);
+            if (candidate.controls != Skin.FILLED) shape.setStroke(dp(1), candidate.hairline);
+        }
+        view.setBackground(shape);
+        return view;
     }
 
     /** Which of the two shirt looks the pitch draws. Glass unless the player asked for paint. */
@@ -3547,19 +3771,20 @@ public class MainActivity extends Activity {
         card.setOrientation(LinearLayout.VERTICAL); card.setGravity(Gravity.CENTER);
         card.setPadding(dp(10), dp(14), dp(10), dp(14));
         // The sample sits on a patch of pitch, because that is the only place it will ever be seen.
-        GradientDrawable back = rounded(Color.rgb(24, 56, 46), 14);
-        back.setStroke(dp(chosen ? 2 : 1), chosen ? ACCENT : Color.argb(60, 255, 255, 255));
+        GradientDrawable back = rounded(Color.rgb(24, 56, 46), skin.card);
+        back.setStroke(dp(chosen ? 2 : 1), chosen ? skin.accent : skin.hairline);
         card.setBackground(back);
         TextView sample = new TextView(this);
         sample.setText("10"); sample.setTextSize(12.5f); sample.setGravity(Gravity.CENTER);
         sample.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        sample.setBackground(PitchView.shirt(this, glass, SAMPLE_KIT, false, false));
+        sample.setBackground(PitchView.shirt(this, glass, SAMPLE_KIT, false, false,
+            Skin.onGrass(skin.ring), Skin.onGrass(skin.ringEnd)));
         sample.setTextColor(glass ? SAMPLE_KIT : Color.rgb(15, 35, 33));
         sample.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         card.addView(sample, new LinearLayout.LayoutParams(dp(32), dp(32)));
         TextView caption = new TextView(this);
         caption.setText(name); caption.setTextSize(14); caption.setPadding(0, dp(8), 0, 0);
-        caption.setTextColor(chosen ? ACCENT : INK);
+        caption.setTextColor(chosen ? skin.accent : skin.ink);
         caption.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         card.addView(caption);
         card.setContentDescription(described + (chosen ? ", sélectionné" : ""));
@@ -3580,7 +3805,7 @@ public class MainActivity extends Activity {
         token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         token.setText(prefs.getString("token", "")); box.addView(token);
         connectionTest(box, () -> url.getText().toString().trim().replaceAll("/+$", ""));
-        new AlertDialog.Builder(this).setTitle("Serveur personnel").setView(box)
+        dialog().setTitle("Serveur personnel").setView(box)
             .setPositiveButton("Enregistrer", (d,w) -> prefs.edit()
                 .putString("url", url.getText().toString().trim().replaceAll("/+$", ""))
                 .putString("token", token.getText().toString().trim()).apply())
@@ -3589,7 +3814,7 @@ public class MainActivity extends Activity {
 
     private void connectionTest(LinearLayout box, java.util.function.Supplier<String> address) {
         TextView result = new TextView(this);
-        result.setTextColor(MUTED); result.setPadding(dp(8), dp(8), dp(8), dp(8));
+        result.setTextColor(skin.muted); result.setPadding(dp(8), dp(8), dp(8), dp(8));
         result.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         Button test = button("Tester la connexion", () -> {});
         box.addView(test, new LinearLayout.LayoutParams(-1, dp(48))); box.addView(result);

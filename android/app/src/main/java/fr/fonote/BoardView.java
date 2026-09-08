@@ -85,6 +85,8 @@ final class BoardView extends View {
     private final float[] position = new float[2], tangent = new float[2];
     private final JSONObject match;
     private final boolean glass, editable;
+    /** The ring the board selects in, both its ends, and the band it draws round a group. */
+    private final int held, heldEnd;
     /** A thumbnail has no room for names, and nothing to gain from them. */
     private final boolean compact;
     private Diagram diagram = new Diagram();
@@ -116,9 +118,11 @@ final class BoardView extends View {
     private IntConsumer onSelect;
     private Runnable onChange;
 
-    BoardView(Context context, JSONObject match, boolean glass, boolean editable, boolean compact) {
+    BoardView(Context context, JSONObject match, boolean glass, int held, int heldEnd,
+              boolean editable, boolean compact) {
         super(context);
-        this.match = match; this.glass = glass; this.editable = editable; this.compact = compact;
+        this.match = match; this.glass = glass; this.held = held; this.heldEnd = heldEnd;
+        this.editable = editable; this.compact = compact;
         grass = new Pitch(context);
         setBackground(Pitch.turf(compact ? 12 : 20, context.getResources().getDisplayMetrics().density));
         setClipToOutline(true);
@@ -251,10 +255,12 @@ final class BoardView extends View {
         plate.set(Math.min(downX, lastX), Math.min(downY, lastY),
                   Math.max(downX, lastX), Math.max(downY, lastY));
         paint.setPathEffect(null);
-        paint.setStyle(Paint.Style.FILL); paint.setColor(Color.argb(34, 213, 255, 170));
+        int band = Skin.paler(held);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb(34, Color.red(band), Color.green(band), Color.blue(band)));
         canvas.drawRoundRect(plate, dp(6), dp(6), paint);
         paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(1.5f));
-        paint.setColor(Color.rgb(213, 255, 170));
+        paint.setColor(band);
         paint.setPathEffect(new DashPathEffect(new float[]{dp(6), dp(4)}, 0));
         canvas.drawRoundRect(plate, dp(6), dp(6), paint);
         paint.setPathEffect(null);
@@ -401,7 +407,7 @@ final class BoardView extends View {
         int radius = Math.round(dp(compact ? SHIRT * .68f : SHIRT) / 2);
         int cx = Math.round(x(spot(token)[0])), cy = Math.round(y(spot(token)[1]));
         boolean active = chosen.contains(index);
-        Drawable shirt = PitchView.shirt(getContext(), glass, colour(token), active, false);
+        Drawable shirt = PitchView.shirt(getContext(), glass, colour(token), active, false, held, heldEnd);
         shirt.setBounds(cx - radius, cy - radius, cx + radius, cy + radius);
         shirt.draw(canvas);
         String number = number(token);
@@ -456,18 +462,8 @@ final class BoardView extends View {
     }
     private String name(Diagram.Token token) {
         JSONObject player = player(token);
-        if (player == null) return "";
-        String side = player.optString("team");
-        JSONArray teams = match == null ? null : match.optJSONArray("teams");
-        for (int i = 0; teams != null && i < teams.length(); i++) {
-            JSONObject team = teams.optJSONObject(i);
-            if (side.equals(team.optString("key"))) {
-                String code = team.optString("tla");
-                if (code.isEmpty()) code = team.optString("name");
-                return code + " · " + PlayerName.shorten(player.optString("name"));
-            }
-        }
-        return PlayerName.shorten(player.optString("name"));
+        // Le maillot porte déjà la couleur de l'équipe : l'étiquette ne dit que le joueur.
+        return player == null ? "" : PlayerName.shorten(player.optString("name"));
     }
 
     // ——— Le doigt ———
