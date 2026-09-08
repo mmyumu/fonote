@@ -1,0 +1,55 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Le carnet posé sur la pelouse : une page de papier kraft, sa spirale citron, et le
+         terrain dessiné dessus. Le nom de l'application dit les deux moitiés — le foot et la note —
+         et c'est ce que le dessin montre, plutôt que l'une des deux.
+
+         La pelouse de l'icône est plus claire que celle du tableau tactique, qui est un vert
+         de nuit ; ici elle a le fond sombre du lanceur d'un côté et le papier de l'autre, et
+         un vert de nuit se serait confondu avec le premier. Les marquages sont blancs, comme
+         sur un vrai terrain, et non plus à l'encre verte : sur ce vert-là ils tiennent le
+         rapport de 3:1 qu'un tracé doit garder pour rester lisible, ce qui est aussi la
+         raison pour laquelle le papier est un kraft clair et non un brun franc — plus foncé,
+         il rapprocherait la page du fond et laisserait le blanc porter l'icône tout seul.
+
+         Le terrain est debout, comme la page, et occupe presque toute sa hauteur : c'est ce
+         qui laisse la place aux surfaces de réparation, et ce sont elles, avec le rond
+         central, qui font lire un terrain plutôt qu'un tableau. Les arcs de corner et les
+         surfaces de but, eux, se refermeraient en pâté à quarante-huit points et sont
+         laissés de côté.
+
+         Tout tient dans le disque de 66dp que le lanceur garantit, spirale comprise. -->
+    <path android:fillColor="#FFE7D3AE"
+        android:pathData="M37,34 L71,34 Q75,34 75,38 L75,77 Q75,81 71,81 L37,81 Q33,81 33,77 L33,38 Q33,34 37,34 Z" />
+    <path android:strokeColor="#FFCFF0A0" android:strokeWidth="3.8" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M44,27 L44,38.5 M54,27 L54,38.5 M64,27 L64,38.5" />
+
+    <!-- La pelouse, et la tonte en bandes : deux passages sur quatre assombris d'un rien,
+         ce qui suffit à donner de l'herbe plutôt qu'un aplat sans rien ajouter à lire. -->
+    <path android:fillColor="#FF3F9160" android:pathData="M38,42 L70,42 L70,76 L38,76 Z" />
+    <group>
+        <clip-path android:pathData="M38,42 L70,42 L70,76 L38,76 Z" />
+        <path android:fillColor="#14000000"
+            android:pathData="M38,42 L70,42 L70,50.5 L38,50.5 Z M38,59 L70,59 L70,67.5 L38,67.5 Z" />
+    </group>
+
+    <!-- La touche et la médiane. -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.9" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M39,43 L69,43 L69,75 L39,75 Z" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8"
+        android:fillColor="#00000000" android:pathData="M39,59 L69,59" />
+    <!-- Le rond central et son point. -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8"
+        android:fillColor="#00000000" android:pathData="M54,53.4 A5.6,5.6 0 1,1 53.9,53.4 Z" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M54,59 m-1.1,0 a1.1,1.1 0 1,0 2.2,0 a1.1,1.1 0 1,0 -2.2,0 z" />
+    <!-- Les deux surfaces de réparation, et les points de penalty. -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M45,43 L45,49 L63,49 L63,43" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M45,75 L45,69 L63,69 L63,75" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M54,46.6 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 z
+                          M54,71.4 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 z" />
+</vector>

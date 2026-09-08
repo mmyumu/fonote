@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- La pelouse de nuit du thème d'origine, en dégradé de bas en haut pour que le
+         masque du lanceur — rond, carré ou en goutte — ne tombe jamais sur un aplat. -->
+    <path android:pathData="M0,0 h108 v108 h-108 z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="0" android:startY="108" android:endX="108" android:endY="0"
+                android:startColor="#FF0A1E19" android:endColor="#FF1A3E32" />
+        </aapt:attr>
+    </path>
+</vector>
