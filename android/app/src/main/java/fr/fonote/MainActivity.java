@@ -912,7 +912,7 @@ public class MainActivity extends Activity {
         int slot = home ? 0 : 1;
         int request = ++fixturesRequests[slot];
         Pager requestedPager = browsePager;
-        if (prefs.getBoolean("demo_mode", true)) {
+        if (demoMode()) {
             showOfflineFixtures(home);
             return;
         }
@@ -1177,7 +1177,7 @@ public class MainActivity extends Activity {
     private void refreshHomeCard() {
         if (!browsing()) return;
         try {
-            if (prefs.getBoolean("demo_mode", true)) showOfflineFixtures(true);
+            if (demoMode()) showOfflineFixtures(true);
             else renderFixtures(localFixtures(LocalDate.now(), LocalDate.now()), true);
         } catch (Exception error) { error(error); }
         selectBrowsePage();
@@ -1187,8 +1187,8 @@ public class MainActivity extends Activity {
     private final Set<String> clubsFetching = new HashSet<>();
 
     private void refreshClubFixtures() {
-        if (!hasServer() || prefs.getBoolean("demo_mode", true)) return;
-        String base = prefs.getString("url", "");
+        if (!hasServer() || demoMode()) return;
+        String base = server();
         for (String club : prefs.getStringSet("follow_teams", Collections.emptySet())) {
             String key = base + "/" + club;
             if (clubsFetching.contains(key) || System.currentTimeMillis() - clubFetched.getOrDefault(key, 0L) < 300_000) continue;
@@ -1594,13 +1594,27 @@ public class MainActivity extends Activity {
     }
 
     private boolean hasServer() {
-        // No URL saved means deliberate local/demo mode. The old emulator default (10.0.2.2)
-        // made a phone wait for a server that could never exist on that device.
-        return prefs.contains("url") && !prefs.getString("url", "").trim().isEmpty();
+        // A saved address always decides, emptied on purpose included: that is someone asking
+        // for local mode. Without one, the address this build carries decides instead — a
+        // release knows a real server and may use it untouched, whereas the development
+        // default is the machine that produced the build, which a phone can never reach.
+        if (prefs.contains("url")) return !prefs.getString("url", "").trim().isEmpty();
+        return BuildConfig.SERVER_PUBLIC;
     }
 
+    /** The address to talk to: the one saved, or the one this build was made with. */
+    private String server() { return prefs.getString("url", BuildConfig.SERVER); }
+
+    /**
+     * Whether the two fictional matches stand in for a season. On by default only where the
+     * build knows no public server: an application that cannot reach anything is better off
+     * showing something than an empty home. Where a real server is built in, a fresh install
+     * goes to it — the demonstration is then a choice one makes, not the state one lands in.
+     */
+    private boolean demoMode() { return prefs.getBoolean("demo_mode", !BuildConfig.SERVER_PUBLIC); }
+
     private String get(String path) throws Exception {
-        String data = get(prefs.getString("url", "http://10.0.2.2:8080"), path);
+        String data = get(server(), path);
         if (path.startsWith("/v1/football/")) return store.download(path, data);
         return data;
     }
@@ -3652,13 +3666,13 @@ public class MainActivity extends Activity {
         TextView help = label("Les matchs sont accessibles sans compte ni jeton personnel. "
             + "La synchronisation des notes utilise un jeton séparé, facultatif.");
         help.setTextColor(skin.muted); help.setTextSize(13); help.setPadding(0, 0, 0, dp(10));
-        CheckBox demo = choice("Mode démo hors ligne (2 matchs fictifs)", prefs.getBoolean("demo_mode", true));
+        CheckBox demo = choice("Mode démo hors ligne (2 matchs fictifs)", demoMode());
         demo.setOnCheckedChangeListener((button, checked) -> {
             prefs.edit().putBoolean("demo_mode", checked).apply();
             if ("options".equals(screen)) showHome();
         });
         full("Configurer le serveur", this::settings);
-        connectionTest(root, () -> prefs.getString("url", "http://10.0.2.2:8080"));
+        connectionTest(root, this::server);
     }
 
     /**
@@ -3800,7 +3814,7 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
         EditText url = new EditText(this); url.setHint("https://mon-serveur");
         url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        url.setText(prefs.getString("url", "http://10.0.2.2:8080")); box.addView(url);
+        url.setText(server()); box.addView(url);
         EditText token = new EditText(this); token.setHint("Jeton de synchronisation (facultatif)");
         token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         token.setText(prefs.getString("token", "")); box.addView(token);
@@ -3841,7 +3855,9 @@ public class MainActivity extends Activity {
                 } catch (Exception error) {
                     message = reached
                         ? "Serveur connecté, mais données football indisponibles. Vérifiez la clé API, le quota et la connexion Internet du serveur."
-                        : "Connexion impossible. Vérifiez que le serveur est démarré et que l’adresse est correcte. Sur l’émulateur : http://10.0.2.2:8080. Si le serveur tourne déjà, redémarrez-le avec la dernière version.";
+                        : "Connexion impossible. Vérifiez que le serveur est démarré et que l’adresse est correcte. "
+                            + "Adresse par défaut de cette version : " + BuildConfig.SERVER
+                            + ". Si le serveur tourne déjà, redémarrez-le avec la dernière version.";
                 }
                 String feedback = message;
                 runOnUiThread(() -> { test.setEnabled(true); result.setText(feedback); });
@@ -3872,7 +3888,7 @@ public class MainActivity extends Activity {
     }
     private void sync() {
         if (syncing) return;
-        String base = prefs.getString("url", ""), token = prefs.getString("token", "");
+        String base = server(), token = prefs.getString("token", "");
         if (base.isEmpty() || token.isEmpty()) { settings(); return; }
         syncing = true; status.setText("Synchronisation en cours…");
         worker.execute(() -> {
