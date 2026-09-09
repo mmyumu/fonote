@@ -1,0 +1,7 @@
+# Liste blanche : le contexte se limite au serveur et à la composition qu'il lit. Le reste du
+# dépôt — dont `.tooling/` et ses seize gigaoctets d'outils Android, et le `.env` de la
+# machine de build — n'a rien à faire dans une image.
+*
+!backend/server.py
+!backend/espn.py
+!android/app/src/main/assets/match.json

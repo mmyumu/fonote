@@ -374,7 +374,62 @@ jamais enregistrée dans l’application. Sans cette variable, l’application c
 
 Utiliser alors `http://127.0.0.1:8080` dans l'application **debug**. Pour l'émulateur Android : `http://10.0.2.2:8080`.
 
-Le jeton est un secret : ne pas le committer. La version release refuse HTTP en clair. Un déploiement distant doit passer par HTTPS et un serveur HTTP de production ; le serveur Python fourni est destiné au prototype personnel local. Un seul espace personnel par serveur, pas de gestion de comptes.
+Le jeton est un secret : ne pas le committer. La version release refuse HTTP en clair. Un déploiement distant doit passer par HTTPS : le serveur reste ce `http.server`, mais derrière le Nginx du VPS, comme le décrit la section suivante. Un seul espace personnel par serveur, pas de gestion de comptes.
+
+## Déployer le serveur sur un VPS
+
+Le serveur tient dans une image Docker et un `docker compose up -d`. L'image ne contient que
+Python, les deux modules de `backend/` et la composition de démonstration qu'ils lisent : le
+serveur n'ayant aucune dépendance, il n'y a rien à installer et rien à verrouiller.
+
+- `backend/Dockerfile` — l'image, construite depuis la racine du dépôt : `server.py` cherche
+  `android/app/src/main/assets/match.json` à côté de son propre dossier, donc le contexte doit
+  voir les deux. Le `.dockerignore` est écrit en liste blanche pour cette raison : il n'y entre
+  que ces trois fichiers, ni le `.env` de la machine de build ni les seize gigaoctets de `.tooling/`.
+- `compose.yml` — le service, le port et le volume.
+- `.env.example` — les variables à recopier dans `.env`.
+
+Copier `.env.example` vers `.env` et renseigner le jeton :
+
+```env
+FONOTE_TOKEN=le-meme-jeton-que-dans-l-application
+FOOTBALL_DATA_TOKEN=votre-cle-football-data
+FONOTE_BACKEND_IMAGE=registry.mmyumu.fr/fonote-backend:1.0.0
+```
+
+Sans `FONOTE_TOKEN`, `docker compose` refuse de démarrer plutôt que de lancer un serveur qui
+répondrait 401 à tout. Sans `FOOTBALL_DATA_TOKEN`, le serveur démarre et l'application reste en
+démo hors ligne, comme en local. Le `.env` de la racine est celui que lit déjà le serveur lancé
+à la main : les deux usages partagent le même fichier, ignoré par Git.
+
+Depuis la racine, sur la machine de développement :
+
+```bash
+docker compose build
+docker compose push
+```
+
+Puis sur le VPS :
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Le journal des opérations vit dans le volume Docker `fonote_backend_data`, monté sur `/data` :
+le conteneur est jetable, la base ne l'est pas. La sauvegarde reste celle décrite plus bas — il
+faut passer par l'API SQLite de sauvegarde, pas par une copie du fichier principal :
+
+```bash
+docker compose exec backend python3 -c "import sqlite3; s=sqlite3.connect('/data/fonote.sqlite3'); d=sqlite3.connect('/data/fonote-backup.sqlite3'); s.backup(d); d.close(); s.close()"
+```
+
+Le conteneur n'écoute que sur `127.0.0.1:8080` du VPS, jamais sur l'extérieur, et tourne sous un
+utilisateur sans privilèges. C'est au Nginx de la machine, hors de ce dépôt, de terminer le TLS
+et de relayer vers ce port : la version release de l'application refuse le HTTP en clair, et le
+jeton ne doit pas traverser un réseau sans chiffrement. `/v1/health` est la seule route ouverte
+sans jeton — Docker s'en sert pour le `HEALTHCHECK` —, avec le proxy football, qui n'expose que
+les données publiques du fournisseur et jamais la clé.
 
 ## Construire Android
 
