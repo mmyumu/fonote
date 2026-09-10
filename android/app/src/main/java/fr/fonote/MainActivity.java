@@ -81,6 +81,8 @@ public class MainActivity extends Activity {
     /** Regulation half, and the break the referee is expected to give, in seconds. */
     private static final int HALF = 45, BREAK = 15 * 60;
     private boolean syncing;
+    private boolean refreshing;
+    private View homeRefresh, calendarRefresh;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     /** key → {symbole, nom, nom court, poids}. */
     private final LinkedHashMap<String,String[]> actions = new LinkedHashMap<>();
@@ -179,6 +181,7 @@ public class MainActivity extends Activity {
         super.onCreate(saved);
         store = new Store(getApplicationContext());
         prefs = getSharedPreferences("fonote", MODE_PRIVATE);
+        forgetTheFormerProvider();
         skin = Skin.of(prefs.getString("skin", null));
         // The window shows for an instant before the first page is built; in its own colour.
         getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(skin.background));
@@ -251,26 +254,51 @@ public class MainActivity extends Activity {
         worker.shutdown();
         super.onDestroy();
     }
+    /**
+     * The prefix every identifier coming from the feed carries — a match, a player. It names
+     * the provider the identifier belongs to, so that two of them never pass for one another:
+     * notes written before the move to ESPN carry 'fd-' and, the journal being immutable, keep
+     * it for good. That is why the prefix is measured here and never assumed to be three long,
+     * and why a match still named 'fd-' is shown as one whose details are gone rather than
+     * fetched again — its number means nothing to this feed.
+     */
+    static final String REMOTE = "espn-";
+
+    /**
+     * Which numbering the choices saved on this device were made under. Raised whenever the
+     * server starts naming clubs, competitions and matches by another provider's numbers.
+     */
+    private static final int NUMBERING = 2;
+
+    /**
+     * Les cartes de l’accueil, de gauche à droite : l’accueil au centre, les matchs annotés d’un
+     * côté et les matchs enregistrés de l’autre, chacun à un glissement de lui.
+     */
+    private static final int ANNOTATED = 0, HOME = 1, SAVED = 2;
     private Pager browsePager;
-    private FrameLayout homeCard, calendarCard, annotatedCard;
-    private LinearLayout homeRoot, calendarRoot, annotatedRoot;
+    private FrameLayout homeCard, annotatedCard, savedCard;
+    private LinearLayout homeRoot, annotatedRoot, savedRoot;
     private String calendarSearch = "", annotatedSearch = "", followSearch = "";
     private LinearLayout profileRoot;
     private Runnable profileBack = this::showHome;
     private JSONObject followCatalogue = new JSONObject(), followFixtures = new JSONObject();
-    private JSONArray calendarFixtures = new JSONArray();
     private LocalDate calendarCentre = LocalDate.now();
+    /** The week the calendar shows, and the two it is swiped to, on either side of it. */
+    private static final int WEEKS = 3;
+    private Pager weekPager;
+    private final LinearLayout[] weekRoots = new LinearLayout[WEEKS];
+    private TextView weekSpan;
 
     private boolean browsing() {
-        return browsePager != null && ("home".equals(screen) || "calendar".equals(screen) || "annotated".equals(screen));
+        return browsePager != null
+            && ("home".equals(screen) || "annotated".equals(screen) || "saved".equals(screen));
     }
 
     private void selectBrowsePage() {
         int selected = browsePager.page();
-        screen = selected == 0 ? "annotated" : selected == 1 ? "home" : "calendar";
-        root = selected == 0 ? annotatedRoot : selected == 1 ? homeRoot : calendarRoot;
-        if (selected == 2) updateFavoriteButtons(calendarRoot);
-        if (selected == 0) updateFavoriteButtons(annotatedRoot);
+        screen = selected == ANNOTATED ? "annotated" : selected == SAVED ? "saved" : "home";
+        root = selected == ANNOTATED ? annotatedRoot : selected == SAVED ? savedRoot : homeRoot;
+        if (selected == ANNOTATED) updateFavoriteButtons(annotatedRoot);
     }
 
     private void updateFavoriteButtons(android.view.ViewGroup group) {
@@ -323,9 +351,27 @@ public class MainActivity extends Activity {
      * it still matters. Bounded on every side: only the match screen, only a match of the day,
      * and never while a note is open — the players must not move under the finger mid-note.
      */
+    /**
+     * Drop what was chosen under the former provider's numbering, once.
+     *
+     * Clubs, competitions and matches were football-data's numbers and are ESPN's now, and the
+     * two number the same clubs differently. A followed club kept across the change would not
+     * simply be missing: 548 named Monaco there and names someone else, or no one, here — so a
+     * suivi would quietly become another club's calendar. Better an empty list one recognises
+     * than a full one that lies. Notes are never touched: they are the only thing on this
+     * device that is the reader's own work rather than a copy of a feed.
+     */
+    private void forgetTheFormerProvider() {
+        if (prefs.getInt("numbering", 1) >= NUMBERING) return;
+        SharedPreferences.Editor edit = prefs.edit();
+        for (String key : new ArrayList<>(prefs.getAll().keySet()))
+            if (key.startsWith("follow_") || key.startsWith("clock_fd-")) edit.remove(key);
+        edit.putInt("numbering", NUMBERING).apply();
+    }
+
     private void follow() {
         if (!"match".equals(screen) || match == null || !noteId.isEmpty() || !hasServer()) return;
-        if (!match.optString("id").startsWith("fd-")) return;
+        if (!match.optString("id").startsWith(REMOTE)) return;
         // A match the provider has whistled off has nothing left to publish.
         if (match.optLong("end_epoch_ms") > 0) return;
         long ahead = (clockAnchor - System.currentTimeMillis()) / 1000;
@@ -335,7 +381,7 @@ public class MainActivity extends Activity {
         long now = System.currentTimeMillis();
         if (now - polled < POLL) return;
         polled = now;
-        String id = match.optString("id").substring(3);
+        String id = match.optString("id").substring(REMOTE.length());
         worker.execute(() -> {
             try {
                 JSONObject fresh = convertMatch(new JSONObject(get("/v1/football/matches/" + id)));
@@ -404,7 +450,8 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout page(String title, Runnable back, int card) {
-        ScrollView scroll = new ScrollView(this);
+        Pull scroll = new Pull(this);
+        if (card == HOME) scroll.onPull(this::refreshData, () -> !refreshing);
         // Without this the page ends where its content does and the window shows through.
         scroll.setFillViewport(true); scroll.setBackgroundColor(skin.background);
         dressWindow();
@@ -412,11 +459,21 @@ public class MainActivity extends Activity {
         scroll.addView(root);
         if (card < 0) setContentView(scroll);
         else {
-            FrameLayout host = card == 0 ? homeCard : card == 1 ? calendarCard : annotatedCard;
+            FrameLayout host = card == HOME ? homeCard : card == ANNOTATED ? annotatedCard : savedCard;
             host.removeAllViews(); host.addView(scroll);
-            if (card == 0) homeRoot = root; else if (card == 1) calendarRoot = root; else annotatedRoot = root;
+            if (card == HOME) homeRoot = root; else if (card == ANNOTATED) annotatedRoot = root; else savedRoot = root;
         }
-        LinearLayout bar = strip(); root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout bar = titleBar(title, back);
+        root.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        return bar;
+    }
+
+    /**
+     * The bar a page is headed by. Apart from {@link #page} because the calendar lays out its own
+     * screen — a header that stays put above weeks that slide — and still wants the same head.
+     */
+    private LinearLayout titleBar(String title, Runnable back) {
+        LinearLayout bar = strip();
         if (back != null) bar.addView(barAction(R.drawable.ic_arrow_back, "Revenir", back), barSize(0));
         TextView heading = headline(title, 26);
         heading.setPadding(back == null ? 0 : dp(10), dp(8), 0, dp(8));
@@ -604,75 +661,167 @@ public class MainActivity extends Activity {
 
     private void showHome() {
         if (browsing()) {
-            browsePager.show(1, true);
+            browsePager.show(HOME, true);
             selectBrowsePage();
             return;
         }
         browsePager = new Pager(this);
-        homeCard = new FrameLayout(this); calendarCard = new FrameLayout(this);
-        annotatedCard = new FrameLayout(this);
-        browsePager.addPage(annotatedCard); browsePager.addPage(homeCard); browsePager.addPage(calendarCard);
+        homeCard = new FrameLayout(this); annotatedCard = new FrameLayout(this);
+        savedCard = new FrameLayout(this);
+        browsePager.addPage(annotatedCard); browsePager.addPage(homeCard); browsePager.addPage(savedCard);
         renderAnnotated();
+        renderSaved();
         showHomeShell();
-        loadFixtures(LocalDate.now(), LocalDate.now(), true);
-        renderCalendar(calendarCentre);
+        loadFixtures(LocalDate.now(), LocalDate.now());
         browsePager.onTurn(this::selectBrowsePage);
-        browsePager.show(1, false);
+        browsePager.show(HOME, false);
         selectBrowsePage();
         setContentView(browsePager);
         refreshClubFixtures();
     }
 
+    /**
+     * The calendar, a screen of its own reached by the links that name it. It used to be the card
+     * to the right of the home pager; the swipe that turned to it now turns its weeks, which is
+     * the gesture a week deserves — one calendar, read a week at a time, rather than one card
+     * among three that happened to be a calendar.
+     *
+     * <p>The header stays put and only the weeks slide: the week swiped to is already drawn on
+     * the page next door, and comes to rest in the middle as the week the calendar is centred on.
+     */
     private void calendar(LocalDate centre) {
-        if (!browsing()) showHome();
-        renderCalendar(centre);
-        browsePager.show(2, true);
-        selectBrowsePage();
-    }
-
-    private void renderCalendar(LocalDate centre) {
         calendarCentre = centre;
         screen = "calendar";
-        LinearLayout title = page("Calendrier", this::showHome, 1);
-        // Two arrows and the window they move: lighter than three buttons, and it says the dates.
-        LinearLayout dates = strip();
-        LinearLayout.LayoutParams row = new LinearLayout.LayoutParams(-1, -2);
-        row.topMargin = dp(6); root.addView(dates, row);
-        dates.addView(barAction(R.drawable.ic_chevron_left, "Semaine précédente",
-            () -> calendar(centre.minusDays(7))), barSize(0));
-        TextView date = new TextView(this);
-        DateTimeFormatter span = DateTimeFormatter.ofPattern("d MMM", Locale.FRANCE);
-        date.setText("du " + centre.minusDays(3).format(span) + " au " + centre.plusDays(3).format(span));
-        date.setTextColor(skin.ink); date.setTextSize(15); date.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        date.setGravity(Gravity.CENTER);
-        dates.addView(date, new LinearLayout.LayoutParams(0, -2, 1));
-        dates.addView(barAction(R.drawable.ic_chevron_right, "Semaine suivante",
-            () -> calendar(centre.plusDays(7))), barSize(0));
-        // Only fixtures scroll: the title and week controls keep the page identifiable.
-        ScrollView fixtures = (ScrollView) root.getParent();
-        root.removeView(title); root.removeView(dates);
-        calendarCard.removeAllViews();
+        dressWindow();
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(skin.background);
         LinearLayout header = frame();
         header.setPadding(dp(16), dp(10), dp(16), dp(12));
-        header.addView(title); header.addView(dates, row);
+        LinearLayout bar = titleBar("Calendrier", this::showHome);
+        header.addView(bar);
+        // Two arrows and the window they move: lighter than three buttons, and it says the dates.
+        LinearLayout dates = strip();
+        LinearLayout.LayoutParams row = new LinearLayout.LayoutParams(-1, -2);
+        row.topMargin = dp(6); header.addView(dates, row);
+        // The arrows ask for the same turn a finger does, so both leave by the same door.
+        dates.addView(barAction(R.drawable.ic_chevron_left, "Semaine précédente",
+            () -> weekPager.show(0, true)), barSize(0));
+        weekSpan = new TextView(this);
+        weekSpan.setTextColor(skin.ink); weekSpan.setTextSize(15);
+        weekSpan.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        weekSpan.setGravity(Gravity.CENTER);
+        dates.addView(weekSpan, new LinearLayout.LayoutParams(0, -2, 1));
+        dates.addView(barAction(R.drawable.ic_chevron_right, "Semaine suivante",
+            () -> weekPager.show(2, true)), barSize(0));
         // The week arrows are round and heavy: the field needs air under them, more than the
         // hairline the arrows leave on their own.
         LinearLayout.LayoutParams search = new LinearLayout.LayoutParams(-1, -2);
         search.topMargin = dp(10);
         header.addView(searchField("Rechercher dans cette semaine", calendarSearch, query -> {
             calendarSearch = query;
-            LinearLayout previous = root; root = calendarRoot;
-            renderFixtures(calendarFixtures, false); root = previous;
+            renderWeeks();
         }), search);
         layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
         View divider = new View(this); divider.setBackgroundColor(skin.chip);
         layout.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
-        root.setPadding(dp(16), 0, dp(16), dp(24));
-        layout.addView(fixtures, new LinearLayout.LayoutParams(-1, 0, 1));
-        calendarCard.addView(layout);
-        loadFixtures(centre.minusDays(3), centre.plusDays(3), false);
+        calendarRefresh = refreshIndicator(layout);
+        weekPager = new Pager(this);
+        for (int i = 0; i < WEEKS; i++) {
+            Pull week = new Pull(this);
+            week.onPull(this::refreshData, () -> !refreshing);
+            // Without this the page ends where its content does and the window shows through.
+            week.setFillViewport(true); week.setBackgroundColor(skin.background);
+            weekRoots[i] = frame(); weekRoots[i].setPadding(dp(16), 0, dp(16), dp(24));
+            week.addView(weekRoots[i]); weekPager.addPage(week);
+        }
+        weekPager.onTurn(this::announceWeek);
+        weekPager.onSettle(this::settleWeek);
+        weekPager.show(1, false);
+        layout.addView(weekPager, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(layout);
+        loadCalendar();
+    }
+
+    /** The week a page holds: the middle one is the week the calendar is centred on. */
+    private LocalDate weekOf(int page) { return calendarCentre.plusDays((page - 1) * 7L); }
+
+    private String span(LocalDate centre) {
+        DateTimeFormatter span = DateTimeFormatter.ofPattern("d MMM", Locale.FRANCE);
+        return "du " + centre.minusDays(3).format(span) + " au " + centre.plusDays(3).format(span);
+    }
+
+    /** The dates are those of the week being turned to, from the moment the card starts moving. */
+    private void announceWeek() { weekSpan.setText(span(weekOf(weekPager.page()))); }
+
+    /**
+     * A week turned to becomes the week the calendar is centred on: the page that arrived goes
+     * back to the middle and its neighbours become the weeks on either side of it. Nothing is
+     * seen to move — the middle page is redrawn with what the reader is already looking at.
+     */
+    private void settleWeek() {
+        // A calendar left behind while its last turn was still travelling has no week to centre.
+        if (!"calendar".equals(screen)) return;
+        int turned = weekPager.page();
+        if (turned == 1) return;
+        calendarCentre = weekOf(turned);
+        weekPager.show(1, false);
+        loadCalendar();
+    }
+
+    /**
+     * The three weeks at once: one request covers them all and each page is then read back from
+     * the copy kept on the device, so the week next door is already drawn when it is swiped to.
+     */
+    private void loadCalendar() {
+        int request = ++fixturesRequests[1];
+        Pager requested = weekPager;
+        LocalDate centre = calendarCentre;
+        weekSpan.setText(span(centre));
+        renderWeeks();
+        if (demoMode()) return;
+        label("Copie locale · actualisation si le serveur est disponible.");
+        if (!hasServer()) return;
+        LocalDate from = centre.minusDays(10), to = centre.plusDays(10);
+        worker.execute(() -> {
+            try {
+                get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1) + "&lineups=1");
+                runOnUiThread(() -> {
+                    if (stale(request, requested)) return;
+                    renderWeeks();
+                });
+            } catch (Exception unavailable) {
+                runOnUiThread(() -> {
+                    if (stale(request, requested)) return;
+                    renderWeeks();
+                    label("Serveur indisponible · données enregistrées, pouvant être anciennes. Les autres matchs restent accessibles dans Matchs enregistrés.");
+                });
+            }
+        });
+    }
+
+    /** Whether an answer is still the one being waited for, on the calendar still being read. */
+    private boolean stale(int request, Pager requested) {
+        return request != fixturesRequests[1] || requested != weekPager || !"calendar".equals(screen);
+    }
+
+    /**
+     * Each of the three weeks, drawn from what the device holds and filtered by the search. The
+     * middle page is left as the screen's own, so whatever is said next is said on the week shown.
+     */
+    private void renderWeeks() {
+        for (int i = 0; i < WEEKS; i++) {
+            root = weekRoots[i];
+            if (demoMode()) {
+                root.removeAllViews();
+                empty("Le calendrier nécessite le serveur. Le match de démonstration est disponible à l’accueil.",
+                      "Accueil", this::showHome);
+                continue;
+            }
+            LocalDate week = weekOf(i);
+            try { renderFixtures(localFixtures(week.minusDays(3), week.plusDays(3)), false); }
+            catch (Exception error) { error(error); }
+        }
+        root = weekRoots[1];
     }
 
     private EditText searchField(String hint, String value, java.util.function.Consumer<String> changed) {
@@ -706,7 +855,7 @@ public class MainActivity extends Activity {
 
     private void renderAnnotated() {
         screen = "annotated";
-        LinearLayout title = page("Mes matchs annotés", this::showHome, 2);
+        LinearLayout title = page("Mes matchs annotés", this::showHome, ANNOTATED);
         ScrollView list = (ScrollView) root.getParent();
         root.removeView(title); annotatedCard.removeAllViews();
         LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
@@ -733,7 +882,7 @@ public class MainActivity extends Activity {
             Map<String, JSONObject> known = new HashMap<>();
             JSONArray fixtures = store.fixtures();
             for (int i = 0; i < fixtures.length(); i++) {
-                JSONObject fixture = fixtures.getJSONObject(i); known.put("fd-" + fixture.optString("id"), fixture);
+                JSONObject fixture = fixtures.getJSONObject(i); known.put(REMOTE + fixture.optString("id"), fixture);
             }
             if (demoMatch != null) known.put(demoMatch.optString("id"), demoMatch);
             for (JSONObject demo : demoMatches) known.put(demo.optString("id"), demo);
@@ -745,7 +894,7 @@ public class MainActivity extends Activity {
             for (Map.Entry<String, List<JSONObject>> item : byMatch.entrySet()) {
                 String id = item.getKey(); JSONObject fixture = known.get(id);
                 if (fixture == null) {
-                    if (id.startsWith("fd-")) fixture = new JSONObject().put("id", Integer.parseInt(id.substring(3)))
+                    if (id.startsWith(REMOTE)) fixture = new JSONObject().put("id", Integer.parseInt(id.substring(REMOTE.length())))
                         .put("homeTeam", new JSONObject().put("name", "Match " + id))
                         .put("awayTeam", new JSONObject().put("name", "Détails non téléchargés"))
                         .put("competition", new JSONObject());
@@ -757,7 +906,7 @@ public class MainActivity extends Activity {
                     found |= FixtureSelection.contains(note.optString("comment"), annotatedSearch);
                 if (!found) continue;
                 label(item.getValue().size() + (item.getValue().size() == 1 ? " note" : " notes")).setTextColor(skin.muted);
-                fixtureDate(fixture); fixtureCard(fixture, !id.startsWith("fd-")); shown++;
+                fixtureDate(fixture); fixtureCard(fixture, !id.startsWith(REMOTE)); shown++;
             }
             if (shown == 0) label(byMatch.isEmpty() ? "Les matchs où vous prenez des notes apparaîtront ici, même une fois terminés."
                 : "Aucun match annoté ne correspond à cette recherche.");
@@ -898,8 +1047,27 @@ public class MainActivity extends Activity {
         return new JSONArray(found);
     }
 
-    private void savedMatches() {
-        screen = "saved"; page("Matchs enregistrés", this::showHome);
+    /**
+     * La carte à droite de l’accueil. Comme celle des matchs annotés, son titre reste en place et
+     * seule la liste défile.
+     */
+    private void renderSaved() {
+        LinearLayout title = page("Matchs enregistrés", this::showHome, SAVED);
+        ScrollView list = (ScrollView) root.getParent();
+        root.removeView(title); savedCard.removeAllViews();
+        LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(skin.background);
+        LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
+        header.addView(title);
+        layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        layout.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
+        savedCard.addView(layout);
+        renderSavedMatches();
+    }
+
+    /** Redessinée à chaque arrivée de données : un calendrier lu enrichit aussi cette liste. */
+    private void renderSavedMatches() {
+        root.removeAllViews();
         label("Disponibles sur cet appareil. Les scores et compositions peuvent dater de la dernière connexion.");
         try {
             JSONArray all = localFixtures(null, null);
@@ -908,34 +1076,37 @@ public class MainActivity extends Activity {
         } catch (Exception error) { error(error); }
     }
 
-    private void loadFixtures(LocalDate from, LocalDate to, boolean home) {
-        int slot = home ? 0 : 1;
-        int request = ++fixturesRequests[slot];
+    private void loadFixtures(LocalDate from, LocalDate to) {
+        int request = ++fixturesRequests[0];
         Pager requestedPager = browsePager;
         if (demoMode()) {
-            showOfflineFixtures(home);
+            showOfflineFixtures();
             return;
         }
         try {
-            renderFixtures(localFixtures(from, to), home);
+            renderFixtures(localFixtures(from, to), true);
             label("Copie locale · actualisation si le serveur est disponible.");
         } catch (Exception error) { error(error); }
         if (!hasServer()) return;
         worker.execute(() -> {
             try {
-                JSONObject data = new JSONObject(get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1)));
+                get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1) + "&lineups=1");
                 runOnUiThread(() -> {
-                    if (request != fixturesRequests[slot] || requestedPager != browsePager || !browsing()) return;
-                    root = home ? homeRoot : calendarRoot;
-                    renderFixtures(data.optJSONArray("matches"), home);
+                    if (request != fixturesRequests[0] || requestedPager != browsePager || !browsing()) return;
+                    root = homeRoot;
+                    // Redrawn from the device's copy, which the answer has just been merged into,
+                    // never from the answer itself: a calendar that did not check a composition
+                    // says 'unknown', and only the copy remembers a sheet already found published.
+                    try { renderFixtures(localFixtures(from, to), true); }
+                    catch (Exception error) { error(error); }
+                    root = savedRoot; renderSavedMatches();
                     selectBrowsePage();
-                    if (!home) refreshHomeCard();
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
-                    if (request != fixturesRequests[slot] || requestedPager != browsePager || !browsing()) return;
-                    root = home ? homeRoot : calendarRoot;
-                    try { renderFixtures(localFixtures(from, to), home); }
+                    if (request != fixturesRequests[0] || requestedPager != browsePager || !browsing()) return;
+                    root = homeRoot;
+                    try { renderFixtures(localFixtures(from, to), true); }
                     catch (Exception localError) { error(localError); }
                     label("Serveur indisponible · données enregistrées, pouvant être anciennes. Les autres matchs restent accessibles dans Matchs enregistrés.");
                     selectBrowsePage();
@@ -944,11 +1115,7 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void showOfflineFixtures(boolean home) {
-        if (!home) {
-            empty("Le calendrier nécessite le serveur. Le match de démonstration est disponible à l’accueil.", "Accueil", this::showHome);
-            return;
-        }
+    private void showOfflineFixtures() {
         showHomeShell();
         for (JSONObject demo : demoMatches) fixtureCard(demo, true);
         TextView offline = label("Mode démo hors ligne · ces deux matchs sont disponibles sans serveur.");
@@ -1068,10 +1235,8 @@ public class MainActivity extends Activity {
     }
 
     private void renderFixtures(JSONArray fixtures, boolean home) {
-        if (home) showHomeShell(); else {
-            calendarFixtures = fixtures == null ? new JSONArray() : fixtures;
-            calendarShellOnly();
-        }
+        // The calendar's fixed header lives outside its week pages and survives every refresh.
+        if (home) showHomeShell(); else root.removeAllViews();
         int shown = 0;
         String day = "";
         if (fixtures != null) for (int i = 0; i < fixtures.length(); i++) {
@@ -1132,14 +1297,113 @@ public class MainActivity extends Activity {
     private void showHomeShell() {
         screen = "home";
         // Settings are not content: they belong in the bar as icons, not in the middle of the page.
-        LinearLayout bar = page("Fonote", null, 0);
+        LinearLayout bar = page("Fonote", null, HOME);
+        // Le titre et le chargement restent fixes ; seul le contenu appartient au geste.
+        Pull feed = (Pull) root.getParent();
+        root.removeView(bar);
+        root.setPadding(dp(16), 0, dp(16), dp(24));
+        homeCard.removeAllViews();
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setBackgroundColor(skin.background);
+        LinearLayout header = frame();
+        header.setPadding(dp(16), dp(10), dp(16), 0);
+        header.addView(bar);
+        layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        homeRefresh = refreshIndicator(layout);
+        layout.addView(feed, new LinearLayout.LayoutParams(-1, 0, 1));
+        homeCard.addView(layout);
         bar.addView(barAction(R.drawable.ic_star, "Mes suivis", this::profile), barSize(8));
         bar.addView(barAction(R.drawable.ic_settings, "Options", this::options), barSize(8));
         TextView intro = label("Les matchs que vous suivez, prêts à être notés.");
         intro.setTextColor(skin.muted); intro.setTextSize(14); intro.setPadding(0, 0, 0, 0);
-        full("Matchs enregistrés", this::savedMatches);
         homeFollows();
         section("Aujourd’hui", "Calendrier ›", () -> calendar(LocalDate.now()));
+    }
+
+    /** Une ligne centrée au-dessus du contenu, présente seulement pendant la lecture. */
+    private View refreshIndicator(LinearLayout feed) {
+        FrameLayout loading = new FrameLayout(this);
+        ProgressBar indicator = new ProgressBar(this);
+        indicator.setIndeterminateTintList(ColorStateList.valueOf(skin.accent));
+        indicator.setContentDescription("Actualisation en cours");
+        loading.addView(indicator, new FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER));
+        loading.setVisibility(refreshing ? View.VISIBLE : View.GONE);
+        feed.addView(loading, new LinearLayout.LayoutParams(-1, dp(56)));
+        return loading;
+    }
+
+    private void refreshIndicators() {
+        for (View indicator : new View[]{homeRefresh, calendarRefresh}) {
+            if (indicator == null) continue;
+            if (indicator.getTag() instanceof android.animation.ValueAnimator)
+                ((android.animation.ValueAnimator) indicator.getTag()).cancel();
+            if (refreshing) {
+                indicator.getLayoutParams().height = dp(56);
+                indicator.setAlpha(1);
+                indicator.setVisibility(View.VISIBLE);
+                indicator.requestLayout();
+            } else if (indicator.getVisibility() == View.VISIBLE) {
+                android.animation.ValueAnimator collapse = android.animation.ValueAnimator.ofInt(
+                    indicator.getLayoutParams().height, 0);
+                indicator.setTag(collapse);
+                collapse.setDuration(240);
+                collapse.setInterpolator(new android.view.animation.DecelerateInterpolator());
+                collapse.addUpdateListener(animation -> {
+                    indicator.getLayoutParams().height = (int) animation.getAnimatedValue();
+                    indicator.setAlpha(1 - animation.getAnimatedFraction());
+                    indicator.requestLayout();
+                });
+                collapse.addListener(new android.animation.AnimatorListenerAdapter() {
+                    private boolean cancelled;
+                    @Override public void onAnimationCancel(android.animation.Animator animation) { cancelled = true; }
+                    @Override public void onAnimationEnd(android.animation.Animator animation) {
+                        if (!cancelled) indicator.setVisibility(View.GONE);
+                    }
+                });
+                collapse.start();
+            }
+        }
+    }
+
+    /** Relit le serveur ; seul son cache décide quand interroger ESPN. */
+    private void refreshData() {
+        if (refreshing) return;
+        if (!hasServer() || demoMode()) { toast("Actualisation indisponible en mode local."); return; }
+        boolean calendar = "calendar".equals(screen);
+        LocalDate centre = calendar ? weekOf(weekPager.page()) : LocalDate.now();
+        LocalDate from = calendar ? centre.minusDays(10) : centre;
+        LocalDate to = calendar ? centre.plusDays(11) : centre.plusDays(1);
+        String base = server();
+        List<String> paths = new ArrayList<>();
+        paths.add("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to + "&lineups=1");
+        if (!calendar) {
+            for (String club : prefs.getStringSet("follow_teams", Collections.emptySet()))
+                paths.add("/v1/football/teams/" + club + "/matches?dateFrom=" + centre
+                    + "&dateTo=" + centre.plusYears(1) + "&limit=100");
+            for (String id : prefs.getStringSet("follow_matches", Collections.emptySet()))
+                paths.add("/v1/football/matches/" + id + "?overview=1");
+        }
+        refreshing = true;
+        refreshIndicators();
+        worker.execute(() -> {
+            boolean failed = false;
+            for (String path : paths) {
+                try { store.download(path.replace("?overview=1", ""), get(base, path)); }
+                catch (Exception unavailable) { failed = true; }
+            }
+            boolean incomplete = failed;
+            runOnUiThread(() -> {
+                if (isDestroyed()) { refreshing = false; return; }
+                // Reconstruire avec la ligne encore visible, puis réduire sa place doucement.
+                if ("calendar".equals(screen)) renderWeeks();
+                else if (browsing()) refreshHomeCard();
+                refreshing = false;
+                refreshIndicators();
+                toast(incomplete ? "Actualisation incomplète. Données enregistrées conservées."
+                    : "Données actualisées");
+            });
+        });
     }
 
     private void homeFollows() {
@@ -1177,9 +1441,10 @@ public class MainActivity extends Activity {
     private void refreshHomeCard() {
         if (!browsing()) return;
         try {
-            if (demoMode()) showOfflineFixtures(true);
+            if (demoMode()) showOfflineFixtures();
             else renderFixtures(localFixtures(LocalDate.now(), LocalDate.now()), true);
         } catch (Exception error) { error(error); }
+        root = savedRoot; renderSavedMatches();
         selectBrowsePage();
     }
 
@@ -1232,11 +1497,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void calendarShellOnly() {
-        // The fixed header lives outside this list and survives every refresh.
-        root.removeAllViews();
-    }
-
     private boolean follows(JSONObject fixture) {
         Set<String> comps = prefs.getStringSet("follow_competitions", Collections.emptySet());
         Set<String> teams = prefs.getStringSet("follow_teams", Collections.emptySet());
@@ -1274,6 +1534,10 @@ public class MainActivity extends Activity {
             state = state(fixture.optString("status"));
             live = "IN_PLAY".equals(fixture.optString("status")) || "PAUSED".equals(fixture.optString("status"));
         }
+        // A composition already published is the one reason to open this match now rather than
+        // after the whistle, so the card says so. It is only ever drawn on what was checked and
+        // found: a calendar that did not look says nothing, and nothing is not a promise.
+        boolean composed = !demo && "available".equals(fixture.optString("lineup_status"));
         LinearLayout card = new LinearLayout(this); card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(dp(14), dp(12), dp(12), dp(12));
         card.setBackground(tappable(panel(skin.surface)));
@@ -1281,7 +1545,8 @@ public class MainActivity extends Activity {
         card.setOnClickListener(v -> { if (demo) { match = fixture; openMatch(); } else openRemoteMatch(fixture); });
         card.setContentDescription(homeName + " contre " + awayName + ", " + subtitle
             + ", " + (state != null ? state : kickoff == null ? "horaire inconnu"
-                : "à " + kickoff.format(HOUR)) + ", ouvrir la feuille de notes");
+                : "à " + kickoff.format(HOUR)) + (composed ? ", composition disponible" : "")
+            + ", ouvrir la feuille de notes");
 
         LinearLayout when = new LinearLayout(this);
         when.setOrientation(LinearLayout.VERTICAL); when.setGravity(Gravity.CENTER);
@@ -1310,7 +1575,23 @@ public class MainActivity extends Activity {
         TextView note = new TextView(this); note.setText(subtitle);
         note.setTextSize(12); note.setTextColor(skin.muted); note.setPadding(0, dp(3), 0, 0);
         note.setMaxLines(1); note.setEllipsize(TextUtils.TruncateAt.END);
-        sides.addView(note);
+        if (composed) {
+            // Beside the competition, where the eye already goes to learn what kind of match
+            // this is — and in the accent colour, which is what the card uses for what is
+            // happening now rather than for what is merely recorded.
+            LinearLayout named = new LinearLayout(this);
+            named.setGravity(Gravity.CENTER_VERTICAL);
+            ImageView badge = new ImageView(this);
+            badge.setImageResource(R.drawable.ic_lineup);
+            badge.setImageTintList(ColorStateList.valueOf(skin.accent));
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(13), dp(13));
+            size.topMargin = dp(3); size.rightMargin = dp(5);
+            named.addView(badge, size);
+            named.addView(note, new LinearLayout.LayoutParams(0, -2, 1));
+            sides.addView(named);
+        } else {
+            sides.addView(note);
+        }
         card.addView(sides, new LinearLayout.LayoutParams(0, -2, 1));
 
         if (!demo) {
@@ -1405,11 +1686,12 @@ public class MainActivity extends Activity {
         boolean complete = homeLineup != null && awayLineup != null
             && homeLineup.length() == 11 && awayLineup.length() == 11;
         if (!complete) { homeLineup = new JSONArray(); awayLineup = new JSONArray(); }
-        JSONObject converted = new JSONObject().put("id", "fd-" + source.getInt("id"))
+        JSONObject converted = new JSONObject().put("id", REMOTE + source.getInt("id"))
             .put("title", home.optString("name") + " · " + away.optString("name"))
             .put("competition", source.getJSONObject("competition").optString("name"))
             .put("stage", stage(source.optString("stage", ""), source.optInt("matchday", 0)))
-            .put("date", source.optString("utcDate")).put("source", "football-data.org / " + source.optString("lineup_source", "composition indisponible"))
+            .put("date", source.optString("utcDate"))
+            .put("source", complete ? source.optString("lineup_source", "ESPN") : "ESPN · composition indisponible")
             .put("lineup_available", complete).put("lineup_status", source.optString("lineup_status", "unavailable"))
             .put("lineup_source", source.optString("lineup_source", "ESPN"))
             .put("kickoff_epoch_ms", kickoff(source))
@@ -1497,10 +1779,9 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Three letters for a club, ESPN's first. Both providers publish one and they disagree —
-     * ESPN writes TRY for Troyes where football-data writes ETR, and its RC for Strasbourg comes
-     * with the space that pads a two-letter word into a three-letter field. ESPN's read better,
-     * football-data's is there for a competition ESPN does not cover.
+     * Three letters for a club. A match sheet spells them out under `abbreviation`, where a
+     * calendar entry carries only the `tla` its card is drawn with; the two agree, and reading
+     * both means a club named from either place fits the same chip.
      */
     private static String trigram(JSONObject team) {
         String espn = team.optString("abbreviation").trim();
@@ -1508,8 +1789,9 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * The badge, if it is one we can draw. football-data serves a good half of its crests as
-     * SVG, which {@link BitmapFactory} does not read and which would arrive as a blank square.
+     * The badge, if it is one we can draw. {@link BitmapFactory} reads no SVG, and a crest
+     * served as one would arrive as a blank square, so a badge that is not a PNG is left out
+     * rather than drawn as a hole.
      */
     private static String badge(JSONObject team) {
         String espn = team.optString("logo");
@@ -1526,7 +1808,7 @@ public class MainActivity extends Activity {
         double[][] spots = Formation.spots(positions, formation);
         for (int i = 0; i < lineup.length(); i++) {
             JSONObject player = lineup.getJSONObject(i);
-            target.put(new JSONObject().put("id", player.optString("fonote_id", "fd-" + player.optInt("id")))
+            target.put(new JSONObject().put("id", player.optString("fonote_id", REMOTE + player.optInt("id")))
                 .put("name", player.optString("name")).put("number", player.optInt("shirtNumber"))
                 .put("team", side).put("position", player.optString("position"))
                 .put("stats", player.optJSONObject("stats") == null
@@ -1539,7 +1821,7 @@ public class MainActivity extends Activity {
     private void addBench(JSONArray target, JSONArray bench, String side) throws Exception {
         for (int i = 0; bench != null && i < bench.length(); i++) {
             JSONObject player = bench.getJSONObject(i);
-            target.put(new JSONObject().put("id", player.optString("fonote_id", "fd-" + player.optInt("id")))
+            target.put(new JSONObject().put("id", player.optString("fonote_id", REMOTE + player.optInt("id")))
                 .put("name", player.optString("name")).put("number", player.optInt("shirtNumber"))
                 .put("team", side).put("position", player.optString("position"))
                 .put("stats", player.optJSONObject("stats") == null
@@ -1595,23 +1877,23 @@ public class MainActivity extends Activity {
 
     private boolean hasServer() {
         // A saved address always decides, emptied on purpose included: that is someone asking
-        // for local mode. Without one, the address this build carries decides instead — a
-        // release knows a real server and may use it untouched, whereas the development
-        // default is the machine that produced the build, which a phone can never reach.
-        if (prefs.contains("url")) return !prefs.getString("url", "").trim().isEmpty();
-        return BuildConfig.SERVER_PUBLIC;
+        // for local mode. Without one, the address this build carries decides — and a build
+        // carries the address it is meant to reach: the real server for a release, the machine
+        // that produced it for a development build, which is where its emulator looks. An
+        // address one has to retype before anything is fetched would be no default at all.
+        return !server().trim().isEmpty();
     }
 
     /** The address to talk to: the one saved, or the one this build was made with. */
     private String server() { return prefs.getString("url", BuildConfig.SERVER); }
 
     /**
-     * Whether the two fictional matches stand in for a season. On by default only where the
-     * build knows no public server: an application that cannot reach anything is better off
-     * showing something than an empty home. Where a real server is built in, a fresh install
-     * goes to it — the demonstration is then a choice one makes, not the state one lands in.
+     * Whether the two fictional matches stand in for a season. Off until someone asks for it:
+     * every build knows an address it will use, so a fresh install goes to a server rather than
+     * to fiction. A server that does not answer is a separate matter — the saved matches and the
+     * unavailability notice cover that, and they say what they are showing.
      */
-    private boolean demoMode() { return prefs.getBoolean("demo_mode", !BuildConfig.SERVER_PUBLIC); }
+    private boolean demoMode() { return prefs.getBoolean("demo_mode", false); }
 
     private String get(String path) throws Exception {
         String data = get(server(), path);
@@ -3844,7 +4126,7 @@ public class MainActivity extends Activity {
                         throw new java.io.IOException("Ce serveur n’est pas un serveur Fonote");
                     reached = true;
                     if (!health.optBoolean("football_configured")) {
-                        message = "Serveur connecté. Clé football absente : renseignez FOOTBALL_DATA_TOKEN dans le .env du serveur, puis redémarrez-le.";
+                        message = "Serveur connecté, mais il ne sert pas de données football. Mettez-le à jour, puis redémarrez-le.";
                     } else {
                         runOnUiThread(() -> result.setText("Serveur connecté. Vérification des données football…"));
                         JSONObject data = new JSONObject(get(base, "/v1/football/competitions"));
@@ -3854,7 +4136,7 @@ public class MainActivity extends Activity {
                     }
                 } catch (Exception error) {
                     message = reached
-                        ? "Serveur connecté, mais données football indisponibles. Vérifiez la clé API, le quota et la connexion Internet du serveur."
+                        ? "Serveur connecté, mais données football indisponibles. Vérifiez la connexion Internet du serveur."
                         : "Connexion impossible. Vérifiez que le serveur est démarré et que l’adresse est correcte. "
                             + "Adresse par défaut de cette version : " + BuildConfig.SERVER
                             + ". Si le serveur tourne déjà, redémarrez-le avec la dernière version.";

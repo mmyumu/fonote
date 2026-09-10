@@ -38,16 +38,27 @@ final class Pager extends HorizontalScrollView {
     private static final float TURN = .5f;
     /** How far a flick has to carry, in dp, before its speed is allowed to speak for it. */
     private static final int NUDGE = 25;
+    /**
+     * How long a turn is given to arrive. A scroller animates for a quarter of a second at most,
+     * and the page cannot be counted as arrived before then: it reaches its resting place a frame
+     * or two early, and a page moved under it while the animation still runs is put back by it.
+     */
+    private static final int SLIDE = 320;
     private final LinearLayout track;
     /** Above this, in pixels a second, a finger leaving the glass was still throwing the card. */
     private final int flick;
     private final float nudge;
     private VelocityTracker speed;
+    private final GestureAxis gesture;
     private int page;
-    private Runnable watcher;
+    private Runnable watcher, rested;
+    private final Runnable arrival = this::arrive;
+    /** Whether a finger is on the glass, which owns the pager over any turn still travelling. */
+    private boolean touching;
 
     Pager(Context context) {
         super(context);
+        gesture = new GestureAxis(context);
         flick = ViewConfiguration.get(context).getScaledMinimumFlingVelocity();
         nudge = NUDGE * context.getResources().getDisplayMetrics().density;
         setHorizontalScrollBarEnabled(false);
@@ -66,6 +77,12 @@ final class Pager extends HorizontalScrollView {
     int page() { return page; }
     /** Told whenever the showing page changes, so the caller can dress its own chrome. */
     void onTurn(Runnable watcher) { this.watcher = watcher; }
+    /**
+     * Told when a turn has arrived, and not before. A screen that moves its pages around the one
+     * being shown — the calendar, which puts the week swiped to back in the middle — has to wait
+     * for the card: a page put back under a slide still running is carried away again by it.
+     */
+    void onSettle(Runnable rested) { this.rested = rested; }
 
     void show(int index, boolean smooth) {
         int target = Math.max(0, Math.min(pages() - 1, index));
@@ -73,6 +90,9 @@ final class Pager extends HorizontalScrollView {
         page = target;
         int x = target * getWidth();
         if (smooth) smoothScrollTo(x, 0); else scrollTo(x, 0);
+        // Only a slide that moves is worth waiting on: sent to the page already showing, the
+        // pager is there before it has left, and there is no arrival to tell anyone about.
+        if (smooth && turned) { removeCallbacks(arrival); postDelayed(arrival, SLIDE); }
         if (!turned) return;
         // The page left behind keeps the caret otherwise, and the keyboard goes on writing into
         // a search field nobody can see any more.
@@ -81,6 +101,14 @@ final class Pager extends HorizontalScrollView {
             (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(getWindowToken(), 0);
         if (watcher != null) watcher.run();
+    }
+
+    /** The turn has had its time; whoever is waiting on the page is told, once it is nobody's. */
+    private void arrive() {
+        // A finger back on the glass has taken the pager over: the page it is let go on arrives
+        // in its own time, and telling anyone before then names a page nobody stopped at.
+        if (touching) { postDelayed(arrival, SLIDE); return; }
+        if (rested != null) rested.run();
     }
 
     /**
@@ -113,7 +141,28 @@ final class Pager extends HorizontalScrollView {
      */
     @Override protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        removeCallbacks(arrival);
         if (speed != null) { speed.recycle(); speed = null; }
+    }
+
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        gesture.observe(event);
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) touching = true;
+        boolean handled = super.dispatchTouchEvent(event);
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) touching = false;
+        return handled;
+    }
+
+    @Override public boolean onInterceptTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            // Initialiser Android sans lui laisser voler un geste à cause d’une animation.
+            super.onInterceptTouchEvent(event);
+            return false;
+        }
+        if (action == MotionEvent.ACTION_MOVE && !gesture.horizontal()) return false;
+        return super.onInterceptTouchEvent(event);
     }
 
     @Override public boolean onTouchEvent(MotionEvent event) {
@@ -122,6 +171,7 @@ final class Pager extends HorizontalScrollView {
         // gesture from its first move onwards, never from its start.
         if (speed == null) speed = VelocityTracker.obtain();
         int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_MOVE && !gesture.horizontal()) return true;
         if (action == MotionEvent.ACTION_DOWN) speed.clear();
         speed.addMovement(event);
         boolean handled = super.onTouchEvent(event);
@@ -129,7 +179,8 @@ final class Pager extends HorizontalScrollView {
         speed.computeCurrentVelocity(1000);
         float velocity = speed.getXVelocity();
         speed.recycle(); speed = null;
-        snap(velocity);
+        if (action == MotionEvent.ACTION_CANCEL || !gesture.horizontal()) show(page, true);
+        else snap(velocity);
         return handled;
     }
 

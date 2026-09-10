@@ -38,19 +38,16 @@ android {
      * ici plutôt que dans le code parce qu'elle n'est pas la même selon ce qu'on construit :
      * une version distribuée parle au vrai serveur, en HTTPS — le manifeste principal refuse
      * le trafic en clair — tandis qu'un build de développement parle à la machine qui l'a
-     * produit, que l'émulateur atteint à 10.0.2.2. « public » dit si cette adresse est un
-     * serveur que n'importe qui peut joindre : c'est ce qui autorise une installation neuve
-     * à s'en servir sans que personne ait rien configuré.
+     * produit, que l'émulateur atteint à 10.0.2.2. Chaque build s'en sert sans rien demander :
+     * une adresse qu'il faudrait ressaisir avant la première requête ne serait pas un défaut.
      */
     buildTypes {
         debug {
             buildConfigField 'String', 'SERVER', '"http://10.0.2.2:8080"'
-            buildConfigField 'boolean', 'SERVER_PUBLIC', 'false'
         }
         release {
             if (signingFile.exists()) signingConfig signingConfigs.release
             buildConfigField 'String', 'SERVER', '"https://fonote.mmyumu.fr"'
-            buildConfigField 'boolean', 'SERVER_PUBLIC', 'true'
         }
     }
     compileOptions {

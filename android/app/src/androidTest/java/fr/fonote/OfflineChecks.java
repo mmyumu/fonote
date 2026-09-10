@@ -56,7 +56,7 @@ public final class OfflineChecks extends Instrumentation {
             catch (org.json.JSONException expected) { }
             require(store.fixtures().length() == 2, "Failed write was not rolled back");
             checkNextFixtures();
-            checkSearchStaysOnCard();
+            checkSearchStaysPut();
             for (String status : new String[]{"TIMED", "SCHEDULED", "IN_PLAY", "PAUSED"})
                 require(FixtureSelection.unfinished(new JSONObject().put("status", status)), "Hidden active favorite");
             for (String status : new String[]{"FINISHED", "CANCELLED", "POSTPONED"})
@@ -66,7 +66,10 @@ public final class OfflineChecks extends Instrumentation {
             require(FixtureSelection.matches(searchable, " EQUIPE "), "Accent-insensitive search failed");
             require(FixtureSelection.matches(searchable, "ligue"), "Competition search failed");
             require(!FixtureSelection.matches(searchable, "Monaco"), "Unrelated search result");
-            result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, next club fixtures.\n");
+            checkPull();
+            checkNestedGestures();
+            checkRefreshAnimations();
+            result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, next club fixtures, pull gestures.\n");
             sendStatus(0, progress);
             finish(Activity.RESULT_OK, result);
         } catch (Throwable failure) {
@@ -79,39 +82,64 @@ public final class OfflineChecks extends Instrumentation {
             context.deleteDatabase("offline-checks.sqlite3");
         }
     }
-    private void checkSearchStaysOnCard() throws Exception {
+    /**
+     * A query typed on one page stays there: submitting it must not hand the caret to a field on
+     * the page next door, which a pager would follow. Checked on the annotated card, which is
+     * swiped to, and on the calendar, which is a screen of its own whose weeks are swiped.
+     */
+    private void checkSearchStaysPut() throws Exception {
         Activity activity = startActivitySync(new android.content.Intent(getTargetContext(), MainActivity.class)
             .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
         waitForIdleSync();
         java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
         runOnMainSync(() -> {
             try {
-                java.lang.reflect.Field pagerField = MainActivity.class.getDeclaredField("browsePager");
-                pagerField.setAccessible(true);
-                Pager pager = (Pager) pagerField.get(activity);
-                for (int index : new int[]{0, 2}) {
-                    pager.show(index, false);
-                    java.lang.reflect.Field cardField = MainActivity.class.getDeclaredField(
-                        index == 0 ? "annotatedCard" : "calendarCard");
-                    cardField.setAccessible(true);
-                    android.widget.EditText search = findSearch((android.view.View) cardField.get(activity));
-                    search.requestFocusFromTouch(); search.setText("Monaco");
-                    require(search.hasFocus(), "Could not focus search before submission on card " + index);
-                    search.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
-                    require(search.hasFocus(), "Search submitted focus to another card from " + index);
-                    search.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
-                        android.view.KeyEvent.KEYCODE_ENTER));
-                    search.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
-                        android.view.KeyEvent.KEYCODE_ENTER));
-                    require(search.hasFocus(), "Physical Enter submitted focus to another card");
-                    require(pager.page() == index, "Search changed the selected card");
-                    require(pager.getScrollX() == index * pager.getWidth(), "Search scrolled away from its card");
-                    require(search.getText().toString().equals("Monaco"), "Submission cleared the query");
-                }
+                Pager pager = (Pager) held(activity, "browsePager");
+                require(pager.pages() == 3, "The home lost a card to swipe to");
+                require(pager.page() == 1, "The home no longer opens between its two cards");
+                pager.show(0, false);
+                submitSearch(findSearch((android.view.View) held(activity, "annotatedCard")), "annotated card");
+                require(pager.page() == 0, "Search changed the selected card");
+                require(pager.getScrollX() == 0, "Search scrolled away from its card");
+            } catch (Throwable error) { failure.set(error); }
+        });
+        waitForIdleSync();
+        runOnMainSync(() -> {
+            try {
+                java.lang.reflect.Method calendar = MainActivity.class.getDeclaredMethod("calendar", java.time.LocalDate.class);
+                calendar.setAccessible(true);
+                calendar.invoke(activity, java.time.LocalDate.now());
+            } catch (Throwable error) { failure.set(error); }
+        });
+        waitForIdleSync();
+        runOnMainSync(() -> {
+            try {
+                Pager weeks = (Pager) held(activity, "weekPager");
+                require(weeks.pages() == 3, "The calendar lost a week to swipe to");
+                submitSearch(findSearch(activity.getWindow().getDecorView()), "calendar");
+                require(weeks.page() == 1, "Search turned the week");
+                require(weeks.getScrollX() == weeks.getWidth(), "Search scrolled away from the week shown");
             } catch (Throwable error) { failure.set(error); }
         });
         waitForIdleSync();
         if (failure.get() != null) throw new AssertionError("Search navigation regression", failure.get());
+    }
+    private static Object held(Activity activity, String name) throws Exception {
+        java.lang.reflect.Field field = MainActivity.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(activity);
+    }
+    private static void submitSearch(android.widget.EditText search, String where) {
+        search.requestFocusFromTouch(); search.setText("Monaco");
+        require(search.hasFocus(), "Could not focus search before submission on the " + where);
+        search.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        require(search.hasFocus(), "Search submitted focus away from the " + where);
+        search.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+            android.view.KeyEvent.KEYCODE_ENTER));
+        search.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
+            android.view.KeyEvent.KEYCODE_ENTER));
+        require(search.hasFocus(), "Physical Enter submitted focus away from the " + where);
+        require(search.getText().toString().equals("Monaco"), "Submission cleared the query");
     }
     private static android.widget.EditText findSearch(android.view.View view) {
         if (view instanceof android.widget.EditText) return (android.widget.EditText) view;
@@ -147,6 +175,180 @@ public final class OfflineChecks extends Instrumentation {
             .put("homeTeam", new JSONObject().put("id", home))
             .put("awayTeam", new JSONObject().put("id", away));
     }
+    private void checkPull() throws Exception {
+        final Throwable[] failure = {null};
+        runOnMainSync(() -> {
+            try {
+                Pull pull = new Pull(getTargetContext());
+                android.widget.FrameLayout host = new android.widget.FrameLayout(getTargetContext());
+                host.addView(pull, new android.widget.FrameLayout.LayoutParams(400, 400));
+                android.widget.Button content = new android.widget.Button(getTargetContext());
+                content.setMinimumHeight(2000);
+                pull.addView(content, new android.widget.FrameLayout.LayoutParams(400, 2000));
+                int size = android.view.View.MeasureSpec.makeMeasureSpec(400, android.view.View.MeasureSpec.EXACTLY);
+                host.measure(size, size); host.layout(0, 0, 400, 400);
+                int[] calls = {0};
+                boolean[] busy = {false};
+                pull.onPull(() -> calls[0]++, () -> !busy[0]);
+                float distance = 160 * getTargetContext().getResources().getDisplayMetrics().density;
+                gesture(pull, 0, distance, false);
+                require(calls[0] == 1, "Pull on a clickable child did not refresh");
+                busy[0] = true;
+                for (int i = 0; i < 5; i++) gesture(pull, 0, distance, false);
+                require(calls[0] == 1, "Pull during refresh queued another refresh");
+                require(content.getTranslationY() > 0, "Busy pull has no elastic return");
+                require(content.getTranslationY() <= 32 * contextDensity(), "Busy pull stretches too far");
+                busy[0] = false;
+                gesture(pull, 0, distance, false);
+                require(calls[0] == 2, "Pull stayed disabled after refresh finished");
+                gesture(pull, 0, 4, false);
+                gesture(pull, 0, distance, true);
+                require(calls[0] == 2, "Short or cancelled pull refreshed");
+                content.animate().cancel(); content.setTranslationY(0);
+                pull.scrollTo(0, 200);
+                require(pull.getScrollY() == 200, "Test page cannot scroll");
+                gesture(pull, 0, distance, false);
+                require(calls[0] == 2, "Scrolling to the top refreshed");
+                require(content.getTranslationY() == 0, "Pull left content displaced");
+            } catch (Throwable error) { failure[0] = error; }
+        });
+        if (failure[0] != null) throw new AssertionError("Pull gesture", failure[0]);
+    }
+
+    /** Le toucher traverse le vrai pager parent avant d’atteindre la liste et son bouton. */
+    private void checkNestedGestures() {
+        final Throwable[] failure = {null};
+        runOnMainSync(() -> {
+            try {
+                for (boolean clickable : new boolean[]{true, false}) {
+                    nestedGesture(false, false, false, clickable);
+                    nestedGesture(false, true, false, clickable);
+                    nestedGesture(true, false, false, clickable);
+                    nestedGesture(true, false, true, clickable);
+                }
+            } catch (Throwable error) { failure[0] = error; }
+        });
+        if (failure[0] != null) throw new AssertionError("Nested swipe gestures", failure[0]);
+    }
+
+    private void nestedGesture(boolean horizontal, boolean busy, boolean cancel, boolean clickable) {
+        Context context = getTargetContext();
+        Pager pager = new Pager(context);
+        int[] refreshes = {0};
+        for (int i = 0; i < 3; i++) {
+            Pull pull = new Pull(context);
+            android.widget.Button content = new android.widget.Button(context);
+            content.setClickable(clickable);
+            content.setMinimumHeight(2000);
+            pull.addView(content, new android.widget.FrameLayout.LayoutParams(-1, 2000));
+            pull.onPull(() -> refreshes[0]++, () -> !busy);
+            pager.addPage(pull);
+        }
+        int width = 1000, height = 1400;
+        pager.measure(android.view.View.MeasureSpec.makeMeasureSpec(width, android.view.View.MeasureSpec.EXACTLY),
+            android.view.View.MeasureSpec.makeMeasureSpec(height, android.view.View.MeasureSpec.EXACTLY));
+        pager.layout(0, 0, width, height);
+        pager.show(1, false);
+        float slop = android.view.ViewConfiguration.get(context).getScaledTouchSlop();
+        float reach = 170 * context.getResources().getDisplayMetrics().density;
+        float[] xs = horizontal ? new float[]{900, 900 - slop * 3, 50, 50}
+                                : new float[]{100, 100 + slop * 1.5f, 800, 800};
+        float[] ys = horizontal ? new float[]{100, 100 + slop * 1.5f, 100 + reach, 100 + reach}
+                                : new float[]{100, 100 + slop * 3, 100 + reach, 100 + reach};
+        int[] actions = {0, 2, 2, cancel ? 3 : 1};
+        long now = android.os.SystemClock.uptimeMillis();
+        for (int i = 0; i < actions.length; i++) {
+            android.view.MotionEvent event = android.view.MotionEvent.obtain(now, now + i * 80,
+                actions[i], xs[i], ys[i], 0);
+            pager.dispatchTouchEvent(event); event.recycle();
+            if (!horizontal) require(pager.getScrollX() == width, "Vertical pull moved the pager");
+        }
+        require(pager.page() == (horizontal && !cancel ? 2 : 1), "Wrong page after nested gesture");
+        require(refreshes[0] == (!horizontal && !busy && !cancel ? 1 : 0),
+            "Nested gesture triggered the wrong refresh count");
+    }
+
+    private void checkRefreshAnimations() throws Exception {
+        Activity activity = startActivitySync(new android.content.Intent(getTargetContext(), MainActivity.class)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        runOnMainSync(() -> {
+            try {
+                java.lang.reflect.Field screen = MainActivity.class.getDeclaredField("screen");
+                screen.setAccessible(true); screen.set(activity, "animation-check");
+                android.view.View homeContent = (android.view.View) held(activity, "homeRoot");
+                android.view.View homeLoading = (android.view.View) held(activity, "homeRefresh");
+                require(homeContent.getParent() instanceof Pull, "Home content lost its pull gesture");
+                android.view.ViewGroup homeLayout = (android.view.ViewGroup) homeLoading.getParent();
+                require(homeContent.getParent().getParent() == homeLayout,
+                    "Home loading indicator moves with the feed");
+                require(homeLayout.getChildAt(0) != homeContent.getParent()
+                    && homeLayout.getChildAt(0) != homeLoading, "Home header moves with the feed");
+                android.widget.LinearLayout feed = new android.widget.LinearLayout(activity);
+                feed.setOrientation(android.widget.LinearLayout.VERTICAL);
+                java.lang.reflect.Field refreshing = MainActivity.class.getDeclaredField("refreshing");
+                refreshing.setAccessible(true); refreshing.set(activity, true);
+                java.lang.reflect.Method create = MainActivity.class.getDeclaredMethod("refreshIndicator", android.widget.LinearLayout.class);
+                create.setAccessible(true);
+                android.view.View indicator = (android.view.View) create.invoke(activity, feed);
+                java.lang.reflect.Field home = MainActivity.class.getDeclaredField("homeRefresh");
+                home.setAccessible(true); home.set(activity, indicator);
+                Pull pull = new Pull(activity);
+                android.widget.Button content = new android.widget.Button(activity);
+                content.setMinimumHeight(2000);
+                pull.addView(content);
+                feed.addView(pull, new android.widget.LinearLayout.LayoutParams(-1, 600));
+                activity.setContentView(feed);
+                boolean[] busy = {true};
+                int[] requests = {0};
+                pull.onPull(() -> requests[0]++, () -> !busy[0]);
+                feed.post(() -> {
+                    try {
+                        float distance = 170 * contextDensity();
+                        gesture(pull, 0, distance, false, () -> busy[0] = false);
+                        require(requests[0] == 0, "Refresh finishing mid-pull armed another request");
+                        require(content.getTranslationY() > 0, "Pull return jumped immediately");
+                        refreshing.set(activity, false);
+                        java.lang.reflect.Method update = MainActivity.class.getDeclaredMethod("refreshIndicators");
+                        update.setAccessible(true); update.invoke(activity);
+                        require(indicator.getVisibility() == android.view.View.VISIBLE, "Indicator disappeared abruptly");
+                        feed.postDelayed(() -> {
+                            try {
+                                require(Math.abs(content.getTranslationY()) < .5f, "Pull did not return to rest");
+                                require(indicator.getVisibility() == android.view.View.GONE, "Indicator did not collapse");
+                                require(indicator.getLayoutParams().height == 0, "Indicator left a gap");
+                            } catch (Throwable error) { failure.set(error); }
+                            finally { done.countDown(); }
+                        }, 450);
+                    } catch (Throwable error) { failure.set(error); done.countDown(); }
+                });
+            } catch (Throwable error) { failure.set(error); done.countDown(); }
+        });
+        try {
+            require(done.await(3, java.util.concurrent.TimeUnit.SECONDS), "Animations timed out");
+            if (failure.get() != null) throw new AssertionError("Refresh animations", failure.get());
+        } finally { runOnMainSync(activity::finish); }
+    }
+
+    private float contextDensity() { return getTargetContext().getResources().getDisplayMetrics().density; }
+
+    private void gesture(Pull pull, float x, float distance, boolean cancel) {
+        gesture(pull, x, distance, cancel, () -> {});
+    }
+
+    private void gesture(Pull pull, float x, float distance, boolean cancel, Runnable beforeRelease) {
+        long now = android.os.SystemClock.uptimeMillis();
+        int[] actions = {0, 2, 2, cancel ? 3 : 1};
+        float[] ys = {20, 40, 20 + distance, 20 + distance};
+        for (int i = 0; i < actions.length; i++) {
+            android.view.MotionEvent event = android.view.MotionEvent.obtain(now, now + i * 30,
+                actions[i], x + 100, ys[i], 0);
+            if (i == actions.length - 1) beforeRelease.run();
+            pull.dispatchTouchEvent(event); event.recycle();
+        }
+    }
+
     private static void require(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
     }
