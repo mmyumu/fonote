@@ -9,7 +9,6 @@ services:
       # Sans jeton le serveur répond 401 à tout : mieux vaut refuser de démarrer que d'exposer
       # un espace personnel inaccessible.
       FONOTE_TOKEN: ${FONOTE_TOKEN:?definir FONOTE_TOKEN dans .env}
-      FOOTBALL_DATA_TOKEN: ${FOOTBALL_DATA_TOKEN:-}
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped

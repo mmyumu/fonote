@@ -8,10 +8,9 @@ import sqlite3
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from contextlib import contextmanager
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
@@ -59,39 +58,53 @@ def load_env(path=None):
         os.environ.setdefault(key, value)
 
 
-def football_data(path, token):
-    """Small, deliberately transparent proxy so the provider key never ships in the APK."""
-    if not token:
-        raise RuntimeError('FOOTBALL_DATA_TOKEN absent')
-    request = urllib.request.Request('https://api.football-data.org/v4/' + path.lstrip('/'),
-                                     headers={'X-Auth-Token': token, 'User-Agent': 'Fonote/1'})
-    try:
-        with urllib.request.urlopen(request, timeout=12) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as error:
-        # Do not pass provider bodies through: they can change and are not part of our contract.
-        raise RuntimeError(f'football-data.org: HTTP {error.code}') from error
+def one(query, key, default=None):
+    values = query.get(key) or []
+    return values[-1] if values else default
 
 
-def football_path(route, query):
-    """Map the narrow public Fonote contract to the upstream API."""
-    if route == '/v1/football/competitions':
-        return 'competitions'
-    if route == '/v1/football/matches':
-        allowed = {key: values[-1] for key, values in query.items()
-                   if key in {'dateFrom', 'dateTo', 'competitions'} and values}
-        return 'matches' + (('?' + urllib.parse.urlencode(allowed)) if allowed else '')
+def football(espn, route, query):
+    """Serve the narrow public Fonote contract from the ESPN feed.
+
+    The routes and the shape of their answers are the client's, not a provider's: a device
+    that stored `/v1/football/matches` under that name keeps reading it back. What changed
+    underneath is who answers, and therefore which identifiers travel — they are ESPN's now.
+
+    Returns None when the path is not a football route at all, so the caller can go on to the
+    routes that need a token, and raises LookupError for a football route naming something the
+    feed does not know.
+    """
     parts = route.strip('/').split('/')
-    if len(parts) == 5 and parts[:3] == ['v1', 'football', 'competitions'] and parts[4] == 'teams':
-        return 'competitions/' + urllib.parse.quote(parts[3], safe='') + '/teams'
-    if (len(parts) == 5 and parts[:3] == ['v1', 'football', 'teams']
-            and parts[3].isdigit() and parts[4] == 'matches'):
-        allowed = {key: values[-1] for key, values in query.items()
-                   if key in {'dateFrom', 'dateTo', 'limit'} and values}
-        return 'teams/' + parts[3] + '/matches' + (
-            ('?' + urllib.parse.urlencode(allowed)) if allowed else '')
-    if len(parts) == 4 and parts[:3] == ['v1', 'football', 'matches'] and parts[3].isdigit():
-        return 'matches/' + parts[3]
+    if len(parts) < 3 or parts[:2] != ['v1', 'football']:
+        return None
+    rest = parts[2:]
+    if rest == ['competitions']:
+        return espn.competitions()
+    if rest == ['matches']:
+        today = date.today().isoformat()
+        codes = [c for c in (one(query, 'competitions', '') or '').split(',') if c]
+        # Saying which compositions are out costs a reading per match, so it is asked for
+        # rather than assumed: a client that will not show it should not pay for it.
+        return espn.fixtures(one(query, 'dateFrom', today), one(query, 'dateTo', today),
+                             codes or None, one(query, 'lineups', '') == '1')
+    if len(rest) == 3 and rest[0] == 'competitions' and rest[2] == 'teams':
+        found = espn.teams(rest[1])
+        if found is None:
+            raise LookupError('Compétition inconnue')
+        return found
+    if len(rest) == 3 and rest[0] == 'teams' and rest[1].isdigit() and rest[2] == 'matches':
+        today = date.today()
+        limit = one(query, 'limit', '100')
+        return espn.team_fixtures(int(rest[1]),
+                                  one(query, 'dateFrom', today.isoformat()),
+                                  one(query, 'dateTo', (today + timedelta(days=365)).isoformat()),
+                                  int(limit) if limit.isdigit() else 100)
+    if len(rest) == 2 and rest[0] == 'matches' and rest[1].isdigit():
+        found = (espn.match(rest[1], live=False) if one(query, 'overview', '') == '1'
+                 else espn.match(rest[1]))
+        if found is None:
+            raise LookupError('Match inconnu')
+        return found
     return None
 
 
@@ -111,7 +124,9 @@ def validate(op):
     allowed = {'id', 'note_id', 'kind'}
     if kind == 'note':
         match = json.loads(DEMO.read_text())
-        remote_match = isinstance(op['match_id'], str) and re.fullmatch(r'fd-[0-9]+', op['match_id'])
+        # 'fd-' named a football-data fixture, which the server no longer serves. The journal
+        # is immutable, so notes written then are still read back and still validate.
+        remote_match = isinstance(op['match_id'], str) and re.fullmatch(r'(?:fd|espn)-[0-9]+', op['match_id'])
         if op['match_id'] != match['id'] and not remote_match:
             raise ValueError('Match inconnu')
         if type(op['minute']) is not int or not 0 <= op['minute'] <= 150:
@@ -273,7 +288,7 @@ def append(db, op):
                           (op['id'], payload)).lastrowid
 
 
-def make_server(host, port, path, token, football_token=None):
+def make_server(host, port, path, token):
     espn = Espn()
     with connect(path):
         pass
@@ -299,16 +314,17 @@ def make_server(host, port, path, token, football_token=None):
         def do_GET(self):
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == '/v1/health':
-                return self.reply(200, {'service': 'fonote', 'football_configured': bool(football_token)})
-            upstream = football_path(parsed.path, urllib.parse.parse_qs(parsed.query))
-            if upstream:
-                try:
-                    data = football_data(upstream, football_token)
-                    if re.fullmatch(r'matches/[0-9]+', upstream):
-                        data = espn.enrich(data)
+                # The feed behind the football routes is public: there is no key to leave out,
+                # and the field stays so that an older client keeps recognising this server.
+                return self.reply(200, {'service': 'fonote', 'football_configured': True})
+            try:
+                data = football(espn, parsed.path, urllib.parse.parse_qs(parsed.query))
+                if data is not None:
                     return self.reply(200, data)
-                except (RuntimeError, OSError):
-                    return self.reply(503, {'error': 'Données football indisponibles'})
+            except LookupError:
+                return self.reply(404, {'error': 'Donnée football inconnue'})
+            except (RuntimeError, OSError, ValueError, KeyError, TypeError, AttributeError):
+                return self.reply(503, {'error': 'Données football indisponibles'})
             if not self.authorized():
                 return
             if parsed.path == '/v1/matches':
@@ -403,7 +419,7 @@ if __name__ == '__main__':
     token = os.environ.get('FONOTE_TOKEN', '')
     if token and (len(token) < 24 or not token.isascii()):
         parser.error('Définir FONOTE_TOKEN avec au moins 24 caractères ASCII aléatoires')
-    server = make_server(args.host, args.port, args.db, token, os.environ.get('FOOTBALL_DATA_TOKEN'))
+    server = make_server(args.host, args.port, args.db, token)
     print(f'Fonote : http://{args.host}:{args.port} (usage personnel, arrêter avec Ctrl+C)')
     try:
         server.serve_forever()

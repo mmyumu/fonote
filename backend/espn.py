@@ -1,33 +1,79 @@
-"""Optional public ESPN feed adapter for the personal Fonote server."""
+"""ESPN feed adapter: the single provider behind Fonote's football contract.
+
+The contract keeps the shape football-data.org gave it — `matches`, `homeTeam`, `utcDate`,
+`status` — because that shape belongs to the client, which stores it on the device and reads it
+offline. Only the provider behind it changed. The identifiers changed with it: an id in this
+contract is an ESPN id, and nothing here reconciles two providers any more.
+"""
 import copy
 import json
 import re
 import threading
 import time
-import unicodedata
-from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timezone
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer/'
+# A Fonote competition code and the ESPN league it names. The codes are the contract's own and
+# outlived the provider that first supplied them: a device that stored 'FL1' still reads it.
+# The list itself no longer is: it was once the free plan of a paid API, and is now a choice —
+# ESPN serves far more than these, and a competition is added by writing its slug here.
+# Domestic leagues come first, which is how a club met in both keeps its own championship.
 LEAGUES = {'FL1': 'fra.1', 'PL': 'eng.1', 'BL1': 'ger.1', 'PD': 'esp.1',
            'SA': 'ita.1', 'PPL': 'por.1', 'DED': 'ned.1', 'ELC': 'eng.2',
-           'BSA': 'bra.1', 'CL': 'uefa.champions', 'WC': 'fifa.world', 'EC': 'uefa.euro'}
-ALIASES = {'olympique lyonnais': 'lyon', 'olympique lyon': 'lyon',
-           'racing club de lens': 'lens', 'paris saint germain': 'psg',
-           'olympique de marseille': 'marseille', 'olympique marseille': 'marseille',
-           'stade brestois 29': 'brest', 'stade rennais': 'rennes',
-           'bayern munchen': 'bayern munich', 'internazionale milano': 'internazionale',
-           'inter milan': 'internazionale', 'sporting clube de portugal': 'sporting cp'}
+           'BSA': 'bra.1', 'CL': 'uefa.champions', 'UECL': 'uefa.europa.conf',
+           'WC': 'fifa.world', 'EC': 'uefa.euro'}
+CUPS = {'CL', 'UECL', 'WC', 'EC'}
 
 
-# ESPN declares its own feed stale after nine seconds, so a match in play is re-read often
-# enough for a substitution to show up within the minute, and left alone the rest of the time.
-# The live window must stay well under the client's polling interval: a cache as long as the
-# poll would answer every other refresh with the copy the client already has.
+# Les listes restent en cache cinq minutes, même aujourd’hui. Seule une fiche ouverte
+# en direct peut être relue après trente secondes.
 CACHE = 300
 LIVE_CACHE = 30
-LIVE = {'IN_PLAY', 'PAUSED'}
+# What a season changes at most once a day: which competitions exist and who plays in them.
+CATALOGUE = 86400
 MEMO = 128
+# How long a reading that has run out is still worth serving. Rafraîchir is the client's word,
+# never a command reaching this far: a reading nobody could renew is the last thing the feed
+# said, and the last thing said beats an error on a page that was drawn a minute ago.
+STALE = 6 * 3600
+# How long a failed reading is left in place before the feed is asked again. Without it, a feed
+# that is down would be asked once per refresh by every client that pulls its page down.
+RETRY = 300
+# A composition is published about an hour before kickoff and stays for good afterwards, so it
+# is worth announcing only around the match it belongs to. Reading a whole season to find out
+# would cost one request per fixture; reading the ones being played tonight costs a handful —
+# and the reading is not wasted, since opening one of them then finds the sheet already in hand.
+ANNOUNCE_BEFORE = 2 * 3600
+ANNOUNCE_AFTER = 4 * 3600
+ANNOUNCE_MOST = 30
+
+
+# Twelve leagues answer one calendar request. Asked one after another they would keep the client
+# waiting on a page it has already drawn from its own copy; asked all at once they would arrive
+# as a burst on a feed we are guests on. Four at a time is neither.
+FETCHERS = 4
+
+
+# The vocabulary the client reads, kept word for word: `state` covers every match, and the few
+# names below are the cases where a state alone would say the wrong thing — a match at the break
+# is not simply 'in play', and one abandoned in the second half is not simply 'finished'.
+STATES = {'pre': 'TIMED', 'in': 'IN_PLAY', 'post': 'FINISHED'}
+STATUSES = {'STATUS_HALFTIME': 'PAUSED', 'STATUS_END_PERIOD': 'PAUSED',
+            'STATUS_POSTPONED': 'POSTPONED', 'STATUS_CANCELED': 'CANCELLED',
+            'STATUS_ABANDONED': 'SUSPENDED', 'STATUS_SUSPENDED': 'SUSPENDED',
+            'STATUS_DELAYED': 'SUSPENDED', 'STATUS_RAIN_DELAY': 'SUSPENDED'}
+# Which round it is, said the way the client already names rounds. ESPN spells the phase in a
+# season slug on a calendar and in a season name on a match sheet, so both are reduced to the
+# same words before being looked up here. A domestic league has one phase and never asks.
+PHASES = {'league phase': 'GROUP_STAGE', 'group stage': 'GROUP_STAGE',
+          'knockout round playoffs': 'PLAYOFFS', 'playoffs': 'PLAYOFFS',
+          'qualifying': 'PRELIMINARY_ROUND', 'qualifiers': 'PRELIMINARY_ROUND',
+          'round of 16': 'LAST_16', 'quarterfinals': 'QUARTER_FINALS',
+          'semifinals': 'SEMI_FINALS', 'third place': 'THIRD_PLACE', 'final': 'FINAL'}
 
 
 # The pitch draws a dark shirt number on every marker, so a club colour is lightened until
@@ -91,42 +137,87 @@ def crest(team):
 
     The two are usually the same file — most clubs need no second version — but when they
     differ, the note is drawn on grass at night and the wrong one arrives as a dark shape on a
-    dark chip.
+    dark chip. A calendar carries a single `logo` instead of the list a match sheet carries.
     """
     logos = [logo for logo in team.get('logos') or [] if isinstance(logo, dict) and logo.get('href')]
     dark = [logo for logo in logos if 'dark' in (logo.get('rel') or [])]
-    return ((dark or logos) + [{}])[0].get('href', '')
-
-
-def name_key(name):
-    value = unicodedata.normalize('NFKD', name or '')
-    value = ''.join(c for c in value if not unicodedata.combining(c)).lower()
-    value = re.sub(r'[^a-z0-9]+', ' ', value).strip()
-    value = ' '.join(w for w in value.split() if w not in {'fc', 'afc', 'ac', 'as', 'rc', 'aj', 'ogc'})
-    return ALIASES.get(value, value)
-
-
-def same_team(left, right):
-    a = {name_key(left.get(k)) for k in ('name', 'shortName', 'tla')} - {''}
-    b = {name_key(right.get(k)) for k in ('displayName', 'shortDisplayName', 'name', 'abbreviation')} - {''}
-    return bool(a & b)
+    found = ((dark or logos) + [{}])[0].get('href', '')
+    return found or (team.get('logo') or '')
 
 
 def instant(value):
     return datetime.fromisoformat(value.replace('Z', '+00:00'))
 
 
-def select_event(match, events):
-    """Never guess from kickoff alone or accept an ambiguous pair of teams."""
-    candidates = []
-    for event in events:
-        for contest in event.get('competitions', []):
-            sides = {c.get('homeAway'): c.get('team', {}) for c in contest.get('competitors', [])}
-            if (same_team(match['homeTeam'], sides.get('home', {}))
-                    and same_team(match['awayTeam'], sides.get('away', {}))
-                    and abs((instant(event['date']) - instant(match['utcDate'])).total_seconds()) <= 7200):
-                candidates.append(event)
-    return candidates[0] if len(candidates) == 1 else None
+def moment(value):
+    """ESPN publishes a kickoff to the minute; the contract has always carried the seconds."""
+    return instant(value).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def words(value):
+    """A slug or a title reduced to the plain words a phase is looked up by."""
+    return re.sub(r'[^a-z0-9]+', ' ', str(value or '').lower()).strip()
+
+
+def status(holder):
+    """What the match is doing, in the client's vocabulary."""
+    kind = (holder.get('status') or {}).get('type') or {}
+    return STATUSES.get(kind.get('name'), STATES.get(kind.get('state'), 'SCHEDULED'))
+
+
+def stage(text, code):
+    """Which round, from the phase ESPN happened to name it by.
+
+    A league plays one competition all season and says so; a cup names its phase, and an
+    unknown one travels as its own words rather than being flattened into a group stage.
+    """
+    if code not in CUPS:
+        return 'REGULAR_SEASON'
+    found = words(text)
+    if found in PHASES:
+        return PHASES[found]
+    # 'Two thousand twenty-six-27 UEFA Champions League, League Phase' names the phase last.
+    tail = words(str(text or '').split(',')[-1])
+    return PHASES.get(tail, tail.replace(' ', '_').upper() or 'GROUP_STAGE')
+
+
+def competition_entry(league, code):
+    """A competition as the catalogue and every fixture carry it."""
+    logos = [logo.get('href') for logo in league.get('logos') or [] if logo.get('href')]
+    return {'id': int(league.get('id') or 0), 'name': league.get('name') or code, 'code': code,
+            'type': 'CUP' if code in CUPS else 'LEAGUE', 'emblem': logos[0] if logos else ''}
+
+
+def team_entry(team):
+    """A club, named the three ways the client shows clubs: in full, in a card, on a chip."""
+    return {'id': int(team.get('id') or 0), 'name': team.get('displayName') or '',
+            'shortName': team.get('shortDisplayName') or team.get('displayName') or '',
+            'tla': (team.get('abbreviation') or '').upper(), 'crest': crest(team)}
+
+
+def goals(sides, played):
+    """The score, and nothing at all before a ball is kicked."""
+    def count(side):
+        value = str((sides.get(side) or {}).get('score', ''))
+        return value if played and value.isdigit() else ''
+    return {'fullTime': {'home': count('home'), 'away': count('away')}}
+
+
+def fixture(event, code, competition, contest=None):
+    """One match as the contract carries it, from a calendar entry or from a match sheet."""
+    contest = contest if contest is not None else (event.get('competitions') or [{}])[0]
+    sides = {c.get('homeAway'): c for c in contest.get('competitors') or []}
+    state = status(contest if (contest.get('status') or {}).get('type') else event)
+    season = (event.get('season') or {})
+    return {'id': int(event['id']),
+            'utcDate': moment(contest.get('date') or event['date']),
+            'status': state, 'competition': competition,
+            'stage': stage(season.get('slug') or season.get('name') or '', code),
+            'homeTeam': team_entry((sides.get('home') or {}).get('team') or {}),
+            'awayTeam': team_entry((sides.get('away') or {}).get('team') or {}),
+            'score': goals(sides, state not in {'TIMED', 'SCHEDULED', 'POSTPONED', 'CANCELLED'}),
+            'venue': ((contest.get('venue') or event.get('venue') or {}).get('fullName')
+                      or (event.get('venue') or {}).get('displayName') or '')}
 
 
 def lineup(roster):
@@ -262,105 +353,344 @@ def clock_marks(events):
     return marks
 
 
+LIVE = {'IN_PLAY', 'PAUSED'}
+SLUGS = {slug: code for code, slug in LEAGUES.items()}
+
+
+def window(date_from, date_to):
+    """The span a scoreboard is asked for, as ESPN spells spans."""
+    start, end = date.fromisoformat(date_from), date.fromisoformat(date_to)
+    if end < start:
+        raise ValueError('Période invalide')
+    return start.strftime('%Y%m%d') + '-' + end.strftime('%Y%m%d')
+
+
+def current(date_from, date_to):
+    """Whether the span covers today, and so may hold a match being played right now."""
+    today = datetime.now(timezone.utc).date()
+    return date.fromisoformat(date_from) <= today <= date.fromisoformat(date_to)
+
+
 class Espn:
     def __init__(self):
         self.cache = {}
-        self.events = {}
+        self.clubs = {}
+        self.readings = {}
+        self.failures = {}
+        self.fetched_at = {}
         self.lock = threading.Lock()
+        self.pool = ThreadPoolExecutor(max_workers=FETCHERS)
+
+    def url_for(self, league, resource, params):
+        return BASE + league + '/' + resource + '?' + urlencode(params)
 
     def fetch(self, league, resource, params, ttl=CACHE):
-        url = 'https://site.api.espn.com/apis/site/v2/sports/soccer/' + league + '/' + resource + '?' + urlencode(params)
+        """One reading of the feed, remembered for as long as it is worth reading again.
+
+        Nothing a client asks reaches ESPN directly. A reader who pulls a page down ten times is
+        answered ten times, from here, and the feed hears about it once at most: the only thing
+        that sends this to the network is a reading that has run out.
+
+        Two threads wanting the same page wait on one another rather than both going, so a burst
+        of refreshes costs one request and not one each. Pages never queue behind each other —
+        the twelve leagues of a calendar are twelve locks — which is why the network stays
+        outside the shared lock, as it always did.
+        """
+        url = self.url_for(league, resource, params)
+        held = self.held(url)
+        if held is not None:
+            return held
+        with self.reading(url):
+            # Whoever held the lock may have been reading this very page: ask again before going.
+            held = self.held(url)
+            if held is not None:
+                return held
+            with self.lock:
+                failure = self.failures.get(url)
+                if failure and failure[0] > time.monotonic():
+                    raise failure[1]
+            try:
+                with urlopen(url, timeout=10) as response:
+                    data = json.load(response)
+            except (OSError, ValueError) as error:
+                stale = self.stale(url)
+                if stale is None:
+                    with self.lock:
+                        now = time.monotonic()
+                        self.failures = {k: v for k, v in self.failures.items() if v[0] > now}
+                        if len(self.failures) >= MEMO:
+                            self.failures.pop(next(iter(self.failures)))
+                        self.failures[url] = (now + RETRY, error)
+                    raise
+                return stale
+            self.keep(url, data, ttl)
+            return copy.deepcopy(data)
+
+    def snapshot(self, league, resource, params):
+        """L’accueil et le calendrier ne relisent jamais une fiche de moins de cinq minutes.
+
+        Une fiche ouverte en direct peut raccourcir son expiration ; sa date de lecture
+        reste indépendante pour que les listes ne déclenchent pas ce suivi rapide.
+        """
+        url = self.url_for(league, resource, params)
+        with self.lock:
+            cached = self.cache.get(url)
+            if cached and time.monotonic() - self.fetched_at.get(url, float('-inf')) < CACHE:
+                return copy.deepcopy(cached[1])
+        return self.fetch(league, resource, params, CACHE)
+
+    def held(self, url):
+        """The reading on file, while it is still worth serving rather than reading again."""
+        with self.lock:
+            cached = self.cache.get(url)
+            if not cached or cached[0] <= time.monotonic():
+                return None
+            return copy.deepcopy(cached[1])
+
+    def stale(self, url):
+        """The reading that has run out, served because the feed would not renew it.
+
+        Held five minutes longer on the way out: a feed that is not answering is not answering the
+        next refresh either, and the client is no worse off reading the same copy twice.
+        """
+        with self.lock:
+            cached = self.cache.get(url)
+            if not cached:
+                return None
+            self.cache[url] = (time.monotonic() + RETRY, cached[1])
+            return copy.deepcopy(cached[1])
+
+    def keep(self, url, data, ttl):
+        """File a fresh reading, and let go of the ones nothing could be served from any more."""
         with self.lock:
             now = time.monotonic()
-            cached = self.cache.get(url)
-            if cached and cached[0] > now:
-                return copy.deepcopy(cached[1])
-            with urlopen(url, timeout=5) as response:
-                data = json.load(response)
-            # Short cache also allows late lineup publication to become visible.
-            self.cache = {k: v for k, v in self.cache.items() if v[0] > now}
+            # A reading that has run out is not dropped with it: until STALE it is still the
+            # answer of last resort, the one thing left to say when the feed says nothing.
+            self.cache = {k: v for k, v in self.cache.items() if v[0] + STALE > now}
             if len(self.cache) >= MEMO:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[url] = (now + ttl, data)
-            return copy.deepcopy(data)
+            self.fetched_at = {k: v for k, v in self.fetched_at.items() if k in self.cache}
+            self.fetched_at[url] = now
 
-    def event_id(self, match, league, ttl):
-        """Which ESPN event this fixture is, resolved once and then remembered.
-
-        The scoreboard exists only to answer that question, and the answer cannot change:
-        refreshing a match in play therefore costs one request, not two.
-        """
-        key = str(match.get('id'))
+    def reading(self, url):
+        """The lock that stands for one page being read, so two refreshes make one request."""
         with self.lock:
-            known = self.events.get(key)
+            lock = self.readings.get(url)
+            if lock is None:
+                # A lock nobody holds guards nothing: they go the way the readings themselves do.
+                if len(self.readings) >= MEMO:
+                    self.readings = {k: v for k, v in self.readings.items() if v.locked()}
+                lock = self.readings[url] = threading.Lock()
+            return lock
+
+    def shorten(self, league, resource, params, ttl):
+        """Hold a reading for less time than it was filed under, once it turns out to be live."""
+        url = self.url_for(league, resource, params)
+        with self.lock:
+            cached = self.cache.get(url)
+            if cached:
+                self.cache[url] = (min(cached[0], time.monotonic() + ttl), cached[1])
+
+    def spread(self, work, codes):
+        """Ask several leagues at once, and let a league that will not answer stay silent."""
+        def guarded(code):
+            try:
+                return code, work(code)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                return code, None
+        return [(code, value) for code, value in self.pool.map(guarded, codes) if value is not None]
+
+    def board(self, code, dates=None, ttl=CACHE, limit=500):
+        params = {'limit': limit}
+        if dates:
+            params['dates'] = dates
+        return self.fetch(LEAGUES[code], 'scoreboard', params, ttl)
+
+    def competitions(self):
+        """Which competitions this server knows, named and badged by the feed itself."""
+        def read(code):
+            league = (self.board(code, ttl=CATALOGUE, limit=1).get('leagues') or [{}])[0]
+            return competition_entry(league, code)
+        found = dict(self.spread(read, list(LEAGUES)))
+        items = [found[code] for code in LEAGUES if code in found]
+        return {'count': len(items), 'competitions': items}
+
+    def lineup_ready(self, identifier):
+        """Whether both elevens are out, read from the very sheet the match itself is read from."""
+        try:
+            data = self.snapshot('all', 'summary', {'event': str(identifier)})
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return 'unknown'
+        rosters = {r.get('homeAway'): r for r in data.get('rosters') or []}
+        both = all(lineup(rosters.get(side) or {}) for side in ('home', 'away'))
+        return 'available' if both else 'unavailable'
+
+    def announce(self, matches):
+        """Say which of these have their composition already published.
+
+        Only around kickoff, and never by guessing. Anything outside that window is left
+        'unknown', which claims nothing: a calendar says a composition is there or says
+        nothing at all, because a badge promising a sheet that is not there would cost more
+        than the badge is worth.
+        """
+        now = datetime.now(timezone.utc)
+        close = []
+        for match in matches:
+            match['lineup_status'] = 'unknown'
+            delta = (instant(match['utcDate']) - now).total_seconds()
+            if -ANNOUNCE_AFTER <= delta <= ANNOUNCE_BEFORE:
+                close.append(match)
+        close = close[:ANNOUNCE_MOST]
+        for match, found in zip(close, self.pool.map(self.lineup_ready, [m['id'] for m in close])):
+            match['lineup_status'] = found
+        return matches
+
+    def fixtures(self, date_from, date_to, codes=None, lineups=False):
+        """Every match of a span, in the order they are played."""
+        span, ttl = window(date_from, date_to), CACHE
+        wanted = [code for code in (codes or LEAGUES) if code in LEAGUES]
+
+        def read(code):
+            data = self.board(code, dates=span, ttl=ttl)
+            league = (data.get('leagues') or [{}])[0]
+            competition = competition_entry(league, code)
+            return [fixture(event, code, competition) for event in data.get('events') or []]
+
+        matches = [m for _, found in self.spread(read, wanted) for m in found]
+        matches.sort(key=lambda m: (m['utcDate'], m['id']))
+        if lineups:
+            self.announce(matches)
+        return {'count': len(matches), 'matches': matches}
+
+    def teams(self, code):
+        """The clubs of one competition."""
+        if code not in LEAGUES:
+            return None
+        data = self.fetch(LEAGUES[code], 'teams', {}, CATALOGUE)
+        entries = (data.get('sports') or [{}])[0].get('leagues') or [{}]
+        found = [team_entry(item.get('team') or {}) for item in entries[0].get('teams') or []]
+        return {'count': len(found), 'teams': found}
+
+    def league_of(self, team_id):
+        """Which competition a club plays in, resolved once for the season.
+
+        ESPN keeps a club's own calendar to matches already played, so the next fixture of a
+        followed club is read off its league's calendar instead — which first means knowing
+        the league.
+        """
+        with self.lock:
+            known = self.clubs.get(team_id)
         if known:
             return known
-        date = instant(match['utcDate'])
-        dates = (date - timedelta(days=1)).strftime('%Y%m%d') + '-' + (date + timedelta(days=1)).strftime('%Y%m%d')
-        events = self.fetch(league, 'scoreboard', {'dates': dates, 'limit': 100}, ttl).get('events', [])
-        event = select_event(match, events)
-        if event is None:
-            return None
+        def read(code):
+            data = self.fetch(LEAGUES[code], 'teams', {}, CATALOGUE)
+            entries = (data.get('sports') or [{}])[0].get('leagues') or [{}]
+            return [str((item.get('team') or {}).get('id') or '')
+                    for item in entries[0].get('teams') or []]
+        index = {}
+        # A club met in a cup keeps the domestic league that lists it: that calendar is the one
+        # where its next match is certain to appear, week after week. The leagues are read in
+        # the order they are declared, domestic ones first, and the first to name a club wins.
+        for code, ids in self.spread(read, list(LEAGUES)):
+            for identifier in ids:
+                if identifier:
+                    index.setdefault(identifier, code)
         with self.lock:
-            if len(self.events) >= MEMO:
-                self.events.pop(next(iter(self.events)))
-            self.events[key] = event['id']
-        return event['id']
+            self.clubs.update(index)
+        return index.get(team_id)
 
-    def enrich(self, match):
-        result = copy.deepcopy(match)
-        league = LEAGUES.get(match.get('competition', {}).get('code'))
-        result['lineup_status'] = 'unsupported' if not league else 'unavailable'
-        if not league:
-            return result
+    def team_fixtures(self, team_id, date_from, date_to, limit=100):
+        """A club's matches over a span, drawn from the calendars it appears in."""
+        code = self.league_of(str(team_id))
+        codes = [code] if code else []
+        # A club is followed for its domestic season, but its European nights count too.
+        codes += [cup for cup in CUPS if cup != code]
+        span, ttl = window(date_from, date_to), CACHE
+
+        def read(where):
+            data = self.board(where, dates=span, ttl=ttl)
+            league = (data.get('leagues') or [{}])[0]
+            competition = competition_entry(league, where)
+            found = []
+            for event in data.get('events') or []:
+                contest = (event.get('competitions') or [{}])[0]
+                sides = [str(((c.get('team') or {}).get('id') or ''))
+                         for c in contest.get('competitors') or []]
+                if str(team_id) in sides:
+                    found.append(fixture(event, where, competition))
+            return found
+
+        matches = [m for _, found in self.spread(read, codes) for m in found]
+        matches.sort(key=lambda m: (m['utcDate'], m['id']))
+        del matches[limit:]
+        return {'count': len(matches), 'matches': matches}
+
+    def match(self, identifier, live=True):
+        """One match in full: the fixture, the two elevens, the run of play and the counts.
+
+        The match sheet is read without naming a league — ESPN answers on any of them — so a
+        stored match opens from its identifier alone, with nothing to look up first.
+        """
+        params = {'event': str(identifier)}
         try:
-            ttl = LIVE_CACHE if match.get('status') in LIVE else CACHE
-            identifier = self.event_id(match, league, ttl)
-            if identifier is None:
-                result['lineup_status'] = 'unmatched'
+            data = (self.fetch('all', 'summary', params, CACHE) if live
+                    else self.snapshot('all', 'summary', params))
+        except HTTPError as refused:
+            # An identifier the feed does not hold is a match that does not exist, not an
+            # outage: the caller says 'unknown' rather than 'come back later'.
+            if refused.code in (400, 404):
+                return None
+            raise
+        header = data.get('header') or {}
+        league = header.get('league') or {}
+        code = SLUGS.get(league.get('slug') or '')
+        contest = (header.get('competitions') or [{}])[0]
+        if not header.get('id') or not contest.get('date'):
+            return None
+        result = fixture({'id': header['id'], 'date': contest['date'],
+                          'season': header.get('season') or {}},
+                         code, competition_entry(league, code or ''), contest)
+        if live and result['status'] in LIVE:
+            self.shorten('all', 'summary', params, LIVE_CACHE)
+        result['lineup_status'] = 'unavailable'
+        rosters = {r.get('homeAway'): r for r in data.get('rosters') or []}
+        converted = {}
+        for side in ('home', 'away'):
+            roster = rosters.get(side) or {}
+            players = lineup(roster)
+            if not players:
                 return result
-            data = self.fetch(league, 'summary', {'event': identifier}, ttl)
-            rosters = {r.get('homeAway'): r for r in data.get('rosters', [])}
-            converted = {}
-            for side in ('home', 'away'):
-                roster = rosters.get(side, {})
-                if not same_team(match[side + 'Team'], roster.get('team', {})):
-                    return result
-                players = lineup(roster)
-                if not players:
-                    return result
-                converted[side] = (players, roster, roster.get('formation') or '', roster.get('team', {}))
-            ids = [p['fonote_id'] for players, _, _, _ in converted.values() for p in players]
-            if len(set(ids)) != 22:
-                return result
-            taken = set(ids)
-            colours = team_colours(converted['home'][3], converted['away'][3])
-            sides = {}
-            for side, colour in zip(('home', 'away'), colours):
-                players, roster, formation, team = converted[side]
-                result[side + 'Team']['lineup'] = players
-                result[side + 'Team']['bench'] = bench(roster, taken)
-                result[side + 'Team']['formation'] = formation
-                result[side + 'Team']['colour'] = colour
-                # Kept, where the abbreviation used to be read for the match and dropped: three
-                # letters and a badge name a club in the width of a button, which its name does
-                # not. Both are ESPN's own — its `TRY` for Troyes, against football-data's `ETR`
-                # — and they land beside `tla` and `crest` rather than over them, a client
-                # choosing which of the two providers it would rather show.
-                abbreviation = (team.get('abbreviation') or '').strip()
-                if abbreviation:
-                    result[side + 'Team']['abbreviation'] = abbreviation
-                badge = crest(team)
-                if badge:
-                    result[side + 'Team']['logo'] = badge
-                sides[str(team.get('id') or '')] = side
-            # The run of play is a bonus on top of the composition: it is read after the eleven
-            # are secured, so a surprise in it can never cost the pitch its players.
-            result['timeline'] = timeline(data, sides)
-            result['clock'] = clock_marks(result['timeline'])
-            result['team_stats'] = team_stats(data, sides)
-            result['ground'] = ground(data)
-            result.update(lineup_status='available', lineup_source='ESPN', espn_event_id=identifier)
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            result['lineup_status'] = 'provider_error'
+            converted[side] = (players, roster, roster.get('formation') or '', roster.get('team') or {})
+        ids = [p['fonote_id'] for players, _, _, _ in converted.values() for p in players]
+        if len(set(ids)) != 22:
+            return result
+        taken = set(ids)
+        colours = team_colours(converted['home'][3], converted['away'][3])
+        sides = {}
+        for side, colour in zip(('home', 'away'), colours):
+            players, roster, formation, team = converted[side]
+            result[side + 'Team']['lineup'] = players
+            result[side + 'Team']['bench'] = bench(roster, taken)
+            result[side + 'Team']['formation'] = formation
+            result[side + 'Team']['colour'] = colour
+            # The match sheet knows the badge and the three letters that the calendar left out.
+            badge = crest(team)
+            if badge:
+                result[side + 'Team']['crest'] = badge
+                result[side + 'Team']['logo'] = badge
+            abbreviation = (team.get('abbreviation') or '').strip()
+            if abbreviation:
+                result[side + 'Team']['abbreviation'] = abbreviation
+                result[side + 'Team'].setdefault('tla', abbreviation.upper())
+            sides[str(team.get('id') or '')] = side
+        # The run of play is a bonus on top of the composition: it is read after the eleven
+        # are secured, so a surprise in it can never cost the pitch its players.
+        result['timeline'] = timeline(data, sides)
+        result['clock'] = clock_marks(result['timeline'])
+        result['team_stats'] = team_stats(data, sides)
+        result['ground'] = ground(data)
+        if not result['venue']:
+            result['venue'] = result['ground']['venue']
+        result.update(lineup_status='available', lineup_source='ESPN', espn_event_id=str(identifier))
         return result

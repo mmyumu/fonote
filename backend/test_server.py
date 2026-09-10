@@ -8,7 +8,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from backend.server import DEMO, connect, football_path, make_server, sources
+from backend.server import DEMO, connect, football, make_server, sources
 
 MATCH = json.loads(DEMO.read_text())
 PLAYERS = [p['id'] for p in MATCH['players']]
@@ -84,11 +84,11 @@ class ServerTest(unittest.TestCase):
 
     def test_health_is_public_without_exposing_credentials(self):
         self.assertEqual(self.request(token='wrong', path='/v1/health'),
-                         {'service': 'fonote', 'football_configured': False})
+                         {'service': 'fonote', 'football_configured': True})
 
     def test_calendar_does_not_require_personal_token(self):
         from unittest.mock import patch
-        with patch('backend.server.football_data', return_value={'competitions': []}):
+        with patch('backend.espn.Espn.competitions', return_value={'competitions': []}):
             self.assertEqual(self.request(token='wrong', path='/v1/football/competitions'),
                              {'competitions': []})
 
@@ -122,31 +122,88 @@ class ServerTest(unittest.TestCase):
         self.request(op)
         self.assertEqual(self.request()[0]['operation'], op)
 
-    def test_football_data_routes_are_narrowly_mapped(self):
-        self.assertEqual(football_path('/v1/football/competitions', {}), 'competitions')
-        self.assertEqual(football_path('/v1/football/matches', {
-            'dateFrom': ['2026-09-05'], 'ignored': ['secret']}),
-            'matches?dateFrom=2026-09-05')
-        self.assertEqual(football_path('/v1/football/matches/123', {}), 'matches/123')
-        self.assertEqual(football_path('/v1/football/matches/not-a-number', {}), None)
+    def test_football_routes_are_narrowly_mapped(self):
+        """Only the contract's own routes reach the feed, and each with only its own arguments."""
+        asked = []
+
+        class Adapter:
+            def competitions(self):
+                return 'catalogue'
+
+            def fixtures(self, date_from, date_to, codes=None, lineups=False):
+                asked.append(('fixtures', date_from, date_to, codes, lineups))
+                return 'calendrier'
+
+            def teams(self, code):
+                return {'teams': []} if code == 'FL1' else None
+
+            def team_fixtures(self, team, date_from, date_to, limit=100):
+                asked.append(('club', team, date_from, date_to, limit))
+                return 'club'
+
+            def match(self, identifier):
+                return {'id': int(identifier)} if identifier == '123' else None
+
+        adapter = Adapter()
+        self.assertEqual(football(adapter, '/v1/football/competitions', {}), 'catalogue')
+        self.assertEqual(football(adapter, '/v1/football/matches', {
+            'dateFrom': ['2026-09-05'], 'dateTo': ['2026-09-06'],
+            'competitions': ['FL1,PL'], 'ignored': ['secret']}), 'calendrier')
+        self.assertEqual(asked[-1], ('fixtures', '2026-09-05', '2026-09-06', ['FL1', 'PL'], False))
+        # Announcing which compositions are out costs a reading per match, so it is asked for.
+        football(adapter, '/v1/football/matches', {'lineups': ['1']})
+        self.assertTrue(asked[-1][4])
+        football(adapter, '/v1/football/matches', {'lineups': ['oui']})
+        self.assertFalse(asked[-1][4])
+        self.assertEqual(football(adapter, '/v1/football/matches/123', {}), {'id': 123})
+        self.assertEqual(football(adapter, '/v1/football/competitions/FL1/teams', {}), {'teams': []})
+
+        # Anything the feed does not know is said to be unknown, never served as something else.
+        for route in ['/v1/football/matches/999', '/v1/football/competitions/XX/teams']:
+            with self.assertRaises(LookupError):
+                football(adapter, route, {})
+        # Anything outside the contract is not a football route at all.
+        for route in ['/v1/football/matches/not-a-number', '/v1/football/teams/66/squad',
+                      '/v1/football/teams/not-a-number/matches', '/v1/operations', '/v1/health']:
+            self.assertIsNone(football(adapter, route, {}))
 
     def test_followed_club_calendar_route(self):
         from unittest.mock import patch
+        asked = []
+
+        class Adapter:
+            def team_fixtures(self, team, date_from, date_to, limit=100):
+                asked.append((team, date_from, date_to, limit))
+                return {'matches': [{'id': 123}]}
+
         query = {'dateFrom': ['2026-09-07'], 'dateTo': ['2027-09-07'],
                  'limit': ['100'], 'token': ['must-not-pass']}
-        self.assertEqual(football_path('/v1/football/teams/66/matches', query),
-                         'teams/66/matches?dateFrom=2026-09-07&dateTo=2027-09-07&limit=100')
-        self.assertIsNone(football_path('/v1/football/teams/not-a-number/matches', {}))
-        self.assertIsNone(football_path('/v1/football/teams/66/squad', {}))
-        with patch('backend.server.football_data', return_value={'matches': [{'id': 123}]}) as fetch:
+        self.assertEqual(football(Adapter(), '/v1/football/teams/66/matches', query),
+                         {'matches': [{'id': 123}]})
+        # The club, the span and the cap travel; nothing else does.
+        self.assertEqual(asked, [(66, '2026-09-07', '2027-09-07', 100)])
+        with patch('backend.espn.Espn.team_fixtures', return_value={'matches': [{'id': 123}]}):
             self.assertEqual(self.request(token='wrong', path='/v1/football/teams/66/matches?limit=100'),
                              {'matches': [{'id': 123}]})
-            fetch.assert_called_once_with('teams/66/matches?limit=100', None)
 
-    def test_remote_football_data_note_ids_are_accepted(self):
+    def test_a_feed_that_will_not_answer_is_reported_as_unavailable(self):
+        from unittest.mock import patch
+        with patch('backend.espn.Espn.competitions', side_effect=OSError('feed muet')):
+            with self.assertRaises(HTTPError) as error:
+                self.request(token='wrong', path='/v1/football/competitions')
+            self.assertEqual(error.exception.code, 503)
+
+    def test_notes_written_against_the_former_provider_are_still_accepted(self):
+        """The journal is immutable: an 'fd-' note predates ESPN and must still read back."""
         op = self.note(match_id='fd-123', entries=[dict(player_id='fd-456', action='pass')])
         self.request(op)
         self.assertEqual(self.request()[0]['operation'], op)
+
+    def test_notes_are_written_against_espn_matches(self):
+        op = self.note(match_id='espn-401915445',
+                       entries=[dict(player_id='espn-456', action='pass')])
+        self.request(op)
+        self.assertEqual(self.request()[-1]['operation'], op)
 
     def test_espn_players_sync_under_the_original_match_id(self):
         op = self.note(match_id='fd-123', entries=[dict(player_id='espn-456', action='pass')])
