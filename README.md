@@ -2,8 +2,13 @@
 
 ## Navigation et recherche
 
-Trois cartes : **Mes matchs annotés** à gauche, **Accueil** au centre et **Calendrier** à droite.
-Depuis l’accueil, glisser vers la droite ouvre les matchs annotés ; vers la gauche, le calendrier.
+Trois cartes : **Mes matchs annotés** à gauche, **Accueil** au centre et **Matchs enregistrés** à
+droite ; depuis l’accueil, glisser vers la droite ouvre les matchs annotés, vers la gauche les matchs
+enregistrés. Le **Calendrier** est un écran à part, ouvert par les liens
+« Calendrier › » de l’accueil : c’est une destination que l’on demande, pas une carte que l’on
+croise. Une fois dedans, glisser change de semaine — vers la gauche la suivante, vers la droite la
+précédente —, comme les deux flèches de l’en-tête, qui font exactement le même mouvement. La semaine
+voisine est déjà dessinée avant d’arriver : les trois semaines affichées sont demandées ensemble.
 Les matchs annotés regroupent les rencontres avec au moins une note non supprimée, même terminées,
 y compris les démonstrations et les notes synchronisées. La recherche filtre équipes, compétition,
 date et texte des notes, sans distinction de casse ou d’accents. Un match dont les détails manquent
@@ -21,10 +26,11 @@ lance aussi le téléchargement de son détail si le serveur répond, pour prép
 dans **Mes suivis**, sans doublonner une rencontre entre deux clubs suivis. Les matchs terminés,
 annulés, reportés ou déjà en cours sont exclus de cette section ; **Aujourd’hui** reste disponible.
 
-Le serveur expose `/v1/football/teams/{id}/matches`, vers le
-[calendrier d’un club de football-data.org](https://docs.football-data.org/general/v4/team.html#_matches).
-Le client demande l’année à venir (100 rencontres maximum par club), puis choisit le prochain match
-par date. Les réponses rejoignent les calendriers enregistrés pour l’usage hors ligne. Un club sans
+Le serveur expose `/v1/football/teams/{id}/matches`. ESPN ne publie dans le calendrier propre
+d’un club que les rencontres déjà jouées ; le serveur lit donc le calendrier du championnat où
+ce club évolue — résolu une fois pour la saison — puis n’en garde que ses rencontres, en y
+ajoutant ses soirées européennes. Le client demande l’année à venir (100 rencontres maximum par
+club), puis choisit le prochain match par date. Les réponses rejoignent les calendriers enregistrés pour l’usage hors ligne. Un club sans
 rencontre future connue est signalé, et les chargements réussis ne sont pas répétés avant cinq minutes
 au cours d’une même session. Redémarrer le serveur après cette mise à jour pour activer la nouvelle route.
 
@@ -32,7 +38,7 @@ au cours d’une même session. Redémarrer le serveur après cette mise à jour
 
 L’application conserve automatiquement les calendriers consultés, les détails des matchs ouverts
 (compositions, faits et statistiques), le catalogue des compétitions consulté et les écussons affichés.
-L’accueil propose **Matchs enregistrés**, y compris en mode démo : cette liste reste accessible après
+La carte **Matchs enregistrés**, à droite de l’accueil, existe aussi en mode démo : cette liste reste accessible après
 fermeture de l’application, sans serveur, sans filtre de suivis ni limite de date. Un match connu
 seulement par son calendrier permet déjà de prendre des notes générales ; sa composition nécessite
 un premier téléchargement en ligne.
@@ -50,22 +56,44 @@ Vérification sur émulateur démarré : `bash scripts/check-offline-android.sh`
 Les contrôles utilisent une base de test séparée : migration depuis la version 1, conservation des
 notes, réouverture, calendriers chevauchants, conservation des compositions et transactions invalides.
 
-## Compositions ESPN (usage personnel)
+## Données football : ESPN (usage personnel)
 
-Le calendrier utilise la clé `FOOTBALL_DATA_TOKEN` du `.env`. À l’ouverture d’un match,
-le serveur cherche sa composition sur le flux public ESPN, sans clé supplémentaire.
-Le rapprochement exige la même compétition, les deux équipes domicile/extérieur et un
-horaire proche ; une correspondance ambiguë est refusée. Les 22 titulaires doivent être
-présents et distincts. Leurs identifiants `espn-…` restent séparés des identifiants football-data.
-Les couleurs des maillots viennent aussi d’ESPN : elles sont éclaircies pour que le numéro
-reste lisible, et l’équipe visiteuse bascule sur sa couleur alternative si les deux se
-ressemblent trop. Un cache mémoire limite les appels ESPN : cinq minutes en temps normal, trente secondes pour un
-match en cours — nettement moins que la minute qui sépare deux rafraîchissements du client, faute
-de quoi un poll sur deux recevrait la copie qu'il a déjà. L'identifiant de l'événement ESPN est
-retenu après la première résolution, donc rafraîchir un match coûte une requête et non deux :
-le `scoreboard` ne sert qu'à répondre « quel événement est-ce ? », et la réponse ne change pas.
-ESPN déclare lui-même son flux périmé au bout de neuf secondes, ce rythme reste donc très en deçà
-de ce que son propre cache anticipe.
+Tout vient du flux public d’ESPN, sans clé ni compte : le catalogue des compétitions, les
+calendriers, le calendrier d’un club et la fiche d’un match. Le contrat `/v1/football/…` n’a pas
+changé de forme — c’est celle que le client enregistre sur l’appareil et relit hors ligne — mais
+les identifiants qu’il transporte sont ceux d’ESPN.
+
+Il n’y a plus de rapprochement entre deux fournisseurs. Auparavant le calendrier venait d’un
+fournisseur et la composition d’un autre, sans identifiant commun : les deux fiches étaient
+raccordées en comparant des noms d’affichage et un horaire, ce qui échouait en silence dès qu’un
+club s’écrivait autrement d’un côté que de l’autre. La fiche d’un match est maintenant lue
+directement à son identifiant, sur `summary`, qui répond quel que soit le championnat cité —
+un match enregistré s’ouvre donc sans rien avoir à retrouver d’abord. Les 22 titulaires doivent
+être présents et distincts, sans quoi la composition est déclarée indisponible et le match reste
+ouvrable pour des notes générales.
+
+Les couleurs des maillots viennent d’ESPN : elles sont éclaircies pour que le numéro reste
+lisible, et l’équipe visiteuse bascule sur sa couleur alternative si les deux se ressemblent
+trop. Un cache mémoire limite les appels : cinq minutes minimum pour l’accueil, les calendriers et les clubs suivis, même aujourd’hui.
+Seul le détail d’un match ouvert en direct peut être relu après trente secondes. Le
+catalogue et la liste des clubs d’un championnat tiennent une journée. Un calendrier interroge
+les treize compétitions, quatre à la fois : demandés l’un après l’autre ils feraient attendre le
+client sur une page qu’il a déjà dessinée de sa copie locale, tous d’un coup ils arriveraient en
+rafale sur un flux dont on est l’invité. Un championnat qui ne répond pas se tait sans faire
+échouer les autres. ESPN déclare lui-même son flux périmé au bout de neuf secondes, ce rythme
+reste donc très en deçà de ce que son propre cache anticipe.
+
+Sur l’accueil et le calendrier, tirer vers le bas depuis le haut de la liste puis relâcher
+actualise les données. Un indicateur de chargement apparaît centré au-dessus du contenu, puis
+se replie progressivement à la fin du chargement. Pendant une actualisation, on peut encore
+tirer légèrement le contenu : il revient doucement au relâchement, sans nouvelle requête.
+L’accueil relit aussi les matchs favoris et les prochains matchs des clubs suivis.
+
+Le geste relit le serveur sans forcer ESPN : les durées de cache ci-dessus restent applicables,
+et les requêtes simultanées vers une même ressource partagent une seule lecture ESPN.
+En cas d’échec du fournisseur, sa dernière réponse en cache reste disponible et une nouvelle
+tentative attend cinq minutes, même si aucune réponse n’avait encore été obtenue. Sans connexion,
+les données déjà enregistrées sur le téléphone restent consultables.
 
 Le serveur rapporte aussi le déroulé du match — remplacements, buts, cartons, coup d’envoi et
 mi-temps réels — dans `timeline` et `clock`, les remplaçants dans `bench`, les compteurs
@@ -77,14 +105,33 @@ les faits du fournisseur s’affichent à côté des notes, jamais dedans, pour 
 de ne mesurer que ce qui a été relevé.
 
 Le trigramme du club et son écusson voyagent avec la composition, dans `abbreviation` et `logo`
-de chaque équipe. Ils viennent d’ESPN et se posent à côté des `tla` et `crest` de football-data,
-jamais par-dessus : les deux fournisseurs ne disent pas la même chose — `TRY` contre `ETR` pour
-Troyes, et un `RC ` complété d’une espace pour Strasbourg — et c’est au client de choisir. Il
-préfère ESPN, dont les trois lettres se lisent mieux, et retombe sur football-data pour une
-compétition qu’ESPN ne couvre pas. Des deux écussons, seul celui d’ESPN est toujours une image
-matricielle ; football-data sert la moitié des siens en SVG, que `BitmapFactory` ne lit pas.
-L’écusson choisi est celui qu’ESPN dessine pour un fond sombre quand il en publie un — les deux
-fichiers sont souvent identiques, mais la note se dessine sur une pelouse de nuit. Le client conserve les écussons téléchargés sur disque, à la taille d’affichage, pour les retrouver hors ligne.
+de chaque équipe, à côté des `tla` et `crest` que porte déjà toute entrée de calendrier. Depuis
+qu’il n’y a plus qu’un fournisseur les deux disent la même chose ; le client lit les deux pour
+qu’un club nommé depuis l’une ou l’autre source tienne dans la même pastille. L’écusson retenu
+est celui qu’ESPN dessine pour un fond sombre quand il en publie un — les deux fichiers sont
+souvent identiques, mais la note se dessine sur une pelouse de nuit. Un écusson qui n’est pas une
+image matricielle est écarté plutôt que dessiné en carré vide, `BitmapFactory` ne lisant pas le
+SVG. Le client conserve les écussons téléchargés sur disque, à la taille d’affichage, pour les
+retrouver hors ligne.
+
+Une carte de match porte une petite icône de terrain quand sa composition est déjà publiée :
+c’est une invitation à ouvrir la rencontre maintenant plutôt qu’après le coup de sifflet. Le
+calendrier ne la demande qu’avec `lineups=1`, et le serveur ne va vérifier que les matchs dont
+la réponse est à la fois connaissable et utile — coup d’envoi dans les deux heures, en cours, ou
+terminés depuis moins de quatre. Le reste repart en `lineup_status: "unknown"`, jamais en une
+valeur qu’on n’a pas vérifiée : l’icône n’est dessinée que sur ce qui a été regardé et trouvé,
+et son absence ne promet rien. Une soirée européenne coûte ainsi quelques lectures au lieu d’une
+par rencontre de la saison — et ces lectures ne sont pas perdues, puisque ouvrir le match trouve
+ensuite la feuille déjà en main. L’appareil retient ce qu’il a vu publié : un calendrier qui
+répond `unknown` ne fait pas disparaître un badge déjà acquis.
+
+Deux choses se perdent avec l’ancien fournisseur. ESPN ne publie pas de numéro de journée : une
+carte de championnat affiche « Championnat » là où elle affichait « Championnat · J3 ». Et les
+identifiants ayant changé d’espace, les suivis, les favoris et les matchs déjà enregistrés sur
+un appareil se rapportent à des numéros que ce flux ne connaît pas : ils sont à recocher une
+fois. Les notes écrites avant la bascule portent un identifiant de match en `fd-…` ; le journal
+étant immuable, le serveur les accepte toujours et le client les montre comme des matchs dont
+le détail n’est pas téléchargé, sans jamais les confondre avec un match d’ESPN.
 
 Les compositions indisponibles ou les erreurs du fournisseur n’empêchent plus d’ouvrir
 les notes générales. Les positions sur le terrain sont schématiques, pas des positions
@@ -107,7 +154,7 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
 
 ## Ce qui fonctionne dans le code
 
-- Accueil, calendrier, suivis et options suivent les conventions Android : titre et actions dans une barre en haut (retour à gauche, ☆ suivis et ⚙ options à droite) au lieu de gros boutons dans le contenu, retour tactile sur chaque surface cliquable, barres système à la couleur de la page. Un match se lit comme un match : heure locale (plus d'UTC) ou état en cours à gauche, les deux équipes et leur score au centre, la compétition en dessous. Le calendrier groupe ses rencontres par jour ; une liste vide propose d'aller choisir ses suivis. Les codes du fournisseur sont traduits (« REGULAR_SEASON » devient « Championnat · J3 »). Les icônes (roue, étoile, flèches) sont des `VectorDrawable` du projet, dans `android/app/src/main/res/drawable/` : les `android.R.drawable.ic_menu_*` de la plateforme sont des images matricielles d'avant Material qui changent d'un constructeur à l'autre, et un glyphe de police comme ⚙ tombe sur l'emoji du système.
+- Accueil, calendrier, suivis et options suivent les conventions Android : titre et actions dans une barre en haut (retour à gauche, ☆ suivis et ⚙ options à droite) au lieu de gros boutons dans le contenu, retour tactile sur chaque surface cliquable, barres système à la couleur de la page. Un match se lit comme un match : heure locale (plus d'UTC) ou état en cours à gauche, les deux équipes et leur score au centre, la compétition en dessous. Le calendrier groupe ses rencontres par jour ; une liste vide propose d'aller choisir ses suivis. Son en-tête — titre, semaine et recherche — ne bouge pas : seules les semaines glissent sous lui, et la semaine arrivée reprend sa place au milieu sans que rien ne paraisse bouger. Les codes du fournisseur sont traduits (« REGULAR_SEASON » devient « Championnat · J3 »). Les icônes (roue, étoile, flèches) sont des `VectorDrawable` du projet, dans `android/app/src/main/res/drawable/` : les `android.R.drawable.ic_menu_*` de la plateforme sont des images matricielles d'avant Material qui changent d'un constructeur à l'autre, et un glyphe de police comme ⚙ tombe sur l'emoji du système.
 - Terrain avec les 22 titulaires placés à leur poste réel, chaque équipe dans sa formation (4-4-2 / 4-3-3).
 - **Faits du match**, une carte posée à droite du terrain : on l'amène en balayant le doigt vers
   la gauche, on revient en balayant vers la droite, et le geste retour fait la même chose avant de
@@ -357,20 +404,16 @@ Configurer le même jeton dans l'application. Le serveur écoute uniquement sur 
 adb reverse tcp:8080 tcp:8080
 ```
 
-Pour activer l’accueil et le calendrier des vrais matchs, créer une clé gratuite sur
-[football-data.org](https://www.football-data.org/client/register), puis la fournir uniquement au serveur :
+L’accueil et le calendrier des vrais matchs n’ont rien à configurer : le flux ESPN est public et
+ne demande ni clé ni compte. Il faut seulement que le serveur ait accès à Internet.
 
-```bash
-export FOOTBALL_DATA_TOKEN="votre-cle-football-data"
-```
+Le serveur charge automatiquement le fichier `.env` à la racine du projet, quel que soit le
+dossier de lancement — il n’y cherche plus que `FONOTE_TOKEN`. Les variables déjà exportées ont
+priorité. Le fichier `.env` est ignoré par Git ; son contenu n’est jamais exécuté comme du code.
 
-Le serveur charge aussi automatiquement le fichier `.env` à la racine du projet,
-quel que soit le dossier de lancement. Ajouter `FOOTBALL_DATA_TOKEN=votre-cle-football-data`
-dans ce fichier puis redémarrer le serveur. Les variables déjà exportées ont priorité.
-Le fichier `.env` est ignoré par Git ; son contenu n’est jamais exécuté comme du code.
-
-Le serveur sert de proxy limité aux compétitions, équipes et matchs. La clé fournisseur n’est donc
-jamais enregistrée dans l’application. Sans cette variable, l’application conserve son mode démo hors ligne.
+Le serveur sert de proxy limité aux compétitions, équipes et matchs : l’application ne parle
+jamais au fournisseur directement, et ce qui sort du serveur est le contrat Fonote, pas la
+réponse brute d’ESPN.
 
 Utiliser alors `http://127.0.0.1:8080` dans l'application **debug**. Pour l'émulateur Android : `http://10.0.2.2:8080`.
 
@@ -393,12 +436,11 @@ Copier `.env.example` vers `.env` et renseigner le jeton :
 
 ```env
 FONOTE_TOKEN=le-meme-jeton-que-dans-l-application
-FOOTBALL_DATA_TOKEN=votre-cle-football-data
 FONOTE_BACKEND_IMAGE=registry.mmyumu.fr/fonote-backend:1.0.0
 ```
 
 Sans `FONOTE_TOKEN`, `docker compose` refuse de démarrer plutôt que de lancer un serveur qui
-répondrait 401 à tout. Sans `FOOTBALL_DATA_TOKEN`, le serveur démarre et l'application reste en
+répondrait 401 à tout. Sans accès à Internet, le serveur démarre et l'application reste en
 démo hors ligne, comme en local. Le `.env` de la racine est celui que lit déjà le serveur lancé
 à la main : les deux usages partagent le même fichier, ignoré par Git.
 
@@ -495,7 +537,8 @@ Toutes les routes exigent `Authorization: Bearer <jeton>` :
 | Route | Réponse / effet |
 |---|---|
 | `GET /v1/matches` | Le match embarqué, ses 22 joueurs et sa provenance |
-| `GET /v1/football/competitions` | Compétitions accessibles avec le plan football-data.org configuré |
+| `GET /v1/football/competitions` | Les treize compétitions que le serveur sait servir |
+| `GET /v1/football/matches?lineups=1` | Le calendrier, en disant quelles compositions sont déjà publiées |
 | `GET /v1/football/competitions/{code}/teams` | Équipes d’une compétition, pour choisir ses suivis |
 | `GET /v1/football/matches?dateFrom=…&dateTo=…` | Matchs d’une période pour l’accueil et le calendrier |
 | `GET /v1/football/matches/{id}` | Détail, composition publiée, remplaçants, déroulé du match et heures réelles |
