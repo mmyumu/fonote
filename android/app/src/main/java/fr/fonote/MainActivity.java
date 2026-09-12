@@ -2676,7 +2676,6 @@ public class MainActivity extends Activity {
             closeNote(); return;
         }
         if (written) writeNote();
-        toast(shortName(id) + " retiré de la note");
         renderComposer();
     }
     private void qualify(String key) {
