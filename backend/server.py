@@ -130,8 +130,9 @@ def validate(op):
         if op['match_id'] != match['id'] and not remote_match:
             raise ValueError('Match inconnu')
         # A note on the match as a whole happens at no moment in particular: its minute is null.
-        # It may be about one club or name players — named, never credited: an action happens
-        # at a minute, so this note carries none and the bilan never counts it.
+        # An action happens at a minute, so this note credits nobody and the bilan never counts
+        # it. A free note is the same written note pinned to a minute: both may be about one
+        # club or name players — named, never credited.
         timeless = op['minute'] is None
         if not timeless and (type(op['minute']) is not int or not 0 <= op['minute'] <= 150):
             raise ValueError('Minute invalide')
@@ -163,7 +164,8 @@ def validate(op):
             if entry['action'] not in ACTIONS:
                 raise ValueError('Action inconnue')
         people = [entry['player_id'] for entry in entries]
-        if timeless:
+        # Naming belongs to a note that credits nobody; a note of actions says who by its entries.
+        if not entries:
             # Both may be left out: a note about neither club and nobody in particular.
             allowed |= {'team', 'players'} & set(op)
             if op.get('team') not in (None, 'home', 'away'):

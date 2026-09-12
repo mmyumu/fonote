@@ -257,6 +257,19 @@ class ServerTest(unittest.TestCase):
             self.request(op)
         self.assertEqual([r['operation'] for r in self.request()], notes)
 
+    def free_note(self, **fields):
+        """A written note pinned to a minute: a match note that took the time."""
+        return self.match_note(**{'minute': 34, **fields})
+
+    def test_a_free_note_names_a_club_or_players_at_a_minute(self):
+        notes = [self.free_note(players=[PLAYERS[0], PLAYERS[1]]),
+                 self.free_note(team='home'),
+                 self.free_note(match_id='espn-401915445', players=['espn-456', 'espn-coach-148']),
+                 self.free_note()]
+        for op in notes:
+            self.request(op)
+        self.assertEqual([r['operation'] for r in self.request()], notes)
+
     def test_a_match_note_names_players_without_crediting_them(self):
         legacy = self.legacy_note()
         legacy['minute'] = None
@@ -269,8 +282,10 @@ class ServerTest(unittest.TestCase):
             self.match_note(players=[dict(player_id=PLAYERS[0])]),
             self.match_note(players=PLAYERS[0]),
             self.match_note(team='home', players=[PLAYERS[0]]),
-            # A club and names belong to the note without a minute, and to no other.
+            # A club and names belong to a note that credits nobody, and to no other.
             self.note(team='home', players=[]),
+            self.note(players=[PLAYERS[1]]),
+            self.free_note(team='home', players=[PLAYERS[0]]),
         ]
         for op in rejected:
             with self.assertRaises(HTTPError) as error:
