@@ -2,6 +2,7 @@
 import argparse
 import hmac
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -35,6 +36,9 @@ STROKES = {'pass', 'run', 'carry', 'shot', 'tackle'}
 # Bounds a hand-drawn schema stays well inside; anything past them is a client gone wrong,
 # not a moment of football. Twenty-two players is the whole pitch.
 MAX_TOKENS, MAX_SHAPES, MAX_POINTS = 30, 40, 32
+# Silent until someone configures it: tests print nothing, while the server started from the
+# command line says what it serves.
+log = logging.getLogger('fonote')
 
 
 def load_env(path=None):
@@ -383,6 +387,17 @@ def make_server(host, port, path, token):
         def log_message(self, fmt, *args):
             pass  # Never log tokens or note contents.
 
+        def log_request(self, code='-', size='-'):
+            # One line per request: method, path without the query, status, duration. Enough
+            # to see the server alive, nothing of what the device sends. The Docker healthcheck
+            # comes by every 30 s; logging it would be noise.
+            route = urllib.parse.urlparse(self.path).path if hasattr(self, 'path') else '-'
+            if route == '/v1/health':
+                return
+            started = getattr(self, 'started', None)
+            elapsed = f' {(time.monotonic() - started) * 1000:.0f} ms' if started else ''
+            log.info('%s %s %s%s', self.command or '-', route, code, elapsed)
+
         def reply(self, code, data):
             raw = json.dumps(data, ensure_ascii=False).encode()
             self.send_response(code)
@@ -398,6 +413,7 @@ def make_server(host, port, path, token):
             return True
 
         def do_GET(self):
+            self.started = time.monotonic()
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == '/v1/health':
                 # The feed behind the football routes is public: there is no key to leave out,
@@ -422,6 +438,7 @@ def make_server(host, port, path, token):
             self.reply(404, {'error': 'Route inconnue'})
 
         def do_POST(self):
+            self.started = time.monotonic()
             if not self.authorized():
                 return
             if self.path != '/v1/operations':
@@ -505,6 +522,8 @@ if __name__ == '__main__':
     token = os.environ.get('FONOTE_TOKEN', '')
     if token and (len(token) < 24 or not token.isascii()):
         parser.error('Définir FONOTE_TOKEN avec au moins 24 caractères ASCII aléatoires')
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
     server = make_server(args.host, args.port, args.db, token)
     print(f'Fonote : http://{args.host}:{args.port} (usage personnel, arrêter avec Ctrl+C)')
     try:
