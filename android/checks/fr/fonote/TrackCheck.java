@@ -40,7 +40,7 @@ public final class TrackCheck {
         for (int i = 0; i < Track.LIMIT; i++) assert full.put(new Track.Key(i, 0, 0));
         assert !full.put(new Track.Key(Track.LIMIT, 0, 0));
         assert full.put(new Track.Key(0, 1, 1));
-        // Un long geste est réduit à la limite du journal sans perdre sa fin ni sa forme.
+        // A long gesture is brought down to the log's limit without losing its end or its shape.
         java.util.List<double[]> gesture = new java.util.ArrayList<>();
         for (int i = 0; i <= 200; i++) gesture.add(new double[]{i / 200.0, Math.sin(i / 200.0 * Math.PI) * .3});
         java.util.List<double[]> kept = Track.thinned(gesture, Diagram.POINTS);

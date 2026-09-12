@@ -55,8 +55,8 @@ final class BoardView extends View {
     private static final int BRIEF = 3;
     private int time, travel = AUTO, actor = -1;
     /**
-     * L'instant dessiné. Il vaut {@link #time} pendant l'édition ; la lecture le fait avancer
-     * entre deux dixièmes, à chaque image, pour que les joueurs glissent au lieu de sauter.
+     * The instant being drawn. It equals {@link #time} while editing; playback moves it forward
+     * between two tenths, on every frame, so that players glide instead of jumping.
      */
     private double moment;
     int time() { return time; }
@@ -84,7 +84,7 @@ final class BoardView extends View {
     private static final int TAP = 8, STROKE = 14;
     /** A sampled point every few pixels: enough to keep a curve, few enough to write down. */
     private static final int SAMPLE = 6;
-    /** Ce qu'un doigt peut tracer d'un seul geste avant d'être réduit : plusieurs fois le terrain. */
+    /** What a finger can draw in a single gesture before it is reduced: several times the pitch. */
     private static final int GESTURE = 600;
 
     private final Pitch grass;
@@ -134,7 +134,7 @@ final class BoardView extends View {
     private boolean translateAll, replacing, redraw;
     private Track.Key handle;
     void editing(Runnable cancel, java.util.function.Consumer<String> motion) { onCancel = cancel; onMotion = motion; }
-    /** Les dialogues du terrain prennent les couleurs du thème, comme ceux de l'activité. */
+    /** The pitch's dialogs take the theme's colours, like the activity's. */
     private java.util.function.Supplier<android.app.AlertDialog.Builder> dialogs;
     void dialogs(java.util.function.Supplier<android.app.AlertDialog.Builder> made) { dialogs = made; }
     void selectMotion(String id) { selectedMotion = id; invalidate(); }
@@ -293,9 +293,9 @@ final class BoardView extends View {
             if (diagram.ballHeld(moment)) {
                 float[] side = feet(moment); ox = side[0] * reach; oy = side[1] * reach;
             } else {
-                // En vol, le ballon quitte les pieds du passeur et rejoint ceux du receveur
-                // progressivement : le décalage s'efface au départ et revient à l'arrivée, au
-                // lieu de sauter d'un coup de quatorze dp.
+                // In flight, the ball leaves the passer's feet and reaches the receiver's
+                // gradually: the offset fades out at the start and comes back on arrival,
+                // instead of jumping fourteen dp at once.
                 Track.Key[] leg = diagram.ballLeg(moment);
                 if (leg != null) {
                     double fade = Math.min(3, (leg[1].time - leg[0].time) / 3.0);
@@ -376,7 +376,7 @@ final class BoardView extends View {
         if (tackle) cross(canvas, line, width); else head(canvas, line, width);
     }
 
-    /** Le bout d'un tacle : une croix au contact, là où une course finirait sur une flèche. */
+    /** The end of a tackle: a cross at the contact, where a run would end in an arrowhead. */
     private void cross(Canvas canvas, Path line, float width) {
         measure.setPath(line, false);
         float length = measure.getLength();
@@ -476,7 +476,7 @@ final class BoardView extends View {
         return result;
     }
 
-    /** Le côté des pieds où le ballon se pose à cet instant : vers où il sera joué, jamais dessous. */
+    /** The side of the feet the ball sits on at this instant: towards where it will be played, never under them. */
     private float[] feet(double at) {
         double[] here = diagram.ballPosition(at), next = diagram.ballNext(at);
         float dx = 0, dy = -1;
@@ -491,7 +491,7 @@ final class BoardView extends View {
 
     private void paintToken(Canvas canvas, Diagram.Token token, int index) {
         int radius = Math.round(dp(compact ? SHIRT * .68f : SHIRT) / 2);
-        // Au sous-pixel : arrondi à l'entier, un joueur lent avance par saccades pendant la lecture.
+        // Sub-pixel: rounded to whole pixels, a slow player moves in jerks during playback.
         float cx = x(spot(token)[0]), cy = y(spot(token)[1]);
         boolean active = chosen.contains(index);
         Drawable shirt = PitchView.shirt(getContext(), glass, colour(token), active, false, held, heldEnd);
@@ -524,7 +524,7 @@ final class BoardView extends View {
     private float x(double fraction) { return (float)fraction * getWidth(); }
     private float y(double fraction) { return (float)fraction * getHeight(); }
 
-    // ——— Ce que le match sait d'un pion ———
+    // ——— What the match knows about a counter ———
 
     private JSONObject player(Diagram.Token token) {
         JSONArray players = match == null ? null : match.optJSONArray("players");
@@ -549,11 +549,11 @@ final class BoardView extends View {
     }
     private String name(Diagram.Token token) {
         JSONObject player = player(token);
-        // Le maillot porte déjà la couleur de l'équipe : l'étiquette ne dit que le joueur.
+        // The shirt already carries the team's colour: the label only names the player.
         return player == null ? "" : PlayerName.shorten(player.optString("name"));
     }
 
-    // ——— Le doigt ———
+    // ——— The finger ———
 
     @Override public boolean onTouchEvent(MotionEvent event) {
         if (!editable || getWidth() == 0) return false;
@@ -641,8 +641,8 @@ final class BoardView extends View {
                     invalidate();
                 } else if (drawing != null && Math.hypot(px - lastX, py - lastY) >= dp(SAMPLE)) {
                     lastX = px; lastY = py;
-                    // Tout le geste, pas seulement ses trente-deux premiers échantillons : il est
-                    // ramené à la limite du journal au lâcher, sans rien couper de sa fin.
+                    // The whole gesture, not just its first thirty-two samples: it is brought
+                    // down to the log's limit on release, without cutting anything off its end.
                     if (drawing.points.size() < GESTURE) drawing.points.add(point(px, py));
                     invalidate();
                 }
@@ -748,8 +748,8 @@ final class BoardView extends View {
         Diagram.Shape shape = drawing;
         drawing = null;
         if (shape == null) return;
-        // Le tracé tel que le doigt l'a laissé : une validation le reprend d'ici, sans l'arrivée
-        // déjà ajoutée pour l'aperçu.
+        // The stroke as the finger left it: a confirmation picks it up from here, without the
+        // arrival already added for the preview.
         java.util.List<double[]> drawn = new java.util.ArrayList<>(shape.points);
         int receiver = tokenAt(px, py, SNAP);
         boolean tackle = Diagram.TACKLE.equals(shape.kind);
@@ -782,8 +782,8 @@ final class BoardView extends View {
             shape.points.set(shape.points.size() - 1, end);
         }
         if (tackle) {
-            // Au contact du joueur visé là où il sera, pas sur lui : deux maillots se touchent,
-            // ils ne se superposent pas.
+            // In contact with the targeted player where they will be, not on top of them: two
+            // shirts touch, they do not overlap.
             double[] target = diagram.position(diagram.tokens.get(receiver), time + travel);
             double gx = (start[0] - target[0]) * getWidth(), gy = (start[1] - target[1]) * getHeight();
             double gap = Math.hypot(gx, gy), reach = Math.min(dp(SHIRT) * .8, gap / 2);
@@ -820,7 +820,7 @@ final class BoardView extends View {
             // Nothing is said about the ball: whoever held it holds it still, and follows.
             if (tackle) to.kind = Diagram.TACKLE;
             track.put(from); track.put(to);
-            // Un tacle sur le porteur lui prend le ballon : il suit le tacleur dès le contact.
+            // A tackle on the carrier takes the ball from them: it follows the tackler from contact on.
             if (tackle && diagram.tokens.get(receiver).id.equals(diagram.holder(time + travel))) {
                 Track.Key won = sequence().fixBall(time + travel);
                 won.owner = diagram.tokens.get(actor).id; won.flight = false; won.x = end[0]; won.y = end[1];
@@ -833,8 +833,8 @@ final class BoardView extends View {
             track.put(from); track.put(to);
         }
         selectedMotion = to.id;
-        // Le curseur passe à l'arrivée : la suite de l'action part de là. Un appel simultané
-        // se trace en revenant au départ, par ‹ ou par Trajet… → Aller au départ.
+        // The cursor moves to the arrival: the rest of the move starts from there. A simultaneous
+        // run is drawn by going back to the start, with ‹ or with Trajet… → Aller au départ.
         setTime(time + travel);
         if (onMotion != null) onMotion.accept(selectedMotion);
         if (actor >= 0) select(actor);
@@ -864,7 +864,7 @@ final class BoardView extends View {
             double along = (points.get(i)[1] - points.get(i-1)[1]) * LENGTH;
             metres += Math.hypot(across, along);
         }
-        // Un tacle est une course : le joueur y va à son allure, pas à celle d'un ballon.
+        // A tackle is a run: the player gets there at their own pace, not at a ball's.
         double speed = Diagram.SHOT.equals(shape.kind) ? STRUCK
             : Diagram.RUN.equals(shape.kind) || Diagram.TACKLE.equals(shape.kind) ? RUNNING : PASSED;
         return (int)Math.max(BRIEF, Math.min(Track.END, Math.round(metres / speed * 10)));

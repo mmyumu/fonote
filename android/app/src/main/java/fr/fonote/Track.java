@@ -102,10 +102,10 @@ final class Track {
     }
 
     /**
-     * Un tracé réduit au nombre de points que le journal accepte, répartis à intervalles égaux
-     * le long du geste. Le doigt n'est plus coupé au bout de trente-deux échantillons : tout le
-     * geste est gardé pendant qu'il se trace, puis ramené à cette limite. Les deux bouts restent
-     * exactement où ils étaient.
+     * A stroke reduced to the number of points the log accepts, spread at equal intervals
+     * along the gesture. The finger is no longer cut off after thirty-two samples: the whole
+     * gesture is kept while it is being drawn, then brought down to that limit. Both ends stay
+     * exactly where they were.
      */
     static List<double[]> thinned(List<double[]> points, int limit) {
         List<double[]> result = new ArrayList<>();

@@ -1,12 +1,11 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <!-- Ce que le système repeint lui-même quand l'utilisateur choisit des icônes
-         thématiques : une seule encre, donc la page ne peut plus être un aplat — elle
-         redevient son contour, et le reste du dessin s'épaissit d'un cran pour tenir
-         sans la couleur qui le séparait du fond. Le tracé suit celui de
-         ic_launcher_foreground.xml, dont il est la doublure : les deux se modifient
-         ensemble. -->
+    <!-- What the system repaints itself when the user picks themed icons: a single ink,
+         so the page can no longer be a flat fill — it goes back to being its outline, and
+         the rest of the drawing thickens a notch to hold up without the colour that set it
+         apart from the background. The paths follow those of ic_launcher_foreground.xml,
+         which this file stands in for: the two are changed together. -->
 
     <path android:strokeColor="#FF000000" android:strokeWidth="3.2"
         android:strokeLineJoin="round" android:fillColor="#00000000"
@@ -14,17 +13,17 @@
     <path android:strokeColor="#FF000000" android:strokeWidth="3.8" android:strokeLineCap="round"
         android:fillColor="#00000000" android:pathData="M44,27 L44,38.5 M54,27 L54,38.5 M64,27 L64,38.5" />
 
-    <!-- La touche et la médiane. -->
+    <!-- The touchlines and the halfway line. -->
     <path android:strokeColor="#FF000000" android:strokeWidth="2.3" android:strokeLineJoin="round"
         android:fillColor="#00000000" android:pathData="M38,42 L70,42 L70,76 L38,76 Z" />
     <path android:strokeColor="#FF000000" android:strokeWidth="2.1"
         android:fillColor="#00000000" android:pathData="M38,59 L70,59" />
-    <!-- Le rond central et son point. -->
+    <!-- The centre circle and its spot. -->
     <path android:strokeColor="#FF000000" android:strokeWidth="2.1"
         android:fillColor="#00000000" android:pathData="M54,53.4 A5.6,5.6 0 1,1 53.9,53.4 Z" />
     <path android:fillColor="#FF000000"
         android:pathData="M54,59 m-1.1,0 a1.1,1.1 0 1,0 2.2,0 a1.1,1.1 0 1,0 -2.2,0 z" />
-    <!-- Les deux surfaces de réparation, et les points de penalty. -->
+    <!-- The two penalty areas, and the penalty spots. -->
     <path android:strokeColor="#FF000000" android:strokeWidth="2.1" android:strokeLineJoin="round"
         android:fillColor="#00000000" android:pathData="M45,42 L45,49 L63,49 L63,42" />
     <path android:strokeColor="#FF000000" android:strokeWidth="2.1" android:strokeLineJoin="round"

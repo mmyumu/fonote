@@ -7,22 +7,21 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.widget.ScrollView;
 
-/** Défilement avec actualisation lorsque le geste commence en haut de la page. */
+/** Scrolling with a refresh when the gesture starts at the top of the page. */
 final class Pull extends ScrollView {
     /**
-     * La place que le doigt ouvre est rendue à qui actualise, et non refermée d'abord : la ligne
-     * d'actualisation prend exactement la hauteur lâchée, et la page ne bouge pas d'un pixel à
-     * l'instant du relâchement. Répondre faux, c'est refuser la main — la page se referme alors
-     * d'elle-même.
+     * The room the finger opens is handed to whoever refreshes, not closed first: the refresh
+     * row takes exactly the height let go, and the page does not move a pixel at the moment
+     * of release. Answering false declines the hand-off — the page then closes by itself.
      */
     interface Handover { boolean take(float opened); }
 
-    /** Ce que le doigt doit ouvrir pour armer l'actualisation. */
+    /** How far the finger must open to arm the refresh. */
     private final float reach, slop;
     /**
-     * Au-delà de la butée, la page suit encore mais de moins en moins, sur une demi-butée de
-     * plus. Un arrêt net laisse le doigt courir sur une page morte, et c'est ce silence-là qu'on
-     * lit comme un accroc.
+     * Past the stop, the page still follows but less and less, over half a stop more. A hard
+     * stop leaves the finger running over a dead page, and it is that silence which reads as a
+     * snag.
      */
     private static final float GIVE = .5f;
     private Handover action;
@@ -102,9 +101,9 @@ final class Pull extends ScrollView {
     }
 
     /**
-     * Prendre le geste au défilement, qui l'avait commencé. Sans le congé que voici, il garde son
-     * dernier point et son vélocimètre ouverts : le geste suivant repart alors de ce point-là,
-     * d'un bond de la tolérance tactile, et la page part avant le doigt.
+     * Takes the gesture from the scroll, which had started it. Without this dismissal, it keeps
+     * its last point and its velocity tracker open: the next gesture then starts again from
+     * that point, with a jump the size of the touch slop, and the page leaves before the finger.
      */
     private void seize(MotionEvent event) {
         if (pulling) return;
@@ -116,7 +115,7 @@ final class Pull extends ScrollView {
         farewell.recycle();
     }
 
-    /** Ce que la page montre pour une course de doigt : moitié jusqu'à la butée, puis la résistance. */
+    /** What the page shows for a finger's travel: half of it up to the stop, then the resistance. */
     private float drawn(float travel) {
         float limit = canRefresh ? reach : reach * .5f, give = limit * GIVE;
         if (travel <= 0) return 0;
@@ -129,7 +128,7 @@ final class Pull extends ScrollView {
         View page = getChildAt(0);
         if (page == null) return;
         if (animate && page.getTranslationY() > 0) {
-            // Relancer un retour déjà en route lui rendrait sa vitesse de départ, en plein vol.
+            // Restarting a return already under way would give it back its initial speed, mid-flight.
             if (settling) return;
             settling = true;
             page.animate().cancel();

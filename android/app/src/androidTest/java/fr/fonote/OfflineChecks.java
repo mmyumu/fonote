@@ -125,7 +125,7 @@ public final class OfflineChecks extends Instrumentation {
         waitForIdleSync();
         if (failure.get() != null) throw new AssertionError("Search navigation regression", failure.get());
     }
-    /** Les gestes passent par le vrai terrain et les commandes de l'activité, avec un journal isolé. */
+    /** Gestures go through the real pitch and the activity's commands, with an isolated log. */
     private void checkTacticalEditor() throws Exception {
         Activity activity = startActivitySync(new android.content.Intent(getTargetContext(), MainActivity.class)
             .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -175,7 +175,7 @@ public final class OfflineChecks extends Instrumentation {
                 require(saved.equals(((Diagram)held(activity,"diagram")).toJson().toString()), "Geste annulé enregistré");
                 setHeld(activity,"expandedTimeline",true); invokeTactic(activity,"renderTactic");
                 require(isolated.operations(true).length()>0,"Séquence non sauvegardée hors connexion");
-                // Les annotations disparaissent avec le joueur et reviennent à l'annulation.
+                // Annotations disappear with the player and come back on undo.
                 diagram = (Diagram)held(activity,"diagram"); token = diagram.tokens.get(0); token.playerId = "test-player";
                 @SuppressWarnings("unchecked") java.util.Map<String,String> entries = (java.util.Map<String,String>)held(activity,"entries");
                 entries.put(token.playerId,"test-action"); invokeTactic(activity,"boardChanged");
@@ -214,7 +214,7 @@ public final class OfflineChecks extends Instrumentation {
             } catch (Throwable error) { failure.set(error); }
         });
         waitForIdleSync();
-        // Un tacle tracé du doigt sur le porteur : le tacleur s'arrête à son contact et repart avec le ballon.
+        // A tackle drawn by finger onto the carrier: the tackler stops on contact and leaves with the ball.
         runOnMainSync(() -> {
             try {
                 if (failure.get() != null) return;
@@ -234,7 +234,7 @@ public final class OfflineChecks extends Instrumentation {
                 require(hit.x < .69, "Le tacleur recouvre le joueur visé");
                 require(hit.time >= 40, "Le tacle va à l'allure d'un ballon");
                 require(board.time() == hit.time, "Le curseur n'est pas passé à l'arrivée du tracé");
-                // Un long tracé garde sa fin : avant, il était coupé au bout de 32 échantillons.
+                // A long stroke keeps its end: it used to be cut off after 32 samples.
                 board.setStroke(Diagram.RUN);
                 float sx = (float)hit.x;
                 trace(board, new float[][]{{sx, .7f}, {sx, .9f}, {.1f, .9f}, {.1f, .5f}});
@@ -296,7 +296,7 @@ public final class OfflineChecks extends Instrumentation {
             view.dispatchTouchEvent(event); event.recycle();
         }
     }
-    /** Un geste qui passe par ces points, échantillonné finement comme un vrai doigt. */
+    /** A gesture through these points, sampled finely like a real finger. */
     private static void trace(BoardView board, float[][] corners) {
         long now = android.os.SystemClock.uptimeMillis();
         java.util.List<float[]> points = new java.util.ArrayList<>();
@@ -425,7 +425,7 @@ public final class OfflineChecks extends Instrumentation {
         if (failure[0] != null) throw new AssertionError("Pull gesture", failure[0]);
     }
 
-    /** Le toucher traverse le vrai pager parent avant d’atteindre la liste et son bouton. */
+    /** The touch goes through the real parent pager before reaching the list and its button. */
     private void checkNestedGestures() {
         final Throwable[] failure = {null};
         runOnMainSync(() -> {

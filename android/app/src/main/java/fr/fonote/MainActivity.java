@@ -67,17 +67,17 @@ public class MainActivity extends Activity {
     private LinearLayout root, composer, factsPage, statsPage, notesPage, tallyPage;
     private Pager pager;
     /**
-     * Les cartes du match, de gauche à droite, le terrain au milieu : ce que le fournisseur
-     * raconte se prend en balayant vers la droite, ce que j'ai écrit en balayant vers la gauche.
-     * Le travail reste au centre, et aucune des deux directions ne coûte un bouton.
+     * The match cards, from left to right, with the pitch in the middle: what the provider
+     * reports is reached by swiping right, what I wrote by swiping left. The work stays in the
+     * centre, and neither direction costs a button.
      */
     private static final int CARD_STATS = 0, CARD_FACTS = 1, CARD_PITCH = 2,
                              CARD_NOTES = 3, CARD_TALLY = 4, CARDS = 5;
-    /** Où chaque carte est tombée dans le pager, ou -1 quand ce match ne la porte pas. */
+    /** Where each card landed in the pager, or -1 when this match does not carry it. */
     private final int[] cardPlace = new int[CARDS];
-    /** Quelle carte occupe chaque page du pager, dans l'autre sens. */
+    /** Which card occupies each page of the pager, the other way round. */
     private final int[] cardAt = new int[CARDS];
-    /** La carte montrée, retenue par ce qu'elle est et non par son rang : les rangs bougent. */
+    /** The card shown, remembered by what it is and not by its rank: ranks move. */
     private int shownCard = CARD_PITCH;
     /** Which screen is shown: these pages replace the view, so back has to unwind them itself. */
     private String screen = "home";
@@ -100,7 +100,7 @@ public class MainActivity extends Activity {
     private static final int HALF = 45, BREAK = 15 * 60;
     private boolean syncing;
     private boolean refreshing;
-    /** Le temps qu'une hauteur met à se ranger : celui de la ligne d'actualisation. */
+    /** The time a height takes to settle: the refresh row's. */
     private static final int SETTLE = 240;
     private View homeRefresh, calendarRefresh, matchRefresh;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -121,22 +121,22 @@ public class MainActivity extends Activity {
     /** True once the open note exists in the log, so later edits must rewrite it. */
     private boolean written;
     /**
-     * Combien de lignes de queue du journal annuler a déjà parcourues — celles des gestes défaits
-     * et celles de leurs compensations —, pour que le pas suivant reparte avant elles.
+     * How many lines at the tail of the log undo has already walked through — those of the
+     * undone gestures and those of their compensations — so that the next step starts before them.
      */
     private int undone;
     /**
-     * Les sortes d'opérations qu'un même geste peut écrire ensemble. Une suppression et un
-     * rétablissement se tiennent seuls : ils ne sont pas une écriture, ils en défont une.
+     * The kinds of operations a single gesture can write together. A deletion and a restore
+     * stand alone: they are not a write, they undo one.
      */
     private static final Set<String> WRITTEN = new HashSet<>(Arrays.asList("note", "comment", "diagram"));
     /**
-     * Un geste défait : ce qu'il faut réécrire pour le refaire, et où il se tient dans le journal.
+     * An undone gesture: what must be written again to redo it, and where it sits in the log.
      *
-     * <p>Sa place et non le nombre de lignes qui le suivent : le journal ne fait que s'allonger,
-     * donc une place ne bouge pas, alors que ce qui suit grandit à chaque aller-retour. Refait, le
-     * curseur se repose dessus, de sorte qu'un nouveau « annuler » le défasse encore et qu'un
-     * troisième remonte enfin au geste d'avant.
+     * <p>Its position and not the number of lines that follow it: the log only grows, so a
+     * position does not move, whereas what follows grows with every round trip. Once redone, the
+     * cursor rests on it again, so that another "undo" undoes it again and a third one finally
+     * goes back to the gesture before.
      */
     private static final class Undone {
         final List<JSONObject> replay;
@@ -144,9 +144,9 @@ public class MainActivity extends Activity {
         Undone(List<JSONObject> replay, int end) { this.replay = replay; this.end = end; }
     }
     /**
-     * Les gestes défaits, du plus récent au plus ancien. En mémoire et pour la session seulement :
-     * refaire n'est pas une opération du journal, c'est le chemin qu'on vient de parcourir à
-     * l'envers, et il ne vaut que tant qu'on n'a rien écrit de nouveau.
+     * The undone gestures, from most recent to oldest. In memory and for the session only: redo
+     * is not a log operation, it is the path just walked in reverse, and it only holds as long as
+     * nothing new has been written.
      */
     private final Deque<Undone> redoable = new ArrayDeque<>();
     private int noteMinute;
@@ -198,7 +198,7 @@ public class MainActivity extends Activity {
             tacticClock.removeCallbacks(tacticTick);
             if (board != null) board.removeCallbacks(tacticTick);
         }
-        // Une pause tombe entre deux dixièmes : l'édition reprend sur le dixième affiché.
+        // A pause falls between two tenths: editing resumes on the tenth displayed.
         if (playing && board != null) board.setTime(board.time());
     }
     private LinearLayout tacticPanel;
@@ -348,8 +348,8 @@ public class MainActivity extends Activity {
     private static final int NUMBERING = 2;
 
     /**
-     * Les cartes de l’accueil, de gauche à droite : l’accueil au centre, les matchs annotés d’un
-     * côté et les matchs enregistrés de l’autre, chacun à un glissement de lui.
+     * The home cards, from left to right: home in the centre, annotated matches on one side and
+     * saved matches on the other, each one swipe away from it.
      */
     private static final int ANNOTATED = 0, HOME = 1, SAVED = 2;
     private Pager browsePager;
@@ -497,7 +497,7 @@ public class MainActivity extends Activity {
         // The card is rebuilt where it stands: a reader of the facts is not sent back to the pitch.
         if (factsPage != null) renderFacts();
         if (statsPage != null) renderStats();
-        // La ligne grise du bilan porte les compteurs du fournisseur : eux aussi viennent de bouger.
+        // The summary's grey line carries the provider's counters: they have just moved too.
         if (tallyPage != null) renderTally();
     }
 
@@ -834,7 +834,7 @@ public class MainActivity extends Activity {
         return button;
     }
 
-    // ——— Accueil, calendrier et préférences ———
+    // ——— Home, calendar and preferences ———
 
     private void showHome() {
         if (browsing()) {
@@ -1282,8 +1282,8 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * La carte à droite de l’accueil. Comme celle des matchs annotés, son titre reste en place et
-     * seule la liste défile.
+     * The card to the right of home. Like the annotated matches card, its title stays in place
+     * and only the list scrolls.
      */
     private void renderSaved() {
         LinearLayout title = page("Matchs enregistrés", this::showHome, SAVED);
@@ -1299,7 +1299,7 @@ public class MainActivity extends Activity {
         renderSavedMatches();
     }
 
-    /** Redessinée à chaque arrivée de données : un calendrier lu enrichit aussi cette liste. */
+    /** Redrawn whenever data arrives: a calendar that has been read also fills this list. */
     private void renderSavedMatches() {
         root.removeAllViews();
         label("Disponibles sur cet appareil. Les scores et compositions peuvent dater de la dernière connexion.");
@@ -1532,7 +1532,7 @@ public class MainActivity extends Activity {
         screen = "home";
         // Settings are not content: they belong in the bar as icons, not in the middle of the page.
         LinearLayout bar = page("Fonote", null, HOME);
-        // Le titre et le chargement restent fixes ; seul le contenu appartient au geste.
+        // The title and the loading row stay fixed; only the content belongs to the gesture.
         Pull feed = (Pull) root.getParent();
         root.removeView(bar);
         root.setPadding(dp(16), 0, dp(16), dp(24));
@@ -1555,7 +1555,7 @@ public class MainActivity extends Activity {
         section("Aujourd’hui", "Calendrier ›", () -> calendar(LocalDate.now()));
     }
 
-    /** Une ligne centrée au-dessus du contenu, présente seulement pendant la lecture. */
+    /** A centred row above the content, present only while loading. */
     private View refreshIndicator(LinearLayout feed) {
         FrameLayout loading = new FrameLayout(this);
         ProgressBar indicator = new ProgressBar(this);
@@ -1568,12 +1568,12 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Ouvre ou referme la ligne d'actualisation. Elle vit au-dessus du défilement et sa hauteur
-     * pousse donc la page : ouverte d'un coup, celle-ci sautait de toute sa hauteur à l'instant
-     * du relâchement. Elle reprend maintenant la place que le doigt venait d'ouvrir, que le geste
-     * lui passe en même temps qu'il rend la sienne, puis se range à sa propre hauteur.
+     * Opens or closes the refresh row. It lives above the scroll, so its height pushes the page:
+     * opened all at once, the page jumped by the row's full height at the moment of release. It
+     * now takes over the room the finger had just opened, which the gesture hands it as it gives
+     * up its own, then settles at its own height.
      *
-     * @param opened la place laissée par le doigt, en pixels ; zéro hors d'un geste.
+     * @param opened the room left by the finger, in pixels; zero outside a gesture.
      */
     private void refreshIndicators(int opened) {
         int line = dp(56);
@@ -1594,9 +1594,9 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Mène la hauteur d'une vue d'un point à l'autre, la seule façon de lui faire prendre ou
-     * rendre sa place aux autres. Rendue, la ligne s'efface avec elle et n'attend la fin que
-     * pour disparaître : partie plus tôt, elle laisserait un trou à combler.
+     * Takes a view's height from one value to another, the only way to make it take room from
+     * the others or give it back. When the room is given back, the row fades along with it and
+     * only waits for the end to disappear: gone any earlier, it would leave a gap to fill.
      */
     private void slide(View view, int from, int to, boolean away) {
         android.animation.ValueAnimator move = android.animation.ValueAnimator.ofInt(from, to);
@@ -1618,7 +1618,7 @@ public class MainActivity extends Activity {
         move.start();
     }
 
-    /** Relit le serveur ; seul son cache décide quand interroger ESPN. */
+    /** Reads the server again; only its cache decides when to query ESPN. */
     private boolean refreshData(float opened) {
         if (refreshing) return false;
         if (!hasServer() || demoMode()) {
@@ -1651,9 +1651,9 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 if (isDestroyed()) { refreshing = false; return; }
                 refreshing = false;
-                // Refermer la ligne avant de reconstruire, et non l'inverse : redessiner la
-                // page tient l'image une bonne fraction de seconde, et une fermeture lancée
-                // dans cette image-là y passe tout entière — la page remonte alors d'un bond.
+                // Close the row before rebuilding, not the other way round: redrawing the
+                // page holds the frame for a good fraction of a second, and a closing started
+                // in that frame spends its whole run there — the page then jumps back up.
                 refreshIndicators(0);
                 ticker.postDelayed(() -> {
                     if (isDestroyed()) return;
@@ -2106,9 +2106,9 @@ public class MainActivity extends Activity {
 
     private void openMatch() {
         noteId = ""; focus = ""; entries.clear(); written = false;
-        // Un match s'ouvre sur son terrain : la carte laissée en dernier appartenait au précédent.
+        // A match opens on its pitch: the card left last belonged to the previous one.
         shownCard = CARD_PITCH;
-        // Et sans chemin à refaire : celui-là menait à des notes qu'on ne regarde plus.
+        // And with no path to redo: that one led to notes nobody is looking at any more.
         redoable.clear();
         adoptClock();
         // The detail was just fetched: the first refresh is due a minute from now, not at once.
@@ -2300,9 +2300,9 @@ public class MainActivity extends Activity {
 
     private void showMatch() {
         screen = "match";
-        // Cinq cartes posées côte à côte, le terrain au milieu. Les faits et les chiffres du
-        // fournisseur sont à gauche, mes notes et mon bilan à droite : chaque direction dit ce
-        // qu'elle rapporte, et rien de tout cela n'est plus caché derrière un menu.
+        // Five cards laid side by side, with the pitch in the middle. The provider's facts and
+        // figures are on the left, my notes and my summary on the right: each direction says
+        // what it brings back, and none of it is hidden behind a menu any more.
         pager = new Pager(this);
         factsPage = statsPage = notesPage = tallyPage = null;
         java.util.Arrays.fill(cardPlace, -1);
@@ -2314,9 +2314,9 @@ public class MainActivity extends Activity {
         LinearLayout screenRoot = new LinearLayout(this);
         screenRoot.setOrientation(LinearLayout.VERTICAL);
         screenRoot.setBackgroundColor(ground());
-        // La ligne d'actualisation est au-dessus du pager et non dedans : elle doit prendre
-        // exactement la hauteur que le doigt a ouverte, à l'instant où la carte la rend, sinon
-        // la page saute d'un pixel au relâchement. Repliée, elle ne coûte rien.
+        // The refresh row sits above the pager and not inside it: it must take exactly the
+        // height the finger opened, at the moment the card gives it back, or else the page
+        // jumps a pixel on release. Folded away, it costs nothing.
         matchRefresh = refreshIndicator(screenRoot);
         screenRoot.addView(pager, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(screenRoot);
@@ -2364,12 +2364,12 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Une carte du match, ajoutée au pager à sa place et rendue prête à être tirée vers le bas :
-     * le geste vaut partout où le match est ouvert, et non sur la seule carte qui le porterait.
+     * A match card, added to the pager in its place and made ready to be pulled down: the
+     * gesture works wherever the match is open, not only on the one card that would carry it.
      */
     private LinearLayout matchCard(int card) {
         Pull scroll = new Pull(this);
-        // Sans cela la carte s'arrête où son contenu s'arrête, et la fenêtre transparaît dessous.
+        // Without this the card stops where its content stops, and the window shows through below.
         scroll.setFillViewport(true); scroll.setBackgroundColor(ground());
         scroll.onPull(this::pullMatch, () -> !refreshing && !syncing);
         LinearLayout page = frame();
@@ -2380,24 +2380,24 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Tirer une carte du match vers le bas : redemander au fournisseur ce qu'il publie de ce
-     * match, et pousser les notes au passage quand un jeton est configuré.
+     * Pulling a match card down: ask the provider again for what it publishes about this match,
+     * and push the notes along the way when a token is configured.
      *
-     * <p>Le geste est explicite, donc il passe outre ce qui retient le rafraîchissement
-     * automatique — une fois par minute, et seulement dans la fenêtre où la composition bouge.
-     * Quelqu'un qui tire la page demande maintenant, et « pas encore l'heure » ne se distingue
-     * pas d'une panne pour qui regarde l'écran. Ne restent que les empêchements réels : pas
-     * d'adresse, un match qui ne vient pas du fournisseur, ou une note ouverte — les joueurs ne
-     * doivent pas bouger sous le doigt. Chacun le dit ; refuser en silence, c'est passer pour
-     * un geste raté.
+     * <p>The gesture is explicit, so it overrides what holds back the automatic refresh — once a
+     * minute, and only in the window where the lineup changes. Someone pulling the page is asking
+     * now, and "not time yet" cannot be told apart from a failure by whoever is looking at the
+     * screen. Only the real obstacles remain: no address, a match that does not come from the
+     * provider, or an open note — players must not move under the finger. Each one says so;
+     * refusing silently would look like a failed gesture.
      *
-     * <p>La synchronisation, elle, ne se réclame pas : sans jeton elle n'a rien à faire et se
-     * tait. Reprocher un jeton absent à qui demandait une actualisation, c'est répondre à côté.
+     * <p>Sync, for its part, is not asked for: without a token it has nothing to do and stays
+     * quiet. Complaining about a missing token to someone who asked for a refresh would be
+     * answering the wrong question.
      *
-     * <p>Répondre vrai, c'est prendre la place que le doigt a ouverte : elle va à la ligne
-     * d'actualisation, comme à l'accueil et au calendrier, et c'est elle qui dit que ça
-     * travaille. Une réussite n'a donc plus rien à annoncer — la ligne l'a montré puis s'est
-     * repliée ; seul un échec mérite encore une phrase.
+     * <p>Answering true means taking the room the finger opened: it goes to the refresh row, as
+     * on home and the calendar, and it is the row that says work is under way. A success
+     * therefore has nothing left to announce — the row showed it, then folded away; only a
+     * failure still deserves a sentence.
      */
     private boolean pullMatch(float opened) {
         if (hasServer() && !prefs.getString("token", "").isEmpty()) sync();
@@ -2409,7 +2409,7 @@ public class MainActivity extends Activity {
         if (!hasServer()) { toast("Aucun serveur configuré : Accueil → Options."); return false; }
         refreshing = true;
         refreshIndicators((int) opened);
-        // Le compteur du suivi automatique repart d'ici : on vient de demander pour lui.
+        // The automatic tracking's counter restarts from here: we have just asked on its behalf.
         polled = System.currentTimeMillis();
         String id = match.optString("id").substring(REMOTE.length());
         worker.execute(() -> {
@@ -2420,8 +2420,8 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 if (isDestroyed()) { refreshing = false; return; }
                 refreshing = false;
-                // Refermer la ligne avant de redessiner, et non l'inverse : une composition qui a
-                // changé reconstruit l'écran, ce qui tient l'image le temps d'une fermeture.
+                // Close the row before redrawing, not the other way round: a lineup that has
+                // changed rebuilds the screen, which holds the frame for as long as a closing.
                 refreshIndicators(0);
                 if (fresh == null) { toast("Fournisseur injoignable. Notes conservées sur cet appareil."); return; }
                 ticker.postDelayed(() -> { if (!isDestroyed()) absorb(fresh); }, SETTLE);
@@ -2430,11 +2430,11 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    /** La carte vient de changer : on retient laquelle, et on la rafraîchit. */
+    /** The card has just changed: remember which one, and refresh it. */
     private void turnCard() {
         shownCard = cardAt[pager.page()];
-        // Les faits ne bougent qu'avec le fournisseur, mes notes à chaque geste : elles se
-        // redessinent en arrivant plutôt qu'à chaque frappe sur le terrain.
+        // Facts only move with the provider, my notes with every gesture: they are redrawn on
+        // arrival rather than on every tap on the pitch.
         if (shownCard == CARD_NOTES) renderNotes();
         else if (shownCard == CARD_TALLY) renderTally();
     }
@@ -2456,7 +2456,7 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    // ——— Ce que le fournisseur raconte, à côté des notes ———
+    // ——— What the provider reports, next to the notes ———
 
     /**
      * The provider's own account of the match, on a card of its own, left of the pitch.
@@ -2499,8 +2499,8 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Le titre d'une carte du match. Une carte n'a pas de barre de titre : elle n'est pas une
-     * destination qu'on a demandée, c'est la page d'à côté, et elle porte son nom en tête.
+     * The title of a match card. A card has no title bar: it is not a destination someone asked
+     * for, it is the page next door, and it carries its name at the top.
      */
     private TextView cardTitle(String text) {
         TextView title = label(text);
@@ -2628,7 +2628,7 @@ public class MainActivity extends Activity {
             : Skin.readable(Color.parseColor(team.optString("colour")), skin.page());
     }
 
-    // ——— Composition d'une note ———
+    // ——— Writing a note ———
 
     private void action(String key, String icon, String name, String small, int weight) {
         actions.put(key, new String[]{icon, name, small, String.valueOf(weight)});
@@ -2829,9 +2829,9 @@ public class MainActivity extends Activity {
         line.addView(chips, new LinearLayout.LayoutParams(0, dp(44), 1));
         composer.addView(line, new LinearLayout.LayoutParams(-1, dp(44)));
 
-        // Terminé et Abandonner sont deux boutons, et non un seul qui change de mot : un texte
-        // commencé faisait passer l'unique bouton à « Terminé », et plus rien ne permettait de
-        // renoncer. Terminé s'éteint tant qu'il n'y a rien à écrire ; Abandonner reste toujours.
+        // Terminé and Abandonner are two buttons, not a single one that changes its word: a text
+        // once started switched the only button to "Terminé", and nothing let you give up any
+        // more. Terminé is disabled while there is nothing to write; Abandonner always stays.
         Button done = accent(button("Terminé", this::finishWrittenNote));
         done.setTextSize(15);
         String kind = timeless ? "cette note de match" : "cette note libre";
@@ -2954,10 +2954,10 @@ public class MainActivity extends Activity {
         prompt.setText("↑   Touche un joueur sur le terrain");
         prompt.setTextSize(15); prompt.setTextColor(skin.ink);
         head.addView(prompt, new LinearLayout.LayoutParams(0, -2, 1));
-        // Annuler et refaire se rangent ici, en bout d'invite : le panneau au repos a la place de
-        // reste, donc les deux ne coûtent pas une rangée au terrain. Toujours là, éteints quand
-        // ils n'ont rien à faire : un bouton qui apparaît et disparaît déplace son voisin, et le
-        // doigt qui visait « annuler » tombe sur « refaire ».
+        // Undo and redo sit here, at the end of the prompt: the panel at rest has room to spare,
+        // so the two do not cost the pitch a row. Always there, disabled when they have nothing
+        // to do: a button that appears and disappears shifts its neighbour, and the finger aiming
+        // for "undo" lands on "redo".
         head.addView(historyAction(R.drawable.ic_undo, "Annuler le dernier geste",
             this::undo, undoable()), new LinearLayout.LayoutParams(dp(36), dp(36)));
         head.addView(historyAction(R.drawable.ic_redo, "Refaire le geste annulé",
@@ -3284,7 +3284,7 @@ public class MainActivity extends Activity {
                 else board.setTool(entry.mode);
                 renderTactic();
             };
-            // Six outils tiennent sur la largeur d'un téléphone sans faire défiler la rangée.
+            // Six tools fit across a phone's width without scrolling the row.
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(58), dp(48));
             p.rightMargin = dp(4);
             toolRow.addView(tool(entry, chosen, pick), p);
@@ -3365,9 +3365,9 @@ public class MainActivity extends Activity {
         Button play = button("▶", () -> {});
         play.setContentDescription("Lire ou mettre en pause la séquence");
         row.addView(play, new LinearLayout.LayoutParams(dp(48), dp(40)));
-        // Le temps se lit à côté du bouton, pas contre lui, et dans la lettre des boutons : un
-        // TextView nu porte la romaine du système en 14, quand un Button porte la demi-grasse en
-        // 13 — deux polices dans la même rangée pour un texte qui, lui aussi, répond au doigt.
+        // The time reads next to the button, not against it, and in the buttons' lettering: a
+        // bare TextView carries the system's regular face at 14, while a Button carries the
+        // semi-bold at 13 — two fonts in the same row for a text that also answers the finger.
         TextView label = new TextView(this); label.setTextColor(skin.ink); label.setText(seconds(board.time()));
         label.setTextSize(13); label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         label.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
@@ -3434,8 +3434,8 @@ public class MainActivity extends Activity {
                 int action = event.getActionMasked();
                 if (action == MotionEvent.ACTION_DOWN) {
                     cancelDelete(); heldTrack = null; heldKey = null; heldStep = null;
-                    // Les repères flottent au-dessus de la barre, les keyframes sont dedans : un
-                    // doigt posé au-dessus vise d'abord un repère.
+                    // Markers float above the bar, keyframes are inside it: a finger placed above
+                    // aims for a marker first.
                     if (event.getY() < middle() - span() && event.getY() > middle() - dp(28)) {
                         float nearest = dp(14);
                         for (Diagram.Step step : diagram.steps) {
@@ -3500,7 +3500,7 @@ public class MainActivity extends Activity {
             }
             @Override protected void onDraw(android.graphics.Canvas canvas) {
                 float middle = middle(), span = span();
-                // La tête suit le terrain, entre deux dixièmes pendant la lecture.
+                // The playhead follows the pitch, between two tenths during playback.
                 float left = trackLeft(), right = trackRight(), head = mark((float)board.moment());
                 marks.setColor(GROOVE);
                 canvas.drawRect(left, middle - span, right, middle + span, marks);
@@ -3511,8 +3511,8 @@ public class MainActivity extends Activity {
                     for (Track.Key key : track.keys)
                         canvas.drawRect(keyX(key) - dp(2), middle - span, keyX(key) + dp(2), middle + span, marks);
                 }
-                // Les repères nommés : un fanion au-dessus de la barre, pour ne jamais les prendre
-                // pour une keyframe, qui est un rectangle dans la barre.
+                // Named markers: a pennant above the bar, so they are never mistaken for a
+                // keyframe, which is a rectangle inside the bar.
                 marks.setColor(skin.ink);
                 for (Diagram.Step step : diagram.steps) {
                     float at = mark(step.time), top = middle - span - dp(13), foot = middle - span - dp(3);
@@ -3559,13 +3559,13 @@ public class MainActivity extends Activity {
         row.addView(duration, new LinearLayout.LayoutParams(dp(84), dp(40)));
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar view, int value, boolean user) {
-                // Pendant la lecture, le terrain mène : il est déjà entre deux dixièmes.
+                // During playback, the pitch leads: it is already between two tenths.
                 if (!tacticPlaying) {
                     board.setTime(value);
                     if (tacticTrackView != null) tacticTrackView.setTime(value);
                 }
                 label.setText(seconds(value)); updateKeyControls();
-                // La barre est peinte à la main : sa valeur changée ne la redessine pas seule.
+                // The bar is painted by hand: changing its value does not redraw it by itself.
                 view.invalidate();
             }
             public void onStartTrackingTouch(SeekBar view) { stopTactic(); play.setText("▶"); }
@@ -3578,8 +3578,8 @@ public class MainActivity extends Activity {
             tacticPlaying = true; play.setText("Ⅱ");
             long started = android.os.SystemClock.uptimeMillis();
             int from = board.time();
-            // À chaque image de l'écran, pas à chaque dixième : dix positions par seconde
-            // faisaient avancer les joueurs par bonds.
+            // On every screen frame, not every tenth: ten positions a second made the players
+            // move in leaps.
             tacticTick = () -> {
                 if (!tacticPlaying || !board.isAttachedToWindow()) { stopTactic(); return; }
                 double at = Math.min(end, from + (android.os.SystemClock.uptimeMillis() - started) / 100.0);
@@ -4012,8 +4012,8 @@ public class MainActivity extends Activity {
         }
         Paint pen = new Paint(Paint.ANTI_ALIAS_FLAG);
         pen.setTextAlign(Paint.Align.CENTER);
-        // Réglé sur l'encre des vecteurs voisins, pas sur la boîte : un emoji remplit son
-        // cadratin alors qu'une flèche laisse de l'air, et à taille égale il écraserait la rangée.
+        // Matched to the ink of the neighbouring vectors, not to the box: an emoji fills its em
+        // square while an arrow leaves air around it, and at equal size it would crush the row.
         pen.setTextSize(side * .78f);
         return new Drawable() {
             @Override public int getIntrinsicWidth() { return side; }
@@ -4238,7 +4238,7 @@ public class MainActivity extends Activity {
             if (entry != null) entries.put(entry.optString("player_id"), entry.optString("action"));
         }
     }
-    // ——— Lecture des notes ———
+    // ——— Reading notes ———
 
     /** Notes now name several players; the ones written before carry a single one inline. */
     private static JSONArray entriesOf(JSONObject note) {
@@ -4464,7 +4464,7 @@ public class MainActivity extends Activity {
         }
         Collections.reverse(visible); return visible;
     }
-    /** id → {solde pondéré, actions positives, actions négatives}, sur les notes visibles. */
+    /** id → {weighted balance, positive actions, negative actions}, over the visible notes. */
     private Map<String,int[]> balances() throws Exception {
         Map<String,int[]> result = new LinkedHashMap<>();
         for (JSONObject note : notes()) {
@@ -4521,8 +4521,8 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Le bilan, la carte la plus à droite : deux balayages depuis le terrain, en passant par mes
-     * notes — la note par joueur se lit après les notes qui la font, jamais avant.
+     * The summary, the rightmost card: two swipes from the pitch, by way of my notes — the rating
+     * per player is read after the notes that make it, never before.
      */
     private void renderTally() {
         if (tallyPage == null) return;
@@ -4592,7 +4592,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8);
         root.addView(view, p);
     }
-    /** S'il reste une ligne à défaire, en comptant celles qu'annuler a déjà remontées. */
+    /** Whether a line is left to undo, counting those undo has already walked back through. */
     private boolean undoable() {
         try { return store.operations(false).length() - 1 - undone >= 0; }
         catch (Exception unreadable) { return false; }
@@ -4603,25 +4603,24 @@ public class MainActivity extends Activity {
      * compensate the last gesture — a restore for a deletion, the previous version of a rewritten
      * note, the previous text of a comment.
      *
-     * <p>Un geste, et non une ligne du journal. Écrire une note de match ou une note libre,
-     * c'est écrire la note puis son texte : deux lignes, et défaire le texte laissait derrière une
-     * note vide qu'il fallait annuler une seconde fois. Une note vide n'a aucun intérêt, donc les
-     * deux partent ensemble.
+     * <p>A gesture, not a line of the log. Writing a match note or a free note means writing the
+     * note then its text: two lines, and undoing the text left behind an empty note that had to
+     * be undone a second time. An empty note is of no use, so the two go together.
      */
     private void undo() {
         try {
             JSONArray ops = store.operations(false);
             int index = ops.length() - 1 - undone;
-            // Le bouton est éteint dans ce cas : on ne vient ici que par accident.
+            // The button is disabled in this case: we only get here by accident.
             if (index < 0) return;
             int start = gestureStart(ops, index);
             String id = ops.getJSONObject(start).getString("note_id");
             List<JSONObject> compensations = new ArrayList<>();
             if ("note".equals(ops.getJSONObject(start).getString("kind"))
                     && previousVersion(ops, start, id) == null) {
-                // La note naît de ce geste : la supprimer efface d'un coup tout ce qu'il a écrit,
-                // texte et schéma compris. Leurs lignes restent intactes, donc un rétablissement
-                // plus tard rend la note telle qu'elle était et non vidée de sa moitié.
+                // The note is born of this gesture: deleting it erases at once everything it
+                // wrote, text and schema included. Their lines stay intact, so a later restore
+                // brings the note back as it was and not emptied of half of it.
                 compensations.add(operation("delete", id));
             } else {
                 for (int i = start; i <= index; i++) compensations.add(compensationFor(ops, i, id));
@@ -4630,25 +4629,25 @@ public class MainActivity extends Activity {
             for (JSONObject compensation : compensations) store.add(compensation);
             undone += (index - start + 1) + compensations.size();
             redoable.push(new Undone(replay, index));
-            // Pas de mot : la note disparaît ou revient sous les yeux, et un toast qui le répète
-            // cache le bas du panneau le temps de le lire.
+            // No message: the note disappears or comes back in plain sight, and a toast repeating
+            // it would hide the bottom of the panel for as long as it takes to read.
             if (noteId.isEmpty()) renderComposer(); else closeNote();
-            // Les deux cartes de droite tiennent le journal défait : elles ne peuvent pas rester
-            // sur la version d'avant.
+            // The two cards on the right hold the undone log: they cannot stay on the previous
+            // version.
             renderNotes(); renderTally();
         } catch (Exception e) { error(e); }
     }
 
-    /** Refaire le dernier geste défait : le chemin est en mémoire, il suffit de le réécrire. */
+    /** Redoes the last undone gesture: the path is in memory, it only needs writing again. */
     private void redo() {
         Undone step = redoable.poll();
         if (step == null) return;
         try {
-            // Une même reprise peut être réécrite plusieurs fois au fil des allers-retours, et
-            // deux lignes du journal ne partagent pas un identifiant.
+            // The same redo can be written again several times over successive round trips, and
+            // no two lines of the log share an identifier.
             for (JSONObject op : step.replay) store.add(op.put("id", UUID.randomUUID().toString()));
-            // Tout ce qui a été écrit depuis le geste est derrière nous : ses compensations, et
-            // celles des allers-retours faits entre-temps.
+            // Everything written since the gesture is behind us: its compensations, and those of
+            // the round trips made in the meantime.
             undone = store.operations(false).length() - 1 - step.end;
             if (noteId.isEmpty()) renderComposer(); else closeNote();
             renderNotes(); renderTally();
@@ -4656,11 +4655,12 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Ce qu'il faudra réécrire pour refaire le geste des indices {@code start} à {@code index}.
+     * What will have to be written again to redo the gesture from index {@code start} to
+     * {@code index}.
      *
-     * <p>Une note née du geste s'est défaite d'une seule suppression : la refaire, c'est la
-     * rétablir — son texte et son schéma sont restés dans le journal et reviennent avec elle.
-     * Partout ailleurs, réécrire les lignes du geste les réapplique telles quelles.
+     * <p>A note born of the gesture was undone by a single deletion: redoing it means restoring
+     * it — its text and its schema stayed in the log and come back with it. Everywhere else,
+     * writing the gesture's lines again reapplies them as they are.
      */
     private List<JSONObject> replayFor(JSONArray ops, int start, int index, String id,
                                        List<JSONObject> compensations) throws Exception {
@@ -4677,12 +4677,12 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Où commence le geste dont l'opération d'indice {@code last} est la fin : les lignes de queue
-     * qui portent le même identifiant de note, jusqu'à l'écriture de la note comprise.
+     * Where the gesture ends by the operation at index {@code last} begins: the tail lines that
+     * carry the same note identifier, up to and including the write of the note.
      *
-     * <p>Jamais deux fois la même sorte : une même sorte reprise, ce sont deux gestes. Corriger le
-     * texte d'une note écrite plus tôt défait le texte, pas la note. Et un tableau se dessine trait
-     * par trait, chacun sa ligne — les défaire d'un bloc serait effacer le dessin entier.
+     * <p>Never the same kind twice: the same kind repeated means two gestures. Correcting the
+     * text of a note written earlier undoes the text, not the note. And a board is drawn stroke
+     * by stroke, each with its own line — undoing them in one block would erase the whole drawing.
      */
     private int gestureStart(JSONArray ops, int last) throws Exception {
         JSONObject end = ops.getJSONObject(last);
@@ -4701,7 +4701,7 @@ public class MainActivity extends Activity {
         return start;
     }
 
-    /** Ce qu'il faut écrire pour défaire l'opération d'indice {@code i}. */
+    /** What must be written to undo the operation at index {@code i}. */
     private JSONObject compensationFor(JSONArray ops, int i, String id) throws Exception {
         JSONObject target = ops.getJSONObject(i);
         switch (target.getString("kind")) {
@@ -4753,8 +4753,8 @@ public class MainActivity extends Activity {
         return "";
     }
     /**
-     * Mes notes, la carte à droite du terrain. C'était un écran demandé par un bouton ; c'est
-     * maintenant la page d'à côté, qu'un balayage ouvre et que le même geste referme.
+     * My notes, the card to the right of the pitch. It used to be a screen asked for with a
+     * button; it is now the page next door, which a swipe opens and the same gesture closes.
      */
     private void renderNotes() {
         if (notesPage == null) return;
@@ -4765,8 +4765,8 @@ public class MainActivity extends Activity {
             List<JSONObject> notes = notes();
             int moments = notes.size(), acts = 0;
             for (JSONObject note : notes) acts += entriesOf(note).length();
-            // « 0 note · 0 action relevée » est un décompte, pas une réponse : une carte encore
-            // vide dit plutôt ce qu'il faut faire pour ne plus l'être.
+            // "0 note · 0 action relevée" is a count, not an answer: a card that is still empty
+            // says instead what to do for it not to be.
             if (notes.isEmpty()) {
                 TextView none = label("Aucune note pour l’instant. Touchez un joueur sur le "
                     + "terrain, à gauche, et son action s’écrit ici.");
@@ -4791,8 +4791,8 @@ public class MainActivity extends Activity {
                 if (!note.optString("comment").isEmpty()) text.append("\n").append(note.optString("comment"));
                 noteCard(note, schema, text.toString());
             }
-            // L'export vivait dans le menu « ••• » du terrain, où il n'avait rien à faire : il
-            // sort mes observations, il se propose donc au bas de mes observations.
+            // Export used to live in the pitch's "•••" menu, where it did not belong: it exports
+            // my observations, so it is offered at the bottom of my observations.
             if (!notes.isEmpty()) {
                 LinearLayout.LayoutParams exportSize = new LinearLayout.LayoutParams(-2, -2);
                 exportSize.topMargin = dp(6);
@@ -4813,8 +4813,8 @@ public class MainActivity extends Activity {
      * board itself, small.
      */
     private void noteCard(JSONObject note, JSONObject schema, String text) {
-        // Une note se rouvre là où elle s'écrit : le panneau est sur le terrain, donc on y
-        // retourne d'abord. Une note dessinée, elle, s'ouvre sur son tableau, qui est un écran.
+        // A note reopens where it is written: the panel is on the pitch, so we go back there
+        // first. A drawn note, for its part, opens on its board, which is a screen.
         Runnable edit = schema != null ? () -> amend(note)
             : () -> { pager.show(cardPlace[CARD_PITCH], true); amend(note); };
         LinearLayout card = strip(); card.setGravity(Gravity.TOP);
@@ -4861,9 +4861,9 @@ public class MainActivity extends Activity {
         separator();
     }
     /**
-     * Annuler ou refaire : toujours à sa place, éteint quand il n'a rien à faire. L'opacité est
-     * celle que Material donne à un contrôle désactivé ; désactivé, il ne répond plus au doigt et
-     * le lecteur d'écran l'annonce comme tel.
+     * Undo or redo: always in its place, disabled when it has nothing to do. The opacity is the
+     * one Material gives a disabled control; disabled, it no longer answers the finger and the
+     * screen reader announces it as such.
      */
     private ImageButton historyAction(int icon, String described, Runnable action, boolean live) {
         ImageButton button = noteAction(icon, described, action);
@@ -5195,8 +5195,8 @@ public class MainActivity extends Activity {
             String result = message;
             runOnUiThread(() -> {
                 syncing = false;
-                // Le journal vient d'être renuméroté, et des lignes d'ailleurs s'y sont glissées :
-                // les places retenues pour refaire ne désignent plus ce qu'elles désignaient.
+                // The log has just been renumbered, and lines from elsewhere have slipped into it:
+                // the positions kept for redo no longer point at what they pointed at.
                 undone = 0; redoable.clear();
                 if (!isDestroyed()) { renderComposer(); toast(result); }
             });

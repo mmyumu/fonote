@@ -310,7 +310,7 @@ def validate_schema(schema):
 
 
 def validate_sequence(schema):
-    """Références uniques, temps déjà résolus et absence de cycles, sans récursion."""
+    """Unique references, times already resolved and no cycles, without recursion."""
     keys = {}
     for track in [schema['ball']] + [token['keys'] for token in schema['tokens']]:
         for key in track:

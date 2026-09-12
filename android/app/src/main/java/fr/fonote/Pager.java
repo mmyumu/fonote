@@ -157,7 +157,7 @@ final class Pager extends HorizontalScrollView {
     @Override public boolean onInterceptTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
-            // Initialiser Android sans lui laisser voler un geste à cause d’une animation.
+            // Initialise Android without letting it steal a gesture because of an animation.
             super.onInterceptTouchEvent(event);
             return false;
         }

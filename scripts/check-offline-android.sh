@@ -2,8 +2,8 @@
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/android-env.sh"
 bash "$FONOTE_ROOT/scripts/build-android.sh" --offline :app:assembleDebugAndroidTest
-# Le nom des APK porte la version, qui change : on prend le plus récent de chaque dossier
-# plutôt qu'un nom écrit en dur, qui se périmerait au prochain numéro.
+# APK names carry the version, which changes: take the most recent one in each folder rather
+# than a hardcoded name, which would go stale at the next number.
 apk=$(ls -t "$FONOTE_ROOT"/android/app/build/outputs/apk/debug/*.apk | head -1)
 tests=$(ls -t "$FONOTE_ROOT"/android/app/build/outputs/apk/androidTest/debug/*.apk | head -1)
 adb install -r "$apk"

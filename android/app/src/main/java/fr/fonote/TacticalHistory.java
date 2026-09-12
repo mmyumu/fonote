@@ -5,8 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/** Historique d'une édition ouverte. Une entrée regroupe dessin et annotations.
- * L'appelant ne valide l'historique qu'après réussite de la transaction de sauvegarde. */
+/** History of an open edit. One entry groups the drawing and the annotations.
+ * The caller commits the history only once the save transaction has succeeded. */
 final class TacticalHistory {
     private static final int LIMIT = 40;
     private final List<String> past = new ArrayList<>(), future = new ArrayList<>();

@@ -29,8 +29,8 @@ LEAGUES = {'FL1': 'fra.1', 'PL': 'eng.1', 'BL1': 'ger.1', 'PD': 'esp.1',
 CUPS = {'CL', 'UECL', 'WC', 'EC'}
 
 
-# Les listes restent en cache cinq minutes, même aujourd’hui. Seule une fiche ouverte
-# en direct peut être relue après trente secondes.
+# Lists stay cached for five minutes, even today's. Only a match sheet open live may be
+# read again after thirty seconds.
 CACHE = 300
 LIVE_CACHE = 30
 # What a season changes at most once a day: which competitions exist and who plays in them.
@@ -427,10 +427,10 @@ class Espn:
             return copy.deepcopy(data)
 
     def snapshot(self, league, resource, params):
-        """L’accueil et le calendrier ne relisent jamais une fiche de moins de cinq minutes.
+        """Home and calendar never read again a match sheet less than five minutes old.
 
-        Une fiche ouverte en direct peut raccourcir son expiration ; sa date de lecture
-        reste indépendante pour que les listes ne déclenchent pas ce suivi rapide.
+        A sheet open live may shorten its expiry; its read date stays separate so that
+        lists do not trigger that fast tracking.
         """
         url = self.url_for(league, resource, params)
         with self.lock:

@@ -2,9 +2,9 @@
     android:width="16dp" android:height="16dp"
     android:viewportWidth="24" android:viewportHeight="24"
     android:tint="#FFFFFFFF">
-    <!-- La composition telle que l'application la dessine ailleurs : des pions posés sur un
-         terrain. Six suffisent à faire lire une formation là où onze ne feraient qu'une tache ;
-         le cadre les tient et dit que c'est un terrain, pas une puce de chargement. -->
+    <!-- The lineup as the app draws it elsewhere: counters set on a pitch. Six are enough to
+         read as a formation where eleven would only make a smudge; the frame holds them and
+         says it is a pitch, not a loading dot. -->
     <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.4"
         android:strokeLineJoin="round" android:fillColor="#00000000"
         android:pathData="M4.6,3.4 L19.4,3.4 A1.2,1.2 0 0 1 20.6,4.6 L20.6,19.4

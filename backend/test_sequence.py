@@ -1,4 +1,4 @@
-"""Format partagé avec Android et cohérence des relations temporelles."""
+"""Format shared with Android, and consistency of timing relations."""
 import copy
 import unittest
 from server import validate_schema

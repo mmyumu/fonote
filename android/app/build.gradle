@@ -1,11 +1,11 @@
 plugins { id 'com.android.application' }
 
 /**
- * La signature de la version distribuée. La clé et ses mots de passe vivent hors du dépôt,
- * dans un fichier de propriétés que le build lit s'il est là : une clé versionnée est une clé
- * publique, et n'importe qui pourrait alors signer une mise à jour de Fonote. Absent — sur une
- * autre machine, ou en intégration continue — le release sort non signé et le dit dans son nom,
- * plutôt que de faire échouer un build qui n'avait pas à distribuer quoi que ce soit.
+ * The signing of the distributed version. The key and its passwords live outside the
+ * repository, in a properties file the build reads if it is there: a versioned key is a public
+ * key, and anyone could then sign an update of Fonote. When it is missing — on another machine,
+ * or in continuous integration — the release comes out unsigned and says so in its name, rather
+ * than failing a build that had nothing to distribute.
  */
 def signingFile = file("${System.properties['user.home']}/.android/fonote-signing.properties")
 def signing = new Properties()
@@ -34,12 +34,12 @@ android {
     }
     buildFeatures { buildConfig true }
     /**
-     * L'adresse que l'application interroge quand personne n'en a saisi une. Elle est écrite
-     * ici plutôt que dans le code parce qu'elle n'est pas la même selon ce qu'on construit :
-     * une version distribuée parle au vrai serveur, en HTTPS — le manifeste principal refuse
-     * le trafic en clair — tandis qu'un build de développement parle à la machine qui l'a
-     * produit, que l'émulateur atteint à 10.0.2.2. Chaque build s'en sert sans rien demander :
-     * une adresse qu'il faudrait ressaisir avant la première requête ne serait pas un défaut.
+     * The address the app queries when nobody has entered one. It is written here rather
+     * than in the code because it depends on what is being built: a distributed version talks
+     * to the real server, over HTTPS — the main manifest refuses cleartext traffic — while a
+     * development build talks to the machine that produced it, which the emulator reaches at
+     * 10.0.2.2. Every build uses it without asking anything: an address that had to be typed
+     * in again before the first request would not be a default.
      */
     buildTypes {
         debug {
@@ -57,16 +57,16 @@ android {
 }
 
 /**
- * Le nom du fichier produit. Par défaut le plugin le tire du nom du module et du type de
- * build — « app-debug.apk » — ce qui ne dit ni quelle application ni quelle version on
- * tient dès que le fichier a quitté le dossier de build. Il porte donc le nom du projet
- * et sa version ; le type de build n'apparaît que lorsqu'il n'est pas « release », parce
- * qu'un fichier sans mention est celui qu'on distribue.
+ * The name of the produced file. By default the plugin derives it from the module name and
+ * the build type — "app-debug.apk" — which says neither which app nor which version you hold
+ * once the file has left the build folder. So it carries the project name and its version;
+ * the build type only appears when it is not "release", because a file with no mention is the
+ * one that gets distributed.
  *
- * <p>Un release sans clé de signature garde « unsigned » dans son nom, comme le plugin le
- * fait par défaut. C'est le seul avertissement qu'on ait : un APK non signé ne s'installe
- * nulle part, et un fichier qui s'appellerait « fonote-1.0.0.apk » sans l'être laisserait
- * croire l'inverse jusqu'à l'appareil de quelqu'un d'autre.
+ * <p>A release without a signing key keeps "unsigned" in its name, as the plugin does by
+ * default. It is the only warning there is: an unsigned APK installs nowhere, and a file
+ * called "fonote-1.0.0.apk" without being signed would suggest otherwise until it reached
+ * someone else's device.
  */
 androidComponents {
     onVariants(selector().all()) { variant ->

@@ -2,7 +2,8 @@
 
 ## Conventions
 
-- **Les messages de commit s'écrivent en anglais**, toujours — y compris le titre, le
-  corps et les listes. Le reste du projet est en français : le code, ses commentaires,
-  le README et l'interface. Les commits antérieurs à cette règle sont en français ;
-  ils ne sont pas réécrits, et ne servent pas de modèle.
+- **Commit messages, code comments and documentation (README, this file) are written in
+  English**, always — including commit titles, bodies and lists. Commits predating this rule
+  are in French; they are not rewritten, and are not a model to follow.
+- **The interface stays in French**: every string the user sees on screen or in the server's
+  responses. Documentation quotes those labels as they appear (« Terminé », **Mes observations**).

@@ -222,9 +222,9 @@ class EspnTest(unittest.TestCase):
         def when(hours):
             return (now + timedelta(hours=hours)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-        board = scoreboard([event('1', when(1)),      # coup d'envoi dans une heure
-                            event('2', when(-1)),     # commencé il y a une heure
-                            event('3', when(72)),     # dans trois jours
+        board = scoreboard([event('1', when(1)),      # kick-off in an hour
+                            event('2', when(-1)),     # started an hour ago
+                            event('3', when(72)),     # in three days
                             event('4', when(-48))])   # avant-hier
         adapter = self.leagues({'fra.1': board})
         asked = []

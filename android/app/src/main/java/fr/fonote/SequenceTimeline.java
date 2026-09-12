@@ -8,7 +8,7 @@ import android.view.View;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Chronologie compacte : le corps déplace le mouvement, le bord droit règle sa durée. */
+/** Compact timeline: the body moves the motion, the right edge sets its duration. */
 final class SequenceTimeline extends View {
     interface Listener {
         void select(String id);

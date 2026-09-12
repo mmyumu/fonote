@@ -26,8 +26,8 @@ final class Diagram {
      * What a line between two points can mean. Three of them are drawn, in the toolbar's order;
      * the fourth is never chosen but read off the ball, a run made by the player who holds it
      * being a carry. Old schemas that named one still parse, and still say the same thing.
-     * Le tacle est le seul trait d'un joueur qui porte son sens : une course qui finit au contact
-     * d'un autre joueur, ce que le ballon ne peut pas dire à sa place.
+     * The tackle is the only player stroke that carries its own meaning: a run that ends in
+     * contact with another player, which the ball cannot say in its place.
      */
     static final String PASS = "pass", RUN = "run", CARRY = "carry", SHOT = "shot", TACKLE = "tackle";
     /** Bounds the log is willing to carry, and the server to accept. */
@@ -227,14 +227,14 @@ final class Diagram {
         return previous != null && !previous.flight && !previous.owner.isEmpty();
     }
 
-    /** Qui a le ballon dans les pieds à cet instant, ou rien s'il est libre ou en l'air. */
+    /** Who has the ball at their feet at this instant, or nobody if it is loose or in the air. */
     String holder(double time) {
         Track.Key previous = null;
         for (Track.Key key : ball.keys) if (key.time <= time) previous = key;
         return previous == null || previous.flight ? "" : previous.owner;
     }
 
-    /** Le départ et l'arrivée du vol en cours, ou null quand le ballon ne vole pas. */
+    /** The start and end of the flight in progress, or null when the ball is not flying. */
     Track.Key[] ballLeg(double time) {
         for (int i = 1; i < ball.keys.size(); i++) {
             Track.Key a = ball.keys.get(i-1), b = ball.keys.get(i);

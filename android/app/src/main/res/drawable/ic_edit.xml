@@ -2,8 +2,8 @@
     android:width="24dp" android:height="24dp"
     android:viewportWidth="24" android:viewportHeight="24"
     android:tint="#FFFFFFFF">
-    <!-- Le crayon penché à 45°, du même trait que la poubelle qui le suit sur chaque note :
-         un corps, sa pointe, et la bague qui sépare la gomme du bois. -->
+    <!-- The pencil tilted at 45°, in the same stroke as the bin that follows it on every note:
+         a body, its tip, and the ferrule that separates the eraser from the wood. -->
     <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8"
         android:strokeLineCap="round" android:strokeLineJoin="round"
         android:fillColor="#00000000"

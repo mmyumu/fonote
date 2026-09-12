@@ -7,8 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Édition temporelle indépendante du terrain et de ses gestes. Les clés sont partagées
- * entre mouvements adjacents ; une arrivée identifie le mouvement qui la précède. */
+/** Timeline editing, independent of the pitch and its gestures. Keys are shared between
+ * adjacent motions; an arrival identifies the motion that precedes it. */
 final class Sequence {
     static final class Motion {
         final String actor;
@@ -55,8 +55,8 @@ final class Sequence {
             result.add(new Motion(actor, track, a, b));
         }
     }
-    /** L'ancrage initial reste implicite après suppression du losange à 0 s.
-     * Une édition explicite de cet ancrage lui rend une clé persistée. */
+    /** The initial anchor stays implicit once the diamond at 0 s is deleted.
+     * An explicit edit of that anchor gives it back a persisted key. */
     void materialize(Motion motion) {
         if (motion.track.at(motion.start.time) == null && !motion.track.put(motion.start))
             throw new IllegalArgumentException("Limite de positions atteinte");
@@ -70,7 +70,7 @@ final class Sequence {
         Track.Key key = end ? motion.end : motion.start;
         return motion.track == diagram.ball ? diagram.ballKey(key, key.time) : new double[]{key.x, key.y};
     }
-    /** Une clé neutre découpe le chemin déjà lissé, sans changer l'animation. */
+    /** A neutral key splits the already smoothed path, without changing the animation. */
     Track.Key insert(Track track, int time, double x, double y) {
         Track.Key existing = track.at(time);
         if (existing != null) return existing;
@@ -144,7 +144,7 @@ final class Sequence {
         for (Track track : tracks()) for (Track.Key key : track.keys)
             if (!key.after.isEmpty() && !ids.contains(key.after)) { key.after = ""; key.offset = 0; }
     }
-    /** Résolution complète avant affectation : un cycle ou conflit ne laisse aucun temps partiel. */
+    /** Full resolution before assignment: a cycle or conflict leaves no partial time behind. */
     void resolve() {
         validateGeometry();
         Map<String, Track.Key> all = new HashMap<>();
@@ -217,7 +217,7 @@ final class Sequence {
         if (duration < 1) throw new IllegalArgumentException("La durée doit être positive");
         materialize(motion);
         time(motion.start, start);
-        // Une durée appartient au mouvement, même lorsque son départ est lié à une passe.
+        // A duration belongs to the motion, even when its start is tied to a pass.
         motion.end.after = motion.start.id; motion.end.offset = duration;
         resolve();
     }

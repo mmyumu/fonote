@@ -2,8 +2,8 @@
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <!-- La pelouse de nuit du thème d'origine, en dégradé de bas en haut pour que le
-         masque du lanceur — rond, carré ou en goutte — ne tombe jamais sur un aplat. -->
+    <!-- The night lawn of the original theme, as a bottom-to-top gradient so that the
+         launcher's mask — round, square or teardrop — never lands on a flat fill. -->
     <path android:pathData="M0,0 h108 v108 h-108 z">
         <aapt:attr name="android:fillColor">
             <gradient android:type="linear"

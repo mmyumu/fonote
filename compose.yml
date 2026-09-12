@@ -6,8 +6,8 @@ services:
       dockerfile: backend/Dockerfile
     container_name: fonote-backend
     environment:
-      # Sans jeton le serveur répond 401 à tout : mieux vaut refuser de démarrer que d'exposer
-      # un espace personnel inaccessible.
+      # Without a token the server answers 401 to everything: better to refuse to start than to
+      # expose a personal space nobody can reach.
       FONOTE_TOKEN: ${FONOTE_TOKEN:?definir FONOTE_TOKEN dans .env}
     ports:
       - "127.0.0.1:8080:8080"

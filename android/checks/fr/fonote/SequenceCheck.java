@@ -1,6 +1,6 @@
 package fr.fonote;
 
-/** Scénarios de montage indépendants d'Android. */
+/** Sequence editing scenarios, independent of Android. */
 public final class SequenceCheck {
     private static void near(double a, double b) {
         if (Math.abs(a-b) > 1e-7) throw new AssertionError(a + " != " + b);
@@ -22,14 +22,14 @@ public final class SequenceCheck {
         s.remove(a.track,a.track.at(0));
         assert s.motions().size()==1 : "Le mouvement depuis le placement initial a disparu";
         s.retime(s.motions().get(0),0,12); assert a.track.at(0)!=null;
-        // Ajouter des repères dans une courbe ne change aucun point de l'animation.
+        // Adding markers along a curve changes no point of the animation.
         Track.Key end = a.track.at(12); end.path.add(new double[]{.1,.2});
         end.path.add(new double[]{.2,.6}); end.path.add(new double[]{.5,.7}); end.path.add(new double[]{.7,.2});
         double[][] before = new double[13][];
         for (int i=0; i<=12; i++) before[i] = d.position(a,i);
         s.fix(a, 5); s.fix(a, 8);
         for (int i=0; i<=12; i++) { near(d.position(a,i)[0], before[i][0]); near(d.position(a,i)[1], before[i][1]); }
-        // Une attente, suivie d'un appel de trois secondes.
+        // A wait, followed by a three-second run.
         s.fix(b, 0); s.place(b, 20, .4,.5); s.place(b, 50, .8,.5);
         near(d.position(b, 10)[0], .4); near(d.position(b, 35)[0], .6);
         s.place(c, 20, .7,.7);
@@ -43,7 +43,7 @@ public final class SequenceCheck {
         s.link(run, reception, 10); s.retime(pass, 5, 10);
         assert reception.time == 15 && run.start.time == 25 && run.end.time == 55;
         assert independent.end.time == 20;
-        // La réception reste attachée au joueur mobile.
+        // The reception stays attached to the moving player.
         near(d.ballPosition(15)[0], d.position(b,15)[0]);
         String snapshot = d.toJson().toString();
         try { s.link(pass, run.end, 0); throw new AssertionError("Cycle accepté"); }
@@ -51,7 +51,7 @@ public final class SequenceCheck {
         d = Diagram.from(new org.json.JSONObject(snapshot)); s = new Sequence(d); s.resolve();
         pass = s.motion(reception.id); run = s.motion(run.id());
         s.unlink(run); int fixed = run.start.time; s.retime(pass, 6,10); assert run.start.time == fixed;
-        // Une suppression détache les références sans faire sauter leurs temps.
+        // A deletion detaches references without dropping their times.
         s.link(run, pass.end, 10); int held = run.start.time;
         s.remove(pass); assert run.start.after.isEmpty() && run.start.time == held;
         d.steps.add(new Diagram.Step("Remise", 20));
@@ -65,7 +65,7 @@ public final class SequenceCheck {
         TacticalHistory.restore(history.target(false),entries); history.accept(false); assert entries.containsKey("a");
         assert history.canRedo(); history.record(initial); assert history.canRedo();
         history.record(changed); assert !history.canRedo();
-        // Un tacle garde son sens à la relecture ; la lecture pose les joueurs entre deux dixièmes.
+        // A tackle keeps its meaning once read back; playback places players between two tenths.
         Diagram t = new Diagram();
         Diagram.Token tackler = new Diagram.Token("", "home", "X", .2, .2), victim = new Diagram.Token("", "away", "Y", .6, .2);
         t.tokens.add(tackler); t.tokens.add(victim);

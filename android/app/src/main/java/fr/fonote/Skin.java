@@ -180,7 +180,7 @@ public final class Skin {
 
     private static final int DARK_RIPPLE = veil(60, 255, 255, 255), LIGHT_RIPPLE = veil(38, 0, 0, 0);
 
-    /** Pelouse et citron : la couleur d'origine de Fonote. */
+    /** Lawn and lemon: Fonote's original colours. */
     private static Skin terrain() {
         return new Skin("terrain", "Terrain", "Vert de pelouse, accent citron. Le thème d’origine.")
             .grounds(rgb(16, 27, 32), rgb(20, 34, 31), rgb(33, 48, 45), rgb(229, 238, 231), rgb(156, 179, 164))
@@ -191,7 +191,7 @@ public final class Skin {
             .headings("sans-serif", false, 0f);
     }
 
-    /** Ardoise et lavande : le sombre des outils modernes, arrondi et bordé au trait fin. */
+    /** Slate and lavender: the dark look of modern tools, rounded and edged with a hairline. */
     private static Skin minuit() {
         return new Skin("minuit", "Minuit", "Ardoise profonde, lavande en dégradé, coins larges.")
             .grounds(rgb(11, 14, 20), rgb(20, 25, 35), rgb(31, 38, 52), rgb(230, 234, 242), rgb(140, 150, 170))
@@ -202,7 +202,7 @@ public final class Skin {
             .headings("sans-serif-medium", false, -.015f);
     }
 
-    /** Papier : le clair, pour le plein jour et les tribunes ensoleillées. */
+    /** Paper: the light one, for broad daylight and sunny stands. */
     private static Skin papier() {
         return new Skin("papier", "Papier", "Fond clair, cartes blanches, bleu franc.")
             .grounds(rgb(245, 246, 248), rgb(255, 255, 255), rgb(234, 238, 244), rgb(16, 20, 26), rgb(95, 105, 120))
@@ -213,7 +213,7 @@ public final class Skin {
             .headings("sans-serif", false, -.01f);
     }
 
-    /** Stade : la régie télé — noir, néon, angles vifs et titres en capitales. */
+    /** Stadium: the TV gallery — black, neon, sharp corners and titles in capitals. */
     private static Skin stade() {
         return new Skin("stade", "Stade", "Noir de régie, néon menthe, angles vifs.")
             .grounds(rgb(6, 8, 12), rgb(14, 18, 24), rgb(23, 29, 38), rgb(233, 242, 246), rgb(130, 145, 158))
@@ -224,7 +224,7 @@ public final class Skin {
             .headings("sans-serif-condensed", true, .1f);
     }
 
-    /** Argile : papier chaud, olive et pastilles entièrement rondes. */
+    /** Clay: warm paper, olive and fully round pills. */
     private static Skin argile() {
         return new Skin("argile", "Argile", "Papier chaud, olive, tout en pastilles rondes.")
             .grounds(rgb(248, 244, 237), rgb(255, 253, 249), rgb(238, 230, 219), rgb(33, 28, 22), rgb(118, 104, 88))
@@ -236,13 +236,13 @@ public final class Skin {
     }
 
     /**
-     * Le fil : chrome monochrome sur un gris neutre, et le seul dégradé de l'application autour
-     * du joueur qu'on note — l'anneau de story, à la place où il veut bien dire quelque chose.
+     * The feed: monochrome chrome on a neutral grey, and the app's only gradient, around the
+     * player being noted — the story ring, in the one place where it actually means something.
      *
-     * <p>Gris et non noir absolu, bien que ce soit ce que fait le modèle. Le noir pur ne se
-     * défend que sur une dalle OLED, où il éteint vraiment ses pixels ; ailleurs il ne gagne
-     * rien et durcit tout ce qu'on pose dessus. Le gris laisse au terrain le soin d'être le
-     * seul bloc de couleur, qui était le but.
+     * <p>Grey and not pure black, although pure black is what the model does. It only holds up
+     * on an OLED panel, where it really turns its pixels off; elsewhere it gains nothing and
+     * hardens everything laid on it. Grey leaves the pitch to be the only block of colour,
+     * which was the point.
      */
     private static Skin fil() {
         return new Skin("fil", "Fil", "Gris neutre, chrome monochrome, anneau en dégradé.")
@@ -255,7 +255,7 @@ public final class Skin {
             .headings("sans-serif-medium", false, -.01f);
     }
 
-    /** Bleu-nuit et vert, et le vert sur trois choses seulement : la messagerie. */
+    /** Midnight blue and green, with the green on three things only: the messaging app. */
     private static Skin vert() {
         return new Skin("vert", "Vert", "Bleu-nuit, vert sur le bouton et la pastille.")
             .grounds(rgb(11, 20, 26), rgb(11, 20, 26), rgb(32, 44, 51), rgb(233, 237, 239), rgb(134, 150, 160))
@@ -266,7 +266,7 @@ public final class Skin {
             .headings("sans-serif", false, 0f);
     }
 
-    /** Un seul bleu, tout en pilules, des filets entre les lignes : le fil d'actualité. */
+    /** A single blue, all pills, hairlines between rows: the news feed. */
     private static Skin bleu() {
         return new Skin("bleu", "Bleu", "Un seul bleu, tout en pilules, lignes au filet.")
             .grounds(rgb(21, 32, 43), rgb(21, 32, 43), rgb(30, 39, 50), rgb(247, 249, 249), rgb(139, 152, 165))
@@ -278,16 +278,16 @@ public final class Skin {
     }
 
     /**
-     * La Diagonale : le maillot de l'AS Monaco, rouge et blanc coupés de l'épaule droite à la
-     * hanche gauche. Vue de face, la coupe descend du coin haut gauche au coin bas droit de
-     * l'écran, une seule fois, en fond, le rouge en haut à droite, côté cœur. Les cartes
-     * restent blanches : coupées chacune, une liste de matchs devenait une pile de maillots.
+     * The Diagonal: the AS Monaco shirt, red and white split from the right shoulder to the left
+     * hip. Seen from the front, the split runs from the top-left corner of the screen to the
+     * bottom-right one, once, in the background, with the red at the top right, on the heart's
+     * side. Cards stay white: with each one split, a list of matches became a pile of shirts.
      *
-     * <p>Le rouge franc est gardé pour ce qui mène quelque part : le bouton principal, les
-     * liens, et l'anneau du joueur qu'on note, qui passe du rouge au blanc. Sur la page, la
-     * moitié rouge n'est qu'un voile, parce que les titres et les listes traversent la coupe.
-     * Le raté prend l'orange brûlé : en rouge, il se confondrait avec l'accent. La pelouse est
-     * d'un vert plus clair que partout ailleurs : le vert de nuit faisait un trou dans la page.
+     * <p>Plain red is kept for what leads somewhere: the main button, links, and the ring of the
+     * player being noted, which fades from red to white. On the page, the red half is only a
+     * veil, because titles and lists cross the split. A miss takes burnt orange: in red, it
+     * would be mistaken for the accent. The lawn is a lighter green than anywhere else: the
+     * night green made a hole in the page.
      */
     private static Skin diagonale() {
         return new Skin("diagonale", "Diagonale", "Rouge et blanc coupés en biais, hommage à l’AS Monaco.")
