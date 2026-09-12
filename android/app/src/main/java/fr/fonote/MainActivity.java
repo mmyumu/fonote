@@ -151,11 +151,19 @@ public class MainActivity extends Activity {
     private final Deque<Undone> redoable = new ArrayDeque<>();
     private int noteMinute;
     /**
-     * The minute of a note on the match as a whole, which has none. While such a note is open,
-     * {@link #entries} holds the players it names, each with no action, and {@link #noteTeam}
-     * the club it is about instead — one or the other, never both.
+     * The minute of a note on the match as a whole, which has none. It is a written note like a
+     * free note, only not pinned to a moment: taking its minute away is all it takes to turn
+     * one into the other.
      */
     private static final int TIMELESS = -1;
+    /**
+     * The open note is written rather than tapped: a free note at a minute, or a note on the
+     * match at none. It names people instead of crediting them — {@link #entries} holds the
+     * players it names, each with no action, and {@link #noteTeam} the club it is about instead,
+     * one or the other, never both — and it is written when it is finished, since its text is
+     * the note and it is typed last.
+     */
+    private boolean naming;
     private String noteTeam = "";
     /** The two clubs under the pitch, while a match note is open: a crest makes it the club's. */
     private LinearLayout clubs;
@@ -165,6 +173,12 @@ public class MainActivity extends Activity {
      * kind of note, and the second mode is a note that also happens to be drawn.
      */
     private Diagram diagram;
+    /**
+     * The note as it stood when its board was opened — minute, actions, comment, drawing — or
+     * null for a note born on the board. A board writes as it is drawn, so this is what
+     * « Abandonner » puts back.
+     */
+    private JSONObject tacticBase;
     /**
      * The board as it stood before each change, while a note is open. A drawn stroke is a gesture,
      * and a gesture goes wrong: the finger slips, the pass lands on the wrong shirt, the eraser
@@ -279,6 +293,7 @@ public class MainActivity extends Activity {
                 written = saved.getBoolean("written", false);
                 noteMinute = saved.getInt("note_minute", 0);
                 loadEntries(new JSONArray(saved.getString("entries", "[]")));
+                naming = saved.getBoolean("naming", noteMinute == TIMELESS);
                 JSONArray mentions = new JSONArray(saved.getString("mentions", "[]"));
                 for (int i = 0; i < mentions.length(); i++) entries.put(mentions.getString(i), "");
                 noteTeam = saved.getString("note_team", "");
@@ -287,6 +302,8 @@ public class MainActivity extends Activity {
                 diagramWritten = saved.getString("diagram_written", "");
                 String drawn = saved.getString("diagram", "");
                 if (!drawn.isEmpty()) diagram = Diagram.from(new JSONObject(drawn));
+                String base = saved.getString("tactic_base", "");
+                if (!base.isEmpty()) tacticBase = new JSONObject(base);
             }
             // A real fixture can supply its actual kickoff. The demo starts on first opening.
             clockAnchor = prefs.getLong("clock_anchor", match.optLong("kickoff_epoch_ms", System.currentTimeMillis()));
@@ -302,13 +319,15 @@ public class MainActivity extends Activity {
         state.putString("draft", draft); state.putString("draft_written", draftWritten);
         state.putBoolean("written", written); state.putInt("note_minute", noteMinute);
         state.putString("entries", draftEntries().toString());
-        // A match note's players carry no action, which draftEntries leaves out on purpose.
-        if (noteMinute == TIMELESS) state.putString("mentions", new JSONArray(entries.keySet()).toString());
+        // A written note's players carry no action, which draftEntries leaves out on purpose.
+        state.putBoolean("naming", naming);
+        if (naming) state.putString("mentions", new JSONArray(entries.keySet()).toString());
         state.putString("note_team", noteTeam);
         state.putString("entries_written", entriesWritten);
         state.putString("diagram_written", diagramWritten);
         state.putInt("tactic_time", board == null ? tacticTime : board.time());
         state.putString("diagram", diagram == null ? "" : drawnJson());
+        state.putString("tactic_base", tacticBase == null ? "" : tacticBase.toString());
         super.onSaveInstanceState(state);
     }
     @Override protected void onDestroy() {
@@ -391,8 +410,8 @@ public class MainActivity extends Activity {
                 pager.show(pager.page() + (pager.page() < cardPlace[CARD_PITCH] ? 1 : -1), true);
                 return;
             }
-            // A match note keeps its text until it is written: leaving it is finishing it.
-            if (!noteId.isEmpty() && noteMinute == TIMELESS) { finishMatchNote(); return; }
+            // A written note keeps its text until it is written: leaving it is finishing it.
+            if (!noteId.isEmpty() && naming) { finishWrittenNote(); return; }
             if (!noteId.isEmpty()) { closeNote(); return; }
             showHome(); return;
         }
@@ -410,7 +429,7 @@ public class MainActivity extends Activity {
         // The pitch belongs to the same clock as the notes: one minute, one set of players.
         if (minute != previous && pitch != null) pitch.setMinute(minute);
         follow();
-        if (minute != previous && !noteId.isEmpty() && noteMinute != TIMELESS && minute - noteMinute == 2) renderComposer();
+        if (minute != previous && !noteId.isEmpty() && !naming && minute - noteMinute == 2) renderComposer();
         long left = (clockAnchor - System.currentTimeMillis()) / 1000;
         // A match whistled off is fixed at the minute it ended: seconds tick for nobody.
         boolean over = match != null && match.optLong("end_epoch_ms") > 0 && !clockRunning;
@@ -2254,8 +2273,8 @@ public class MainActivity extends Activity {
         // absence needs a sentence, and an empty pitch has all the room to carry one.
         if (match.has("lineup_available") && !match.optBoolean("lineup_available")) {
             String info = "provider_error".equals(match.optString("lineup_status"))
-                ? "Source des compositions injoignable. Notes générales disponibles avec + ; réessayez plus tard."
-                : "Composition indisponible auprès des sources. Vous pouvez prendre des notes générales avec +.";
+                ? "Source des compositions injoignable. Notes libres et notes de match toujours possibles ; réessayez plus tard."
+                : "Composition indisponible auprès des sources. Notes libres et notes de match restent possibles.";
             TextView notice = label(info); notice.setTextSize(12); notice.setTextColor(skin.muted);
         }
         dressWindow();
@@ -2580,7 +2599,7 @@ public class MainActivity extends Activity {
      * so the only thing left to say out loud is when one moment ends and the next begins.
      */
     private void tapPlayer(String id) {
-        if (!noteId.isEmpty() && noteMinute == TIMELESS) { mention(id); return; }
+        if (!noteId.isEmpty() && naming) { mention(id); return; }
         if (noteId.isEmpty()) {
             noteId = UUID.randomUUID().toString(); entries.clear();
             draft = ""; draftWritten = ""; written = false;
@@ -2592,8 +2611,8 @@ public class MainActivity extends Activity {
     /** Long press on the pitch: the most visual way to take someone back out of the note. */
     private void pullPlayer(String id) {
         if (noteId.isEmpty() || !entries.containsKey(id)) return;
-        // A match note is written when it is finished, so taking someone out writes nothing yet.
-        if (noteMinute == TIMELESS) { mention(id); return; }
+        // A written note is written when it is finished, so taking someone out writes nothing yet.
+        if (naming) { mention(id); return; }
         entries.remove(id);
         if (id.equals(focus)) focus = entries.isEmpty() ? "" : last(entries.keySet());
         pitch.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
@@ -2628,8 +2647,9 @@ public class MainActivity extends Activity {
             String people = peopleKey();
             if (!written || !people.equals(entriesWritten)) {
                 JSONObject note = operation("note", noteId).put("match_id", match.getString("id"));
-                if (noteMinute == TIMELESS)
-                    note.put("minute", JSONObject.NULL).put("entries", new JSONArray())
+                if (naming)
+                    note.put("minute", noteMinute == TIMELESS ? JSONObject.NULL : noteMinute)
+                        .put("entries", new JSONArray())
                         .put("team", noteTeam.isEmpty() ? JSONObject.NULL : noteTeam)
                         .put("players", new JSONArray(entries.keySet()));
                 else note.put("minute", noteMinute).put("entries", draftEntries());
@@ -2650,21 +2670,25 @@ public class MainActivity extends Activity {
     }
     /** Who the open note is about, as one comparable string: equal means nothing to rewrite. */
     private String peopleKey() {
-        return noteMinute == TIMELESS ? "match·" + noteTeam + "·" + entries.keySet()
+        return naming ? "written·" + noteMinute + "·" + noteTeam + "·" + entries.keySet()
             : noteMinute + "·" + draftEntries();
     }
+    /** A free note: the written panel, at the minute the clock shows now. */
+    private void openFreeNote() { updateClock(); openWrittenNote(minute); }
+    /** A note on the match as a whole: the same panel, at no minute. */
+    private void openMatchNote() { openWrittenNote(TIMELESS); }
     /**
-     * A note on the match as a whole, opened in the panel like any other. The pitch and its two
-     * benches name the players and the coaches, the strip under it the two clubs; nothing is
-     * written before it is finished, since here the text is the note and it is typed last.
+     * A written note, opened in the panel like any other. The pitch and its two benches name the
+     * players and the coaches, the strip under it the two clubs; nothing is written before it
+     * is finished, since here the text is the note and it is typed last.
      */
-    private void openMatchNote() {
+    private void openWrittenNote(int at) {
         noteId = UUID.randomUUID().toString(); entries.clear(); focus = "";
         draft = ""; draftWritten = ""; entriesWritten = ""; written = false;
-        noteMinute = TIMELESS; noteTeam = "";
+        noteMinute = at; naming = true; noteTeam = "";
         renderComposer();
     }
-    /** In or out of the match note: a club and players are its two ways of being about someone. */
+    /** In or out of the written note: a club and players are its two ways of being about someone. */
     private void mention(String id) {
         if (entries.remove(id) == null) { entries.put(id, ""); noteTeam = ""; }
         renderComposer();
@@ -2675,13 +2699,14 @@ public class MainActivity extends Activity {
         renderComposer();
     }
     /** Writes what changed, or drops a note left with nothing in it. */
-    private void finishMatchNote() {
+    private void finishWrittenNote() {
         if (entries.isEmpty() && noteTeam.isEmpty() && draft.trim().isEmpty()) {
             if (written) discardNote(); else closeNote();
             return;
         }
         boolean fresh = !written;
-        if (writeNote()) toast(fresh ? "Noté" : "Note modifiée");
+        if (writeNote()) toast(fresh ? (noteMinute == TIMELESS ? "Noté" : "Noté · " + noteMinute + "′")
+            : "Note modifiée");
         closeNote();
     }
     /** The open schema as it would be written down; "" when the note carries none. */
@@ -2697,8 +2722,8 @@ public class MainActivity extends Activity {
     }
     private void closeNote() {
         noteId = ""; entries.clear(); focus = ""; draft = ""; draftWritten = ""; written = false;
-        tacticTime = 0; noteTeam = "";
-        diagram = null; entriesWritten = ""; diagramWritten = "";
+        tacticTime = 0; noteTeam = ""; naming = false;
+        diagram = null; entriesWritten = ""; diagramWritten = ""; tacticBase = null;
         renderComposer();
     }
     /**
@@ -2708,7 +2733,8 @@ public class MainActivity extends Activity {
     private void amend(JSONObject note) {
         noteId = note.optString("note_id"); noteMinute = minuteOf(note);
         loadEntries(entriesOf(note));
-        // A match note's players come back as named, with no action waiting for them.
+        naming = penned(note);
+        // A written note's players come back as named, with no action waiting for them.
         for (String id : mentionsOf(note)) entries.put(id, "");
         noteTeam = clubOf(note);
         draft = note.optString("comment"); draftWritten = draft; written = true;
@@ -2716,35 +2742,30 @@ public class MainActivity extends Activity {
         JSONObject drawn = note.optJSONObject("schema");
         diagram = drawn == null ? null : Diagram.from(drawn);
         diagramWritten = drawnJson();
+        try {
+            tacticBase = diagram == null ? null : new JSONObject().put("minute", noteMinute)
+                .put("entries", draftEntries()).put("comment", draft).put("schema", new JSONObject(diagramWritten));
+        } catch (Exception e) { error(e); }
         // The last player named is the one in hand, so the palette can change his action at once.
-        focus = noteMinute == TIMELESS || draftEntries().length() == 0 ? "" : last(entries.keySet());
+        focus = naming || draftEntries().length() == 0 ? "" : last(entries.keySet());
         if (diagram != null) showTactic(); else renderComposer();
     }
-    /** A note with nobody in it is its text, so it is written straight from the text. */
-    private void generalNote() {
-        updateClock();
-        EditText input = noteField("Ce que je veux noter", "");
-        dialog().setTitle("Note sans joueur · " + minute + "′").setView(dialogField(input))
-            .setNegativeButton("Annuler", null).setPositiveButton("Noter", (d,w) -> {
-                if (input.getText().toString().trim().isEmpty()) { toast("Note vide, rien n’a été écrit"); return; }
-                noteId = UUID.randomUUID().toString(); entries.clear();
-                noteMinute = minute; draft = input.getText().toString(); draftWritten = ""; written = false;
-                if (writeNote()) toast("Noté · " + noteMinute + "′");
-                closeNote();
-            }).show();
-    }
     /**
-     * The panel of a note on the whole match. Its players are touched on the pitch, as for any
-     * note, only nobody here takes an action; a crest in the strip under the pitch makes it the
-     * club's note instead. The text is typed right here, because here the text is the note.
+     * The panel of a written note, free or on the whole match. Its players are touched on the
+     * pitch, as for any note, only nobody here takes an action; a crest in the strip under the
+     * pitch makes it the club's note instead. The text is typed right here, because here the
+     * text is the note. Its minute leads the line, and it is the only thing that tells the two
+     * apart: touched, it moves the note to another minute, or takes it off the clock.
      */
-    private void renderMatchDraft() {
+    private void renderWrittenDraft() {
+        boolean timeless = noteMinute == TIMELESS;
         LinearLayout line = strip();
-        TextView tag = new TextView(this);
-        tag.setText("Match"); tag.setTextSize(15); tag.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
-        tag.setTextColor(skin.accent); tag.setGravity(Gravity.CENTER);
-        tag.setBackground(control(skin.chip, skin.control));
-        tag.setContentDescription("Note de match, sans minute");
+        Button tag = button(timeless ? "Match" : noteMinute + "′", this::editNoteMinute);
+        tag.setTextSize(15); tag.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tag.setTextColor(skin.accent); tag.setMinHeight(0); tag.setMinWidth(0); tag.setMinimumWidth(0);
+        tag.setPadding(0, 0, 0, 0);
+        tag.setContentDescription(timeless ? "Note de match, sans minute, toucher pour lui en donner une"
+            : "Note libre à la " + noteMinute + "e minute, toucher pour la corriger ou la retirer");
         LinearLayout.LayoutParams tagSize = new LinearLayout.LayoutParams(dp(70), dp(44));
         tagSize.rightMargin = dp(8); line.addView(tag, tagSize);
         HorizontalScrollView chips = sideways();
@@ -2762,15 +2783,18 @@ public class MainActivity extends Activity {
         line.addView(chips, new LinearLayout.LayoutParams(0, dp(44), 1));
         composer.addView(line, new LinearLayout.LayoutParams(-1, dp(44)));
 
-        Button done = accent(button("", this::finishMatchNote));
+        // Terminé et Abandonner sont deux boutons, et non un seul qui change de mot : un texte
+        // commencé faisait passer l'unique bouton à « Terminé », et plus rien ne permettait de
+        // renoncer. Terminé s'éteint tant qu'il n'y a rien à écrire ; Abandonner reste toujours.
+        Button done = accent(button("Terminé", this::finishWrittenNote));
         done.setTextSize(15);
+        String kind = timeless ? "cette note de match" : "cette note libre";
+        done.setContentDescription("Enregistrer " + kind);
         Runnable label = () -> {
             boolean something = written || !entries.isEmpty() || !noteTeam.isEmpty() || !draft.trim().isEmpty();
-            done.setText(something ? "Terminé" : "Abandonner");
-            done.setContentDescription(something ? "Enregistrer cette note de match"
-                : "Abandonner cette note de match");
+            done.setEnabled(something); done.setAlpha(something ? 1f : .38f);
         };
-        EditText text = noteField("Ce que je retiens du match", draft);
+        EditText text = noteField(timeless ? "Ce que je retiens du match" : "Ce que je veux noter", draft);
         text.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
@@ -2781,12 +2805,23 @@ public class MainActivity extends Activity {
         composer.addView(text, textSize);
 
         LinearLayout footer = strip();
+        // A note already in the log can also be thrown away; the bin is only its icon, to leave
+        // the two words their room.
         if (written) {
-            Button drop = button("🗑  Supprimer", this::discardNote);
-            drop.setTextSize(13); drop.setContentDescription("Supprimer cette note");
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(126), dp(46));
+            Button drop = button("🗑", this::discardNote);
+            drop.setTextSize(15); drop.setMinWidth(0); drop.setMinimumWidth(0);
+            drop.setContentDescription("Supprimer cette note");
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(52), dp(46));
             p.rightMargin = dp(6); footer.addView(drop, p);
         }
+        // Nothing of a written note reaches the log before Terminé, so walking away is closing
+        // the panel: a new note leaves nothing behind, an old one stays as it was.
+        Button leave = button("Abandonner", this::closeNote);
+        leave.setTextSize(14);
+        leave.setContentDescription(written ? "Abandonner les modifications, la note reste telle qu’elle était"
+            : "Abandonner " + kind);
+        LinearLayout.LayoutParams leaveSize = new LinearLayout.LayoutParams(dp(128), dp(46));
+        leaveSize.rightMargin = dp(6); footer.addView(leave, leaveSize);
         label.run();
         footer.addView(done, new LinearLayout.LayoutParams(0, dp(46), 1));
         LinearLayout.LayoutParams footerSize = new LinearLayout.LayoutParams(-1, dp(46));
@@ -2803,13 +2838,13 @@ public class MainActivity extends Activity {
         p.rightMargin = dp(6); row.addView(chip, p);
     }
     /**
-     * The two crests under the pitch while a match note is open: touching one makes it the club's
+     * The two crests under the pitch while a written note is open: touching one makes it the club's
      * note. Everyone else — the eleven, the substitutes, the coaches — is touched where they
      * stand, on the grass or on their bench, the same as for any note.
      */
     private void renderClubs() {
         if (clubs == null) return;
-        boolean shown = !noteId.isEmpty() && noteMinute == TIMELESS && "match".equals(screen);
+        boolean shown = !noteId.isEmpty() && naming && "match".equals(screen);
         clubs.setVisibility(shown ? View.VISIBLE : View.GONE);
         if (!shown) return;
         clubs.removeAllViews();
@@ -2838,16 +2873,16 @@ public class MainActivity extends Activity {
         // The panel belongs to the match screen; a note closed from anywhere else has none to dress.
         if (composer == null || !"match".equals(screen)) return;
         composer.removeAllViews();
-        boolean open = !noteId.isEmpty(), timeless = open && noteMinute == TIMELESS;
-        if (timeless) renderMatchDraft(); else if (open) renderDraft(); else renderIdle();
+        boolean open = !noteId.isEmpty(), named = open && naming;
+        if (named) renderWrittenDraft(); else if (open) renderDraft(); else renderIdle();
         renderClubs();
         Map<String,String> marks = new HashMap<>();
         Map<String,Integer> tints = new HashMap<>();
         if (open) {
             for (Map.Entry<String,String> entry : entries.entrySet()) {
                 String action = entry.getValue();
-                // Named in a match note is all there is to it: a tick, never a question mark.
-                marks.put(entry.getKey(), timeless ? "✓" : action.isEmpty() ? "?" : icon(action));
+                // Named in a written note is all there is to it: a tick, never a question mark.
+                marks.put(entry.getKey(), named ? "✓" : action.isEmpty() ? "?" : icon(action));
                 tints.put(entry.getKey(), Skin.onGrass(action.isEmpty() ? skin.accent : solid(action)));
             }
         } else {
@@ -2915,8 +2950,8 @@ public class MainActivity extends Activity {
             this::openTactic), new LinearLayout.LayoutParams(0, dp(40), 1));
         LinearLayout.LayoutParams generalSize = new LinearLayout.LayoutParams(0, dp(40), 1);
         generalSize.leftMargin = dp(6);
-        bottom.addView(ghost("+  Note sans joueur", "Note sans joueur, à la minute du chrono",
-            this::generalNote), generalSize);
+        bottom.addView(ghost("+  Note libre", "Note libre, à la minute du chrono",
+            this::openFreeNote), generalSize);
         LinearLayout.LayoutParams matchSize = new LinearLayout.LayoutParams(0, dp(40), 1);
         matchSize.leftMargin = dp(6);
         bottom.addView(ghost("✎  Note de match", "Note de match, sans minute",
@@ -3044,16 +3079,26 @@ public class MainActivity extends Activity {
     private static String last(Set<String> keys) {
         String result = ""; for (String key : keys) result = key; return result;
     }
+    /**
+     * The minute of the open note. A written note may also have none, which makes it the
+     * match's; a note without one is offered the clock's, which pins it back to a moment. An
+     * action happens at a minute, so a tapped note only ever moves to another.
+     */
     private void editNoteMinute() {
-        NumberPicker picker = new NumberPicker(this); picker.setMinValue(0); picker.setMaxValue(150);
-        picker.setValue(noteMinute); picker.setWrapSelectorWheel(false);
-        dialog().setTitle("Minute de cette note").setView(picker)
+        AlertDialog.Builder asked = dialog();
+        NumberPicker picker = minutePicker(asked, noteMinute == TIMELESS ? minute : noteMinute);
+        asked.setTitle(noteMinute == TIMELESS ? "Donner une minute à cette note" : "Minute de cette note")
+            .setView(picker)
             .setPositiveButton("Appliquer", (d,w) -> {
                 picker.clearFocus(); noteMinute = picker.getValue();
-                // A minute corrected on a note already written has to reach the log to mean anything.
-                if (written) writeNote();
+                // A minute corrected on a note already written has to reach the log to mean
+                // anything. A written note waits for « Terminé », like the rest of it.
+                if (written && !naming) writeNote();
                 if ("tactic".equals(screen)) renderTactic(); else renderComposer();
-            }).setNegativeButton("Annuler", null).show();
+            }).setNegativeButton("Annuler", null);
+        if (naming && noteMinute != TIMELESS)
+            asked.setNeutralButton("Sans minute", (d,w) -> { noteMinute = TIMELESS; renderComposer(); });
+        asked.show();
     }
     private void editDraft() {
         EditText input = noteField("Commentaire facultatif", draft);
@@ -3082,7 +3127,7 @@ public class MainActivity extends Activity {
             updateClock();
             noteId = UUID.randomUUID().toString(); entries.clear();
             draft = ""; draftWritten = ""; entriesWritten = ""; written = false;
-            noteMinute = minute;
+            noteMinute = minute; tacticBase = null;
         }
         if (diagram == null) diagram = new Diagram();
         showTactic();
@@ -3229,16 +3274,27 @@ public class MainActivity extends Activity {
             : "Commentaire écrit, toucher pour le modifier");
         LinearLayout.LayoutParams small = new LinearLayout.LayoutParams(dp(52), dp(46));
         small.rightMargin = dp(6); footer.addView(comment, small);
-        if (written) {
-            Button drop = button("🗑  Supprimer", this::discardTactic);
-            drop.setTextSize(13); drop.setContentDescription("Supprimer cette note tactique");
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(126), dp(46));
-            p.rightMargin = dp(6); footer.addView(drop, p);
+        // The same two as a written note's, for the same reason: one button that changed its
+        // word left no way to walk away once something was drawn. A note reopened here keeps its
+        // bin; a note born here has no need of one, since abandoning it is throwing it away.
+        if (tacticBase != null) {
+            Button drop = button("🗑", this::discardTactic);
+            drop.setTextSize(15); drop.setMinWidth(0); drop.setMinimumWidth(0);
+            drop.setContentDescription("Supprimer cette note tactique");
+            LinearLayout.LayoutParams bin = new LinearLayout.LayoutParams(dp(52), dp(46));
+            bin.rightMargin = dp(6); footer.addView(drop, bin);
         }
-        Button done = accent(button(written ? "Terminé" : "Abandonner", this::leaveTactic));
+        Button leave = button("Abandonner", this::abandonTactic);
+        leave.setTextSize(14);
+        leave.setContentDescription(tacticBase == null ? "Abandonner cette note et revenir au terrain"
+            : "Abandonner les modifications, la note reste telle qu’elle était");
+        LinearLayout.LayoutParams leaveSize = new LinearLayout.LayoutParams(0, dp(46), 1);
+        leaveSize.rightMargin = dp(6); footer.addView(leave, leaveSize);
+        Button done = accent(button("Terminé", this::leaveTactic));
         done.setTextSize(15);
-        done.setContentDescription(written ? "Terminer cette note et revenir au terrain"
-            : "Abandonner cette note et revenir au terrain");
+        done.setContentDescription("Terminer cette note et revenir au terrain");
+        // Nothing drawn, nothing to keep: Terminé waits for the first stroke.
+        done.setEnabled(written); done.setAlpha(written ? 1f : .38f);
         footer.addView(done, new LinearLayout.LayoutParams(0, dp(46), 1));
         LinearLayout.LayoutParams footerSize = new LinearLayout.LayoutParams(-1, dp(46));
         footerSize.topMargin = dp(6); tacticPanel.addView(footer, footerSize);
@@ -3784,6 +3840,27 @@ public class MainActivity extends Activity {
 
     private void leaveTactic() { stopTactic(); closeNote(); showMatch(); }
 
+    /**
+     * Leaves the board as if it had not been opened. It writes as it is drawn, so walking away
+     * has to write the way back: a note born here is deleted, a note reopened here is put back
+     * as it stood — and only what changed is written again.
+     */
+    private void abandonTactic() {
+        stopTactic();
+        try {
+            if (tacticBase == null) {
+                if (written) record(operation("delete", noteId));
+            } else {
+                noteMinute = tacticBase.getInt("minute");
+                loadEntries(tacticBase.getJSONArray("entries"));
+                draft = tacticBase.getString("comment");
+                diagram = Diagram.from(tacticBase.getJSONObject("schema"));
+                writeNote();
+            }
+        } catch (Exception e) { error(e); }
+        closeNote(); showMatch();
+    }
+
     private void discardTactic() {
         stopTactic();
         try { record(operation("delete", noteId)); toast("Note supprimée"); }
@@ -3943,16 +4020,24 @@ public class MainActivity extends Activity {
     private static int minuteOf(JSONObject note) {
         return note.isNull("minute") ? TIMELESS : note.optInt("minute");
     }
-    /** Where a note sits in the match, the way a list shows it: "34′", or "Match · PSV" for none. */
-    private String stamp(JSONObject note) {
-        if (minuteOf(note) != TIMELESS) return note.optInt("minute") + "′";
-        return clubOf(note).isEmpty() ? "Match" : "Match · " + clubLabel(clubOf(note));
+    /**
+     * A note written rather than tapped: one that names people instead of crediting them, at a
+     * minute or at none. A note of actions has entries; a drawn one opens on its board.
+     */
+    private static boolean penned(JSONObject note) {
+        return minuteOf(note) == TIMELESS
+            || entriesOf(note).length() == 0 && note.optJSONObject("schema") == null;
     }
-    /** The club a match note is about, "home" or "away", or "" when it is about both. */
+    /** Where a note sits in the match, the way a list shows it: "34′", "34′ · PSV", "Match". */
+    private String stamp(JSONObject note) {
+        String at = minuteOf(note) == TIMELESS ? "Match" : note.optInt("minute") + "′";
+        return clubOf(note).isEmpty() ? at : at + " · " + clubLabel(clubOf(note));
+    }
+    /** The club a written note is about, "home" or "away", or "" when it is about both. */
     private static String clubOf(JSONObject note) {
         return note.isNull("team") ? "" : note.optString("team");
     }
-    /** The players a match note names, in the order they were named. */
+    /** The players a written note names, in the order they were named. */
     private static List<String> mentionsOf(JSONObject note) {
         List<String> ids = new ArrayList<>();
         JSONArray list = note.optJSONArray("players");
@@ -3967,7 +4052,7 @@ public class MainActivity extends Activity {
     }
     /** One line: "⚽ 10 Mbappé · → 6 Pogba". */
     private String summary(JSONObject note) {
-        if (minuteOf(note) == TIMELESS) {
+        if (penned(note)) {
             List<String> said = new ArrayList<>();
             for (String id : mentionsOf(note)) said.add(shortName(id));
             String names = String.join(", ", said), text = note.optString("comment");
@@ -3977,7 +4062,7 @@ public class MainActivity extends Activity {
         String drawn = note.optJSONObject("schema") == null ? "" : "▤  ";
         if (list.isEmpty())
             return note.optString("comment").isEmpty()
-                ? (drawn.isEmpty() ? "Note générale" : drawn + schemaSummary(note.optJSONObject("schema")))
+                ? (drawn.isEmpty() ? "Note libre" : drawn + schemaSummary(note.optJSONObject("schema")))
                 : drawn + note.optString("comment");
         StringBuilder text = new StringBuilder(drawn);
         for (JSONObject entry : list) {
@@ -4199,7 +4284,7 @@ public class MainActivity extends Activity {
      * compensate the last gesture — a restore for a deletion, the previous version of a rewritten
      * note, the previous text of a comment.
      *
-     * <p>Un geste, et non une ligne du journal. Écrire une note de match ou une note sans joueur,
+     * <p>Un geste, et non une ligne du journal. Écrire une note de match ou une note libre,
      * c'est écrire la note puis son texte : deux lignes, et défaire le texte laissait derrière une
      * note vide qu'il fallait annuler une seconde fois. Une note vide n'a aucun intérêt, donc les
      * deux partent ensemble.
@@ -4318,10 +4403,9 @@ public class MainActivity extends Activity {
                     .put("match_id", earlier.getString("match_id"))
                     .put("minute", earlier.opt("minute"))
                     .put("entries", entriesOf(earlier));
-                // A match note's club and names go back with it, or the version is not the one before.
-                if (minuteOf(earlier) == TIMELESS)
-                    version.put("team", earlier.opt("team")).put("players", earlier.opt("players"));
-                return version;
+                // A written note's club and names go back with it, or the version is not the one
+                // before. A note of actions has neither, and opt leaves the key out.
+                return version.put("team", earlier.opt("team")).put("players", earlier.opt("players"));
             }
         }
     }
@@ -4374,11 +4458,11 @@ public class MainActivity extends Activity {
             for (JSONObject note : notes) {
                 List<JSONObject> list = ordered(entriesOf(note));
                 JSONObject schema = note.optJSONObject("schema");
-                boolean timeless = minuteOf(note) == TIMELESS;
-                StringBuilder text = new StringBuilder(timeless ? "Note de match" : stamp(note));
-                if (timeless && !clubOf(note).isEmpty()) text.append("  ·  ").append(teamName(clubOf(note)));
-                if (list.isEmpty() && !timeless)
-                    text.append(schema == null ? "  ·  Note générale" : "  ·  " + schemaSummary(schema));
+                boolean timeless = minuteOf(note) == TIMELESS, free = !timeless && penned(note);
+                StringBuilder text = new StringBuilder(timeless ? "Note de match"
+                    : note.optInt("minute") + "′" + (free ? "  ·  Note libre" : ""));
+                if (penned(note) && !clubOf(note).isEmpty()) text.append("  ·  ").append(teamName(clubOf(note)));
+                if (list.isEmpty() && schema != null) text.append("  ·  ").append(schemaSummary(schema));
                 for (JSONObject entry : list) {
                     text.append("\n").append(icon(entry.optString("action"))).append("  ")
                         .append(actionName(entry.optString("action"))).append(" — ")
@@ -4522,11 +4606,21 @@ public class MainActivity extends Activity {
         return MatchClock.stamp(seconds, (int)published[2]) + "′";
     }
 
+    /**
+     * A wheel of minutes, made in the sheet's own theme: made in the activity's, its figures
+     * took the ink of the application and faded to nothing on the light sheet of a light skin.
+     */
+    private NumberPicker minutePicker(AlertDialog.Builder sheet, int value) {
+        NumberPicker picker = new NumberPicker(sheet.getContext());
+        picker.setMinValue(0); picker.setMaxValue(150);
+        picker.setValue(Math.max(0, Math.min(150, value))); picker.setWrapSelectorWheel(false);
+        return picker;
+    }
     private void adjustClock() {
-        NumberPicker picker = new NumberPicker(this); picker.setMinValue(0); picker.setMaxValue(150);
         updateClock();
-        picker.setValue(minute); picker.setWrapSelectorWheel(false);
-        dialog().setTitle("Minute affichée sur ta diffusion").setView(picker)
+        AlertDialog.Builder sheet = dialog();
+        NumberPicker picker = minutePicker(sheet, minute);
+        sheet.setTitle("Minute affichée sur ta diffusion").setView(picker)
             .setPositiveButton("Appliquer", (d,w) -> {
                 picker.clearFocus(); clockBase=picker.getValue()*60L; clockAnchor=System.currentTimeMillis();
                 saveClock(); showMatch();

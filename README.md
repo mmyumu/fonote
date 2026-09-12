@@ -227,14 +227,21 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
 - Deux styles de pastille au choix dans **Accueil → Options** : « Verre » (disque sombre, couleur de l'équipe en anneau, en halo et sur le numéro) ou « Plein » (disque peint). Le choix est montré par un aperçu dessiné avec le même code que le terrain, et il est conservé d'une session à l'autre. Le nom de chaque joueur porte sa propre plaque, dessinée sur une couche à part, au-dessus de **toutes** les pastilles : sur une formation à cinq lignes, une demi-pelouse ne peut pas loger six rangées sans chevauchement, donc la question n'est pas de l'éviter mais de choisir qui l'emporte — un nom reste toujours lisible, un numéro à moitié couvert garde sa couleur et sa place. Seul le joueur qu'on est en train de noter passe devant les noms, pour que lire un voisin ne coûte jamais le numéro de celui qu'on note. La cible tactile est la pastille elle-même (44 dp) et non la boîte qui portait le nom : deux voisins sont moins faciles à confondre du doigt.
 - Deux gestes pour noter : toucher un joueur, puis son action. Il n'y a pas de bouton d'enregistrement — chaque action écrit la note aussitôt.
 - Une note décrit un moment, pas un joueur. Tant qu'une note est ouverte, le panneau **collecte** : chaque joueur touché la rejoint avec son action propre, et « A marque, B délivre la passe décisive, C rate son arrêt » s'enchaîne d'un trait en six taps, sans quitter le terrain. Sans note ouverte, toucher un joueur en démarre une. Le seul geste qui reste à dire tout haut est donc la fin d'un moment : **« Terminé »**, qui rend la liste des notes. La corbeille à côté jette la note en cours ; tant qu'aucune action n'a été choisie il n'y a rien à jeter, et le bouton dit « Abandonner ».
+- **Note libre et note de match : une seule note écrite, et la minute seule les distingue.** La note rapide se tape — un joueur, une action, et elle s'écrit aussitôt ; la note écrite prend le temps : on tape le texte qu'on veut, et elle ne s'écrit qu'à « Terminé », puisque son texte est la note et qu'il vient en dernier. « Abandonner », à côté, ferme sans rien écrire : une note neuve ne laisse rien, une note rouverte reste telle qu'elle était. Ce sont deux boutons et non un seul qui change de mot — le premier texte tapé faisait passer l'unique bouton à « Terminé », et plus rien ne permettait de renoncer ; « Terminé » reste éteint tant qu'il n'y a rien à écrire, et une note déjà écrite garde sa corbeille, réduite à l'icône. Les deux boutons du panneau au repos ouvrent le **même panneau** : « + Note libre » à la minute du chrono, « ✎ Note de match » sans minute. Les joueurs, les remplaçants et les coachs qu'on touche y sont **nommés**, jamais crédités — une coche sur leur pastille, rien au bilan —, et les deux écussons sous le terrain en font la note d'un club, l'un ou l'autre, jamais les deux. La minute tient la tête de la ligne ; la toucher la corrige, « Sans minute » en fait une note de match, et une note de match à qui l'on donne une minute redevient une note libre : passer de l'une à l'autre ne réécrit rien d'autre. Seule la note écrite peut se passer de minute : une action se produit à une minute. Les anciennes notes sans joueur — une minute et un texte — se rouvrent dans ce panneau comme des notes libres.
 - **Note tactique**, le second mode de prise de note, ouvert par « ▤ Tactique » à côté de
-  « + Note sans joueur ». Le mode rapide répond à « qui a fait quoi, et à quelle minute » ; celui-ci
+  « + Note libre ». Le mode rapide répond à « qui a fait quoi, et à quelle minute » ; celui-ci
   répond à « où, et vers qui » — une passe mérite d'être dessinée quand ce qui compte est la ligne
   qu'elle a prise et les joueurs qu'elle a éliminés, et aucune palette de dix-huit symboles ne dit
   cela. C'est **la même note** en dessous : même identifiant, même minute, même commentaire, même
   récapitulatif, et les actions données ici comptent dans le bilan exactement comme celles tapées
   sur le terrain. Seule la surface change, et elle prend tout l'écran — un tableau qui partage la
   place avec un panneau est un tableau sur lequel on ne peut pas dessiner.
+  - **« Abandonner » et « Terminé », deux boutons**, comme sur la note écrite. Le tableau n'a pas
+    de bouton d'enregistrement — chaque trait s'écrit aussitôt —, donc renoncer doit écrire le
+    chemin du retour : une note née sur le tableau est supprimée, une note rouverte est remise
+    telle qu'elle était à l'ouverture — minute, actions, commentaire et dessin —, et seul ce qui a
+    changé est réécrit. « Terminé » reste éteint tant que rien n'est tracé ; une note rouverte garde
+    sa corbeille, réduite à l'icône.
   - Deux plateaux : **terrain vierge**, où l'on pose les trois ou quatre joueurs qui comptent
     (les boutons « + équipe » les placent à leur poste réel, y compris un remplaçant à la place qu'il occupe à
     cette minute, et la suite du geste est une correction plutôt qu'un placement à partir de rien),
@@ -380,7 +387,7 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
 - Historique, commentaires facultatifs, suppression.
 - `↶` annule **le dernier geste**, et non la dernière ligne du journal : une suppression est
   défaite, une note complétée revient à sa version précédente, un commentaire au texte qu'il
-  portait. Écrire une note de match ou une note sans joueur, c'est écrire la note puis son texte —
+  portait. Écrire une note de match ou une note libre, c'est écrire la note puis son texte —
   deux lignes pour un seul geste, et défaire le texte laissait derrière une note vide qu'il fallait
   annuler une seconde fois. Les lignes de queue d'une même note se défont donc ensemble, jusqu'à
   l'écriture de la note comprise ; une note qui naît du geste part d'une seule suppression, ce qui
@@ -602,7 +609,7 @@ for check in Formation Lineup MatchClock PlayerName Skin; do java -ea -cp /tmp/f
 La logique sans Android (placement, chronomètre, noms, thèmes) tient dans des classes à part,
 vérifiées par ces `assert` sans émulateur ni dépendance de test.
 
-Parcours Android à vérifier sur appareil : composer une note à plusieurs joueurs sans quitter le terrain, une note générale par `+`, une note tactique (remplir le terrain, déplacer un joueur, tracer une passe puis une course, encadrer une ligne entière et la déplacer d'un bloc, donner une action à un joueur du tableau, vérifier qu'elle apparaît au bilan, revenir par « Mes observations » et rouvrir le schéma d'un toucher), noter hors connexion, fermer et rouvrir en cours de composition, ajouter un commentaire, vérifier le bilan, synchroniser deux fois, annuler puis resynchroniser, importer sur un second appareil. Les notes ne doivent pas être dupliquées ou réapparaître après suppression.
+Parcours Android à vérifier sur appareil : composer une note à plusieurs joueurs sans quitter le terrain, une note libre par `+` qui nomme un joueur, puis la passer en note de match en retirant sa minute, une note tactique (remplir le terrain, déplacer un joueur, tracer une passe puis une course, encadrer une ligne entière et la déplacer d'un bloc, donner une action à un joueur du tableau, vérifier qu'elle apparaît au bilan, revenir par « Mes observations » et rouvrir le schéma d'un toucher), noter hors connexion, fermer et rouvrir en cours de composition, ajouter un commentaire, vérifier le bilan, synchroniser deux fois, annuler puis resynchroniser, importer sur un second appareil. Les notes ne doivent pas être dupliquées ou réapparaître après suppression.
 
 ## Contrat du serveur et persistance
 
@@ -621,7 +628,7 @@ Toutes les routes exigent `Authorization: Bearer <jeton>` :
 
 Une opération possède `id` (UUID), `note_id` (UUID) et `kind`. Étendre une note en réémet une sous le même `note_id` avec un `id` neuf : le journal garde les deux, le lecteur retient la dernière et conserve la place chronologique de la première.
 
-- `note` : `match_id`, `minute` (entier) et `entries`, la liste des `{player_id, action}` du moment — un joueur au plus une fois, liste vide pour une note générale. Les notes écrites avant cette forme portaient `player_id` et `action` à la racine ; le journal étant immuable, le serveur et le client acceptent toujours les deux.
+- `note` : `match_id`, `minute` (entier, ou `null` pour une note sur le match entier) et `entries`, la liste des `{player_id, action}` du moment — un joueur au plus une fois, liste vide pour une note écrite. Une note qui ne crédite personne, libre ou de match, peut **nommer** : `team` (`home`, `away` ou `null`) ou `players`, une liste d'identifiants, l'un ou l'autre et jamais les deux ; une note d'actions refuse les deux. Une note sans minute ne porte aucune action. Les notes écrites avant cette forme portaient `player_id` et `action` à la racine ; le journal étant immuable, le serveur et le client acceptent toujours les deux.
 - `comment` : `text` (2 000 caractères maximum).
 - `delete` : aucun champ supplémentaire.
 - `restore` : aucun champ supplémentaire ; rend visible une note supprimée.
