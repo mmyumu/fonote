@@ -19,6 +19,10 @@ public final class OfflineChecks extends Instrumentation {
         sendStatus(1, progress);
         Context context = getTargetContext();
         Store store = null;
+        android.content.SharedPreferences preferences = context.getSharedPreferences("fonote", Context.MODE_PRIVATE);
+        boolean hadServer = preferences.contains("url"); String previousServer = preferences.getString("url", "");
+        preferences.edit().putString("url", "").commit();
+        int outcome = Activity.RESULT_OK;
         try {
             context.deleteDatabase("offline-checks.sqlite3");
             try (SQLiteDatabase old = context.openOrCreateDatabase("offline-checks.sqlite3", 0, null, null)) {
@@ -72,16 +76,19 @@ public final class OfflineChecks extends Instrumentation {
             checkTacticalEditor();
             result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, next club fixtures, pull gestures, tactical keyframes, timeline, undo/redo, atomic notes.\n");
             sendStatus(0, progress);
-            finish(Activity.RESULT_OK, result);
         } catch (Throwable failure) {
             progress.putString("stack", android.util.Log.getStackTraceString(failure));
             sendStatus(-2, progress);
             result.putString("stream", android.util.Log.getStackTraceString(failure));
-            finish(Activity.RESULT_CANCELED, result);
+            outcome = Activity.RESULT_CANCELED;
         } finally {
+            if (hadServer) preferences.edit().putString("url", previousServer).commit(); else preferences.edit().remove("url").commit();
             if (store != null) store.close();
             context.deleteDatabase("offline-checks.sqlite3");
         }
+        // Last, after the cleanup: finishing hands the process to the system, which kills it, and
+        // a cleanup left for afterwards never runs — the app then stays in local mode for good.
+        finish(outcome, result);
     }
     /**
      * A query typed on one page stays there: submitting it must not hand the caret to a field on

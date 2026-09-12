@@ -22,11 +22,13 @@ BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer/'
 # The list itself no longer is: it was once the free plan of a paid API, and is now a choice —
 # ESPN serves far more than these, and a competition is added by writing its slug here.
 # Domestic leagues come first, which is how a club met in both keeps its own championship.
-LEAGUES = {'FL1': 'fra.1', 'PL': 'eng.1', 'BL1': 'ger.1', 'PD': 'esp.1',
-           'SA': 'ita.1', 'PPL': 'por.1', 'DED': 'ned.1', 'ELC': 'eng.2',
-           'BSA': 'bra.1', 'CL': 'uefa.champions', 'UECL': 'uefa.europa.conf',
-           'WC': 'fifa.world', 'EC': 'uefa.euro'}
-CUPS = {'CL', 'UECL', 'WC', 'EC'}
+if __package__:
+    from .catalogue import COMPETITIONS
+else:
+    from catalogue import COMPETITIONS
+
+LEAGUES = {code: item['slug'] for code, item in COMPETITIONS.items()}
+CUPS = {code for code, item in COMPETITIONS.items() if item['type'] == 'CUP'}
 
 
 # Lists stay cached for five minutes, even today's. Only a match sheet open live may be
@@ -72,6 +74,7 @@ STATUSES = {'STATUS_HALFTIME': 'PAUSED', 'STATUS_END_PERIOD': 'PAUSED',
 PHASES = {'league phase': 'GROUP_STAGE', 'group stage': 'GROUP_STAGE',
           'knockout round playoffs': 'PLAYOFFS', 'playoffs': 'PLAYOFFS',
           'qualifying': 'PRELIMINARY_ROUND', 'qualifiers': 'PRELIMINARY_ROUND',
+          'second round': 'LAST_16', 'round of 32': 'LAST_32', '3rd place match': 'THIRD_PLACE',
           'round of 16': 'LAST_16', 'quarterfinals': 'QUARTER_FINALS',
           'semifinals': 'SEMI_FINALS', 'third place': 'THIRD_PLACE', 'final': 'FINAL'}
 
@@ -211,7 +214,7 @@ def fixture(event, code, competition, contest=None):
     season = (event.get('season') or {})
     return {'id': int(event['id']),
             'utcDate': moment(contest.get('date') or event['date']),
-            'status': state, 'competition': competition,
+            'status': state, 'competition': competition, 'season': season.get('year'),
             'stage': stage(season.get('slug') or season.get('name') or '', code),
             'homeTeam': team_entry((sides.get('home') or {}).get('team') or {}),
             'awayTeam': team_entry((sides.get('away') or {}).get('team') or {}),

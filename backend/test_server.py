@@ -88,7 +88,7 @@ class ServerTest(unittest.TestCase):
 
     def test_calendar_does_not_require_personal_token(self):
         from unittest.mock import patch
-        with patch('backend.espn.Espn.competitions', return_value={'competitions': []}):
+        with patch('backend.football_data.FootballData.competitions', return_value={'competitions': []}):
             self.assertEqual(self.request(token='wrong', path='/v1/football/competitions'),
                              {'competitions': []})
 
@@ -182,13 +182,13 @@ class ServerTest(unittest.TestCase):
                          {'matches': [{'id': 123}]})
         # The club, the span and the cap travel; nothing else does.
         self.assertEqual(asked, [(66, '2026-09-07', '2027-09-07', 100)])
-        with patch('backend.espn.Espn.team_fixtures', return_value={'matches': [{'id': 123}]}):
+        with patch('backend.football_data.FootballData.team_fixtures', return_value={'matches': [{'id': 123}]}):
             self.assertEqual(self.request(token='wrong', path='/v1/football/teams/66/matches?limit=100'),
                              {'matches': [{'id': 123}]})
 
     def test_a_feed_that_will_not_answer_is_reported_as_unavailable(self):
         from unittest.mock import patch
-        with patch('backend.espn.Espn.competitions', side_effect=OSError('feed muet')):
+        with patch('backend.football_data.FootballData.competitions', side_effect=OSError('feed muet')):
             with self.assertRaises(HTTPError) as error:
                 self.request(token='wrong', path='/v1/football/competitions')
             self.assertEqual(error.exception.code, 503)

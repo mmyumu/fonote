@@ -12,7 +12,7 @@ WORKDIR /app
 
 RUN adduser --disabled-password --gecos "" --uid 1001 fonote
 
-COPY backend/server.py backend/espn.py ./backend/
+COPY backend/*.py backend/competitions.json ./backend/
 COPY android/app/src/main/assets/match.json ./android/app/src/main/assets/match.json
 
 # The database lives in a volume: the container stays disposable, the operation log does not.

@@ -90,10 +90,9 @@ public class MainActivity extends Activity {
     private PitchView pitch;
     private TextView clockLabel;
     private int minute;
-    /** One refresh a minute while a match is current; ESPN calls its own feed stale after nine
+    /** One refresh a minute while a match is open; ESPN calls its own feed stale after nine
      *  seconds, so this is conservative, and the server caches hard enough to absorb it. */
-    private static final long POLL = 60_000L, WARMUP = 3600L;
-    private static final int LATE = 140;
+    private static final long POLL = 60_000L;
     private long polled;
     private long clockAnchor, clockBase;
     private int period;
@@ -334,6 +333,8 @@ public class MainActivity extends Activity {
         super.onSaveInstanceState(state);
     }
     @Override protected void onDestroy() {
+        searchGeneration++; followTeamRequest++; fixturesRequests[0]++; fixturesRequests[1]++;
+        footballUi.removeCallbacksAndMessages(null);
         ticker.removeCallbacks(tick);
         worker.shutdown();
         super.onDestroy();
@@ -386,9 +387,11 @@ public class MainActivity extends Activity {
 
     private void selectBrowsePage() {
         int selected = browsePager.page();
+        String previousScreen = screen;
         screen = selected == ANNOTATED ? "annotated" : selected == SAVED ? "saved" : "home";
         root = selected == ANNOTATED ? annotatedRoot : selected == SAVED ? savedRoot : homeRoot;
         if (selected == ANNOTATED) updateFavoriteButtons(annotatedRoot);
+        if (selected == SAVED && !"saved".equals(previousScreen) && "loading".equals(searchResponse.optString("state"))) startSearch();
     }
 
     private void updateFavoriteButtons(android.view.ViewGroup group) {
@@ -422,12 +425,12 @@ public class MainActivity extends Activity {
         if (!"home".equals(screen)) { pageBack.run(); return; }
         super.onBackPressed();
     }
-    @Override protected void onResume() { super.onResume(); ticker.removeCallbacks(tick); ticker.post(tick); }
     /** The splash screen has gone and the window is in front of the reader: the entrance can play. */
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
         if (focused) kickoff.begin(android.os.SystemClock.uptimeMillis());
     }
+    @Override protected void onResume() { super.onResume(); sendFootballFollows(); ticker.removeCallbacks(tick); ticker.post(tick); }
     @Override protected void onPause() { stopTactic(); ticker.removeCallbacks(tick); super.onPause(); }
     private long clockSeconds() { return MatchClock.seconds(System.currentTimeMillis(), clockAnchor, clockBase, clockRunning); }
     private void updateClock() {
@@ -447,11 +450,6 @@ public class MainActivity extends Activity {
             : (clockRunning ? "●  " : "Ⅱ  ") + MatchClock.display(clockSeconds(), period) + "  ⌄");
     }
     /**
-     * A match being watched is re-read once a minute, so a substitution reaches the pitch while
-     * it still matters. Bounded on every side: only the match screen, only a match of the day,
-     * and never while a note is open — the players must not move under the finger mid-note.
-     */
-    /**
      * Drop what was chosen under the former provider's numbering, once.
      *
      * Clubs, competitions and matches were football-data's numbers and are ESPN's now, and the
@@ -469,15 +467,17 @@ public class MainActivity extends Activity {
         edit.putInt("numbering", NUMBERING).apply();
     }
 
+    /**
+     * A match on screen is re-read once a minute, so a substitution reaches the pitch while it
+     * still matters. Whether there is anything new is the server's call, not ours: it knows what
+     * it holds and when ESPN is worth asking again, and its cache answers a match that has not
+     * moved. A client that guessed from its own clock missed a sheet taken before kickoff and
+     * never taken again. The one bound left is the finger: never while a note is open, since
+     * the players must not move under it mid-note.
+     */
     private void follow() {
         if (!"match".equals(screen) || match == null || !noteId.isEmpty() || !hasServer()) return;
         if (!match.optString("id").startsWith(REMOTE)) return;
-        // A match the provider has whistled off has nothing left to publish.
-        if (match.optLong("end_epoch_ms") > 0) return;
-        long ahead = (clockAnchor - System.currentTimeMillis()) / 1000;
-        // Compositions are published about an hour before kickoff and the match is over well
-        // after ninety minutes: outside that window there is nothing new to learn.
-        if (ahead > 0 ? ahead > WARMUP : minute > LATE) return;
         long now = System.currentTimeMillis();
         if (now - polled < POLL) return;
         polled = now;
@@ -867,6 +867,7 @@ public class MainActivity extends Activity {
         savedCard = new FrameLayout(this);
         browsePager.addPage(annotatedCard); browsePager.addPage(homeCard); browsePager.addPage(savedCard);
         renderAnnotated();
+        searchHideScores = prefs.getBoolean("search_hide_scores", false);
         renderSaved();
         showHomeShell();
         loadFixtures(LocalDate.now(), LocalDate.now());
@@ -987,16 +988,18 @@ public class MainActivity extends Activity {
         LocalDate from = week.minusDays(7), to = week.plusDays(13);
         worker.execute(() -> {
             try {
-                get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1) + "&lineups=1");
+                JSONObject loading = new JSONObject(get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1) + footballCompetitionQuery()));
                 runOnUiThread(() -> {
                     if (stale(request, requested)) return;
                     renderWeeks();
+                    if ("loading".equals(loading.optString("state"))) footballUi.postDelayed(() -> { if (!stale(request, requested)) loadCalendar(); }, 2000);
+                    else if (!"ready".equals(loading.optString("state", "ready"))) label("Calendrier partiel · récupération différée.");
                 });
             } catch (Exception unavailable) {
                 runOnUiThread(() -> {
                     if (stale(request, requested)) return;
                     renderWeeks();
-                    label("Serveur indisponible · données enregistrées, pouvant être anciennes. Les autres matchs restent accessibles dans Matchs enregistrés.");
+                    label("Serveur indisponible · données enregistrées, pouvant être anciennes. Les autres matchs restent accessibles dans Rechercher un match, sur cet appareil.");
                 });
             }
         });
@@ -1200,9 +1203,9 @@ public class MainActivity extends Activity {
         layout.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(layout);
         profileRoot = root;
+        sendFootballFollows();
         try {
-            String cached = store.downloaded("/v1/football/competitions");
-            renderProfile(cached == null ? new JSONObject() : new JSONObject(cached),
+            renderProfile(footballCatalogue(),
                 new JSONObject().put("matches", store.fixtures()));
         } catch (Exception error) { error(error); }
         if (!hasServer()) return;
@@ -1215,63 +1218,159 @@ public class MainActivity extends Activity {
         });
     }
 
+    private boolean followTeamsMode = false;
+    private String followGender = "", followTeamCode = "";
+    private final Set<String> followExpanded = new HashSet<>();
+    private JSONArray followTeams = new JSONArray();
+    private int followTeamRequest = 0;
+    private String followTeamMessage = "Choisissez une compétition pour trouver ses équipes.";
+
     private void renderProfile(JSONObject catalogue, JSONObject fixtureData) {
-        // Kept so a letter typed into the search redraws the list without asking the server again.
         followCatalogue = catalogue; followFixtures = fixtureData;
         root = profileRoot; root.removeAllViews();
         Set<String> competitionIds = new HashSet<>(prefs.getStringSet("follow_competitions", Collections.emptySet()));
         Set<String> teamIds = new HashSet<>(prefs.getStringSet("follow_teams", Collections.emptySet()));
-        // Both lists arrive in the order a server or a calendar happened to hold them, and a list
-        // you pick from is searched by eye: alphabetical, and by a collator rather than by code
-        // point, so that Évian sits with the E's and not after Z.
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.addView(button((!followTeamsMode ? "✓ " : "") + "Compétitions", () -> { followTeamsMode = false; renderProfile(followCatalogue, followFixtures); }), new LinearLayout.LayoutParams(0, -2, 1));
+        tabs.addView(button((followTeamsMode ? "✓ " : "") + "Équipes", () -> { followTeamsMode = true; renderProfile(followCatalogue, followFixtures); }), new LinearLayout.LayoutParams(0, -2, 1)); root.addView(tabs);
         Collator alphabet = Collator.getInstance(Locale.FRANCE);
-        boolean searching = !followSearch.trim().isEmpty();
-        if (!searching) {
-            TextView help = label("Choisissez des compétitions et/ou des clubs. Un match est affiché s’il correspond à au moins un de vos choix.");
-            help.setTextColor(skin.muted); help.setTextSize(13);
-        }
-        JSONArray competitions = catalogue.optJSONArray("competitions");
-        List<JSONObject> named = new ArrayList<>();
-        if (competitions != null) for (int i = 0; i < competitions.length(); i++) {
-            JSONObject item = competitions.optJSONObject(i);
-            if (item != null && FixtureSelection.contains(item.optString("name"), followSearch)) named.add(item);
-        }
-        named.sort((one, other) -> alphabet.compare(one.optString("name"), other.optString("name")));
-        LinkedHashMap<String,String> teams = new LinkedHashMap<>();
-        JSONArray fixtures = fixtureData.optJSONArray("matches");
-        if (fixtures != null) for (int i = 0; i < fixtures.length(); i++) {
-            JSONObject fixture = fixtures.optJSONObject(i);
-            JSONObject home = fixture.optJSONObject("homeTeam"), away = fixture.optJSONObject("awayTeam");
-            if (home != null) teams.put(String.valueOf(home.optInt("id")), home.optString("name"));
-            if (away != null) teams.put(String.valueOf(away.optInt("id")), away.optString("name"));
-        }
-        List<Map.Entry<String,String>> clubs = new ArrayList<>();
-        for (Map.Entry<String,String> team : teams.entrySet())
-            if (FixtureSelection.contains(team.getValue(), followSearch)) clubs.add(team);
-        clubs.sort((one, other) -> alphabet.compare(one.getValue(), other.getValue()));
-        // A heading over nothing reads as a list that failed to load, so an empty side is left out.
-        if (!named.isEmpty()) {
-            section("Compétitions", null, null);
-            for (JSONObject item : named) {
-                String id = String.valueOf(item.optInt("id"));
-                CheckBox choice = choice(item.optString("name"), competitionIds.contains(id));
-                choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_competitions", id, checked));
+        if (!followTeamsMode) {
+            JSONArray items = catalogue.optJSONArray("competitions");
+            List<JSONObject> all = new ArrayList<>();
+            if (items != null) for (int i = 0; i < items.length(); i++) if (items.optJSONObject(i) != null) all.add(items.optJSONObject(i));
+            all.sort((a, b) -> alphabet.compare(a.optString("name"), b.optString("name")));
+            if (followSearch.trim().isEmpty()) {
+                section("Suivies · " + competitionIds.size(), null, null);
+                for (JSONObject item : all) if (competitionIds.contains(item.optString("id"))) followCompetitionChoice(item, true);
+                if (competitionIds.isEmpty()) label("Choisissez les compétitions qui vous intéressent.");
             }
-        }
-        if (!clubs.isEmpty()) {
-            section("Clubs des matchs enregistrés", null, null);
-            for (Map.Entry<String,String> team : clubs) {
-                CheckBox choice = choice(team.getValue(), teamIds.contains(team.getKey()));
-                choice.setOnCheckedChangeListener((v, checked) -> saveChoice("follow_teams", team.getKey(), checked));
+            LinearLayout genders = new LinearLayout(this);
+            for (String g : new String[]{"", "male", "female"}) {
+                String name = g.isEmpty() ? "Tous" : "male".equals(g) ? "Masculin" : "Féminin";
+                genders.addView(button((followGender.equals(g) ? "✓ " : "") + name, () -> { followGender = g; renderProfile(followCatalogue, followFixtures); }), new LinearLayout.LayoutParams(0, -2, 1));
             }
+            root.addView(genders);
+            Map<String, List<JSONObject>> groups = new java.util.TreeMap<>(alphabet);
+            for (JSONObject item : all) {
+                if (!followGender.isEmpty() && !followGender.equals(item.optString("gender"))) continue;
+                if (!FixtureSelection.contains(item.optString("name") + " " + item.optString("category"), followSearch)) continue;
+                String group = item.optString("category", "Autres compétitions");
+                groups.computeIfAbsent(group, unused -> new ArrayList<>()).add(item);
+            }
+            List<String> order = new ArrayList<>(groups.keySet());
+            for (String first : new String[]{"Coupes européennes", "International"}) if (order.remove(first)) order.add(0, first);
+            for (String group : order) {
+                List<JSONObject> members = groups.get(group);
+                int followed = 0; for (JSONObject item : members) if (competitionIds.contains(item.optString("id"))) followed++;
+                boolean expanded = followExpanded.contains(group) || !followSearch.trim().isEmpty();
+                root.addView(button((expanded ? "▾ " : "▸ ") + group + " · " + followed + " suivie(s)", () -> {
+                    if (!followExpanded.add(group)) followExpanded.remove(group);
+                    renderProfile(followCatalogue, followFixtures);
+                }));
+                if (expanded) for (JSONObject item : members) followCompetitionChoice(item, competitionIds.contains(item.optString("id")));
+            }
+            if (groups.isEmpty()) label("Aucune compétition ne correspond à cette recherche.");
+        } else {
+            Map<String, JSONObject> known = new LinkedHashMap<>();
+            JSONArray matches = fixtureData.optJSONArray("matches");
+            if (matches != null) for (int i = 0; i < matches.length(); i++) {
+                JSONObject m = matches.optJSONObject(i); if (m == null) continue;
+                for (String side : new String[]{"homeTeam", "awayTeam"}) { JSONObject t = m.optJSONObject(side); if (t != null) known.put(t.optString("id"), t); }
+            }
+            // Les catalogues déjà consultés restent recherchables sans charger les autres pays.
+            JSONArray comps = catalogue.optJSONArray("competitions");
+            if (comps != null) for (int i = 0; i < comps.length(); i++) {
+                try {
+                    String held = store.downloaded("/v1/football/competitions/" + comps.getJSONObject(i).optString("code") + "/teams");
+                    JSONArray teams = held == null ? null : new JSONObject(held).optJSONArray("teams");
+                    if (teams != null) for (int j = 0; j < teams.length(); j++) { JSONObject t = teams.getJSONObject(j); known.put(t.optString("id"), t); }
+                } catch (Exception ignored) { }
+            }
+            for (int i = 0; i < followTeams.length(); i++) { JSONObject t = followTeams.optJSONObject(i); if (t != null) known.put(t.optString("id"), t); }
+            List<JSONObject> sorted = new ArrayList<>(known.values()); sorted.sort((a, b) -> alphabet.compare(a.optString("name"), b.optString("name")));
+            section("Équipes suivies · " + teamIds.size(), null, null);
+            for (String id : teamIds) if (!known.containsKey(id)) {
+                JSONObject placeholder = new JSONObject(); try { placeholder.put("id", id).put("name", "Équipe " + id); } catch (Exception ignored) { }
+                followTeamChoice(placeholder, true);
+            }
+            for (JSONObject team : sorted) if (teamIds.contains(team.optString("id")) && FixtureSelection.contains(team.optString("name"), followSearch)) followTeamChoice(team, true);
+            root.addView(button(followTeamCode.isEmpty() ? "Ajouter des équipes d’une compétition" : competition(followTeamCode).optString("name"), () -> chooseCompetition(item -> {
+                followTeamCode = item.optString("code"); followTeams = new JSONArray(); followTeamMessage = "Récupération des équipes…";
+                int request = ++followTeamRequest;
+                try { String held = store.downloaded("/v1/football/competitions/" + followTeamCode + "/teams"); if (held != null) followTeams = new JSONObject(held).optJSONArray("teams"); } catch (Exception ignored) { }
+                if (followTeams == null) followTeams = new JSONArray();
+                renderProfile(followCatalogue, followFixtures);
+                if (hasServer() && !demoMode()) loadFollowTeams(followTeamCode, request);
+                else { followTeamMessage = "Équipes connues sur cet appareil uniquement."; renderProfile(followCatalogue, followFixtures); }
+            })));
+            label(followTeamMessage);
+            Set<String> chosen = new HashSet<>(); for (int i = 0; i < followTeams.length(); i++) chosen.add(followTeams.optJSONObject(i).optString("id"));
+            for (JSONObject team : sorted) if (!teamIds.contains(team.optString("id"))
+                    && (!followSearch.trim().isEmpty() || chosen.contains(team.optString("id")))
+                    && FixtureSelection.contains(team.optString("name"), followSearch)) followTeamChoice(team, false);
         }
-        if (named.isEmpty() && clubs.isEmpty())
-            label(searching ? "Aucune compétition ni club ne correspond à cette recherche."
-                : "Le catalogue des compétitions arrive avec le serveur, les clubs avec les calendriers consultés.");
-        TextView note = label("Vos suivis sont conservés sur cet appareil. "
-            + "Les clubs des calendriers consultés restent disponibles sans connexion.");
+        TextView note = label("Vos suivis personnalisent l’accueil. La recherche reste ouverte à toutes les compétitions proposées.");
         note.setTextColor(skin.muted); note.setTextSize(12);
     }
+
+    private void followCompetitionChoice(JSONObject item, boolean checked) {
+        CheckBox box = choice(item.optString("name"), checked);
+        box.setOnCheckedChangeListener((v, selected) -> { saveChoice("follow_competitions", item.optString("id"), selected); renderProfile(followCatalogue, followFixtures); });
+    }
+
+    private void followTeamChoice(JSONObject item, boolean checked) {
+        String gender = item.optString("gender");
+        String detail = ("female".equals(gender) ? "Féminin" : "male".equals(gender) ? "Masculin" : "")
+            + (item.optString("country").isEmpty() ? "" : " · " + item.optString("country"))
+            + ("national".equals(item.optString("participants")) ? " · Sélection nationale" : "");
+        CheckBox box = choice(item.optString("name") + (detail.isEmpty() ? "" : " · " + detail), checked);
+        box.setOnCheckedChangeListener((v, selected) -> { saveChoice("follow_teams", item.optString("id"), selected); renderProfile(followCatalogue, followFixtures); });
+    }
+
+    private void loadFollowTeams(String code, int request) {
+        worker.execute(() -> {
+            try {
+                JSONObject data = new JSONObject(get("/v1/football/competitions/" + code + "/teams"));
+                runOnUiThread(() -> {
+                    if (request != followTeamRequest || !"profile".equals(screen)) return;
+                    followTeams = data.optJSONArray("teams"); if (followTeams == null) followTeams = new JSONArray();
+                    followTeamMessage = "loading".equals(data.optString("state")) ? "Récupération des équipes…" : "error".equals(data.optString("state")) ? "Équipes indisponibles pour le moment. Sélectionnez de nouveau la compétition pour réessayer." : followTeams.length() + " équipe(s)";
+                    renderProfile(followCatalogue, followFixtures);
+                    if ("loading".equals(data.optString("state"))) footballUi.postDelayed(() -> { if (request == followTeamRequest && "profile".equals(screen)) loadFollowTeams(code, request); }, 2000);
+                });
+            } catch (Exception unavailable) {
+                runOnUiThread(() -> { if (request == followTeamRequest && "profile".equals(screen)) { followTeamMessage = "Serveur indisponible · équipes connues sur cet appareil."; renderProfile(followCatalogue, followFixtures); } });
+            }
+        });
+    }
+
+    private final Runnable declareFollows = this::sendFootballFollows;
+    private void sendFootballFollows() {
+        if (prefs == null || !hasServer() || demoMode()) return;
+        String token = prefs.getString("token", ""), base = server();
+        if (token.isEmpty()) return;
+        String device = prefs.getString("football_installation", "");
+        if (device.isEmpty()) { device = java.util.UUID.randomUUID().toString(); prefs.edit().putString("football_installation", device).apply(); }
+        JSONObject body = new JSONObject();
+        try { body.put("competitions", new JSONArray(prefs.getStringSet("follow_competitions", Collections.emptySet()))).put("teams", new JSONArray(prefs.getStringSet("follow_teams", Collections.emptySet()))); }
+        catch (Exception ignored) { return; }
+        String signature = base + "|" + token + "|" + body;
+        if (signature.equals(followsSent)) return;
+        String path = base + "/v1/football/follows/" + device;
+        worker.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(path).openConnection();
+                connection.setRequestMethod("PUT"); connection.setConnectTimeout(5000); connection.setReadTimeout(15000);
+                connection.setInstanceFollowRedirects(false); connection.setRequestProperty("Authorization", "Bearer " + token);
+                connection.setRequestProperty("Content-Type", "application/json"); connection.setDoOutput(true);
+                try (java.io.OutputStream output = connection.getOutputStream()) { output.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
+                if (connection.getResponseCode() == 200) runOnUiThread(() -> followsSent = signature);
+            } catch (Exception ignored) { /* Les préférences locales seront retransmises à la prochaine visite. */ }
+            finally { if (connection != null) connection.disconnect(); }
+        });
+    }
+    private String followsSent = "";
 
     private CheckBox choice(String text, boolean checked) {
         CheckBox box = new CheckBox(this); box.setText(text); box.setChecked(checked);
@@ -1284,6 +1383,18 @@ public class MainActivity extends Activity {
         Set<String> values = new HashSet<>(prefs.getStringSet(key, Collections.emptySet()));
         if (checked) values.add(id); else values.remove(id);
         prefs.edit().putStringSet(key, values).apply();
+        if ("follow_competitions".equals(key) || "follow_teams".equals(key)) {
+            footballUi.removeCallbacks(declareFollows); footballUi.postDelayed(declareFollows, 750);
+        }
+    }
+
+    private String footballCompetitionQuery() {
+        Set<String> followed = prefs.getStringSet("follow_competitions", Collections.emptySet());
+        if (followed.isEmpty() || !prefs.getStringSet("follow_teams", Collections.emptySet()).isEmpty()) return "";
+        List<String> codes = new ArrayList<>();
+        JSONArray items = footballCatalogue().optJSONArray("competitions");
+        if (items != null) for (int i = 0; i < items.length(); i++) { JSONObject c = items.optJSONObject(i); if (c != null && followed.contains(c.optString("id"))) codes.add(c.optString("code")); }
+        return codes.isEmpty() ? "" : "&competitions=" + android.net.Uri.encode(android.text.TextUtils.join(",", codes));
     }
 
     private final int[] fixturesRequests = new int[2];
@@ -1305,29 +1416,315 @@ public class MainActivity extends Activity {
      * The card to the right of home. Like the annotated matches card, its title stays in place
      * and only the list scrolls.
      */
+    // La recherche possède ses résultats ; une réponse d'un ancien filtre ne les remplace jamais.
+    private String searchCompetition = "", searchSeason = "", searchTeam = "", searchPhase = "";
+    private String searchFrom = "", searchTo = "";
+    private boolean searchOffline = false, searchHideScores = false, renderingSearch = false;
+    private int searchGeneration = 0, searchPage = 0;
+    private JSONObject searchResponse = new JSONObject();
+    private String searchMessage = "Choisissez une compétition et une saison ou édition.";
+    private final Handler footballUi = new Handler(Looper.getMainLooper());
+
+    private JSONObject footballCatalogue() {
+        try {
+            String held = store.downloaded("/v1/football/competitions");
+            JSONObject remote = held == null ? new JSONObject() : new JSONObject(held);
+            try (java.io.InputStream input = getAssets().open("competitions.json")) {
+                JSONObject bundled = new JSONObject(readText(input));
+                return remote.optInt("version") >= bundled.optInt("version") ? remote : bundled;
+            }
+        } catch (Exception unavailable) { return new JSONObject(); }
+    }
+
+    private JSONObject competition(String code) {
+        JSONArray items = footballCatalogue().optJSONArray("competitions");
+        if (items != null) for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item != null && code.equals(item.optString("code"))) return item;
+        }
+        return new JSONObject();
+    }
+
+    private void chooseCompetition(java.util.function.Consumer<JSONObject> selected) {
+        JSONArray items = footballCatalogue().optJSONArray("competitions");
+        if (items == null) return;
+        final Collator alphabet = Collator.getInstance(Locale.FRANCE);
+        List<JSONObject> catalog = new ArrayList<>();
+        for (int i = 0; i < items.length(); i++) {
+            JSONObject item = items.optJSONObject(i);
+            if (item != null) catalog.add(item);
+        }
+        catalog.sort((a, b) -> alphabet.compare(a.optString("name"), b.optString("name")));
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
+        EditText query = new EditText(this); query.setSingleLine(true); query.setHint("Rechercher une compétition");
+        box.addView(query);
+        ListView list = new ListView(this); box.addView(list, new LinearLayout.LayoutParams(-1, dp(340)));
+        List<JSONObject> visible = new ArrayList<>();
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, new ArrayList<>());
+        list.setAdapter(adapter);
+        Runnable filter = () -> {
+            visible.clear(); adapter.clear();
+            for (JSONObject item : catalog) {
+                if (item != null && FixtureSelection.contains(item.optString("name") + " " + item.optString("category"), query.getText().toString())) {
+                    visible.add(item); adapter.add(item.optString("name"));
+                }
+            }
+        };
+        query.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) { filter.run(); }
+            public void afterTextChanged(android.text.Editable value) {}
+        });
+        filter.run();
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Compétition").setView(box).setNegativeButton("Annuler", null).create();
+        list.setOnItemClickListener((parent, view, position, id) -> { JSONObject item = visible.get(position); dialog.dismiss(); selected.accept(item); });
+        dialog.show();
+    }
+
+    private void redrawSearch() {
+        LinearLayout previous = root;
+        renderSaved();
+        root = "saved".equals(screen) ? savedRoot : previous;
+    }
+
     private void renderSaved() {
-        LinearLayout title = page("Matchs enregistrés", this::showHome, SAVED);
+        LinearLayout title = page("Rechercher un match", this::showHome, SAVED);
         ScrollView list = (ScrollView) root.getParent();
         root.removeView(title); savedCard.removeAllViews();
         LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         layout.setBackgroundColor(ground());
-        LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
+        LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(8));
         header.addView(title);
+        LinearLayout selection = new LinearLayout(this);
+        selection.addView(button(searchCompetition.isEmpty() ? "Compétition" : competition(searchCompetition).optString("name"), () -> chooseCompetition(item -> {
+            searchGeneration++; searchCompetition = item.optString("code"); searchSeason = "";
+            searchTeam = ""; searchPhase = ""; searchFrom = ""; searchTo = ""; searchPage = 0;
+            searchResponse = new JSONObject(); searchMessage = "Choisissez une saison ou édition.";
+            redrawSearch(); chooseSearchSeason();
+        })), new LinearLayout.LayoutParams(0, -2, 1));
+        selection.addView(button(searchSeason.isEmpty() ? "Saison" : searchSeason, this::chooseSearchSeason));
+        header.addView(selection);
+        LinearLayout actions = new LinearLayout(this);
+        actions.addView(button("Filtres", this::searchFilters), new LinearLayout.LayoutParams(0, -2, 1));
+        actions.addView(button("Rechercher", () -> { searchPage = 0; startSearch(); }), new LinearLayout.LayoutParams(0, -2, 1));
+        header.addView(actions);
+        LinearLayout flags = new LinearLayout(this);
+        CheckBox offline = new CheckBox(this); offline.setText("Sur cet appareil"); offline.setChecked(searchOffline);
+        offline.setTextColor(skin.ink);
+        offline.setOnCheckedChangeListener((v, checked) -> { searchOffline = checked; searchPage = 0; startSearch(); redrawSearch(); });
+        CheckBox scores = new CheckBox(this); scores.setText("Masquer les scores"); scores.setChecked(searchHideScores);
+        scores.setTextColor(skin.ink);
+        scores.setOnCheckedChangeListener((v, checked) -> { searchHideScores = checked; prefs.edit().putBoolean("search_hide_scores", checked).apply(); redrawSearchResults(); });
+        flags.addView(offline, new LinearLayout.LayoutParams(0, -2, 1));
+        flags.addView(scores, new LinearLayout.LayoutParams(0, -2, 1)); header.addView(flags);
+        if (searchOffline && (!searchCompetition.isEmpty() || !searchSeason.isEmpty())) header.addView(button("Tous les matchs de cet appareil", () -> {
+            searchCompetition = ""; searchSeason = ""; searchTeam = ""; searchPhase = ""; searchFrom = ""; searchTo = "";
+            searchPage = 0; startSearch(); redrawSearch();
+        }));
         layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
-        layout.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
-        savedCard.addView(layout);
+        layout.addView(list, new LinearLayout.LayoutParams(-1, 0, 1)); savedCard.addView(layout);
         renderSavedMatches();
     }
 
-    /** Redrawn whenever data arrives: a calendar that has been read also fills this list. */
-    private void renderSavedMatches() {
-        root.removeAllViews();
-        label("Disponibles sur cet appareil. Les scores et compositions peuvent dater de la dernière connexion.");
+    private void chooseSearchSeason() {
+        if (searchCompetition.isEmpty()) { toast("Choisissez d’abord une compétition."); return; }
+        String code = searchCompetition;
+        String path = "/v1/football/competitions/" + code + "/seasons";
         try {
-            JSONArray all = localFixtures(null, null);
-            for (int i = 0; i < all.length(); i++) fixtureCard(all.getJSONObject(i), false);
-            if (all.length() == 0) label("Aucun match téléchargé. Consultez le calendrier avec le serveur pour en conserver une copie.");
-        } catch (Exception error) { error(error); }
+            String held = store.downloaded(path);
+            if (held != null && new JSONObject(held).optJSONArray("seasons") != null && new JSONObject(held).optJSONArray("seasons").length() > 0) {
+                showSeasonChoices(new JSONObject(held).getJSONArray("seasons")); return;
+            }
+        } catch (Exception ignored) { }
+        if (searchOffline || !hasServer() || demoMode()) {
+            java.util.TreeSet<String> years = new java.util.TreeSet<>(Collections.reverseOrder());
+            try {
+                JSONArray fixtures = store.fixtures();
+                for (int i = 0; i < fixtures.length(); i++) {
+                    JSONObject m = fixtures.getJSONObject(i);
+                    if (code.equals(m.optJSONObject("competition") == null ? "" : m.optJSONObject("competition").optString("code")) && !m.isNull("season")) years.add(m.optString("season"));
+                }
+            } catch (Exception ignored) { }
+            JSONArray seasons = new JSONArray();
+            for (String year : years) { JSONObject value = new JSONObject(); try { value.put("year", year); } catch (Exception ignored) { } seasons.put(value); }
+            if (seasons.length() > 0) showSeasonChoices(seasons); else toast("Aucune saison connue hors ligne. Vous pouvez rechercher tous les matchs de cet appareil.");
+            return;
+        }
+        int generation = ++searchGeneration;
+        searchMessage = "Récupération des saisons disponibles…"; redrawSearchResults();
+        loadSearchSeasons(code, generation);
+    }
+
+    private void loadSearchSeasons(String code, int generation) {
+        worker.execute(() -> {
+            try {
+                JSONObject data = new JSONObject(get("/v1/football/competitions/" + code + "/seasons"));
+                runOnUiThread(() -> {
+                    if (generation != searchGeneration || !"saved".equals(screen)) return;
+                    JSONArray items = data.optJSONArray("seasons");
+                    if (items != null && items.length() > 0) { searchMessage = "Choisissez une saison ou édition."; redrawSearchResults(); showSeasonChoices(items); }
+                    else if ("loading".equals(data.optString("state"))) footballUi.postDelayed(() -> {
+                        if (generation == searchGeneration && "saved".equals(screen)) loadSearchSeasons(code, generation);
+                    }, 2000);
+                    else { searchMessage = "Saisons indisponibles pour le moment. Réessayez avec le bouton Saison."; redrawSearchResults(); }
+                });
+            } catch (Exception unavailable) {
+                runOnUiThread(() -> { if (generation == searchGeneration) {
+                    String detail = String.valueOf(unavailable.getMessage());
+                    searchMessage = detail.contains("401") || detail.contains("404")
+                        ? "Le serveur doit être actualisé pour rechercher cette archive. Les matchs déjà présents sur cet appareil restent accessibles."
+                        : "Serveur indisponible. Les matchs de cet appareil restent accessibles.";
+                    redrawSearchResults();
+                } });
+            }
+        });
+    }
+
+    private void showSeasonChoices(JSONArray items) {
+        List<JSONObject> seasons = new ArrayList<>();
+        for (int i = 0; i < items.length(); i++) if (items.optJSONObject(i) != null) seasons.add(items.optJSONObject(i));
+        seasons.sort((a, b) -> Integer.compare(b.optInt("year"), a.optInt("year")));
+        String[] labels = new String[seasons.size()];
+        for (int i = 0; i < seasons.size(); i++) labels[i] = seasons.get(i).optString("label", seasons.get(i).optString("year"));
+        new AlertDialog.Builder(this).setTitle("Saison / édition").setItems(labels, (d, which) -> {
+            searchGeneration++; searchSeason = seasons.get(which).optString("year");
+            searchPage = 0; searchTeam = ""; searchPhase = ""; searchFrom = ""; searchTo = "";
+            searchResponse = new JSONObject(); searchMessage = "Lancez la recherche pour retrouver les matchs."; redrawSearch();
+        }).setNegativeButton("Annuler", null).show();
+    }
+
+    private void searchFilters() {
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(20), 0, dp(20), 0);
+        List<String> teamIds = new ArrayList<>(), teamNames = new ArrayList<>(); teamIds.add(""); teamNames.add("Toutes les équipes");
+        JSONArray teams = searchResponse.optJSONArray("teams");
+        List<JSONObject> sortedTeams = new ArrayList<>();
+        if (teams != null) for (int i = 0; i < teams.length(); i++) if (teams.optJSONObject(i) != null) sortedTeams.add(teams.optJSONObject(i));
+        Collator alphabet = Collator.getInstance(Locale.FRANCE);
+        sortedTeams.sort((a, b) -> alphabet.compare(a.optString("name"), b.optString("name")));
+        for (JSONObject t : sortedTeams) { teamIds.add(t.optString("id")); teamNames.add(t.optString("name")); }
+        Spinner team = new Spinner(this); team.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, teamNames));
+        team.setEnabled(!sortedTeams.isEmpty()); team.setAlpha(sortedTeams.isEmpty() ? .55f : 1f);
+        team.setSelection(Math.max(0, teamIds.indexOf(searchTeam))); box.addView(team);
+        List<String> phases = new ArrayList<>(), phaseNames = new ArrayList<>(); phases.add(""); phaseNames.add("Toutes les phases");
+        JSONArray available = searchResponse.optJSONArray("phases");
+        List<String> availablePhases = new ArrayList<>();
+        if (available != null) for (int i = 0; i < available.length(); i++) {
+            String p = available.optString(i); if (!p.isEmpty() && !availablePhases.contains(p)) availablePhases.add(p);
+        }
+        availablePhases.sort((a, b) -> {
+            int rank = Integer.compare(phaseRank(a), phaseRank(b));
+            return rank != 0 ? rank : alphabet.compare(stage(a, 0), stage(b, 0));
+        });
+        for (String p : availablePhases) { phases.add(p); phaseNames.add(stage(p, 0)); }
+        Spinner phase = new Spinner(this); phase.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, phaseNames));
+        phase.setEnabled(!availablePhases.isEmpty()); phase.setAlpha(availablePhases.isEmpty() ? .55f : 1f);
+        phase.setSelection(Math.max(0, phases.indexOf(searchPhase))); box.addView(phase);
+        if (sortedTeams.isEmpty() && availablePhases.isEmpty()) {
+            TextView hint = new TextView(this);
+            hint.setText("Les équipes et les phases apparaîtront après une première recherche.");
+            hint.setTextColor(skin.muted); hint.setTextSize(12); hint.setPadding(0, dp(4), 0, dp(8));
+            box.addView(hint, 0);
+        }
+        EditText from = new EditText(this); from.setSingleLine(true); from.setHint("À partir du · AAAA-MM-JJ"); from.setText(searchFrom); box.addView(from);
+        EditText to = new EditText(this); to.setSingleLine(true); to.setHint("Jusqu’au · AAAA-MM-JJ"); to.setText(searchTo); box.addView(to);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Filtrer les matchs").setView(box).setNegativeButton("Annuler", null)
+            .setNeutralButton("Réinitialiser", (d, which) -> { searchTeam = ""; searchPhase = ""; searchFrom = ""; searchTo = ""; searchPage = 0; startSearch(); })
+            .setPositiveButton("Appliquer", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String a = from.getText().toString().trim(), b = to.getText().toString().trim();
+            try { if (!a.isEmpty()) LocalDate.parse(a); if (!b.isEmpty()) LocalDate.parse(b); if (!a.isEmpty() && !b.isEmpty() && a.compareTo(b) > 0) throw new IllegalArgumentException(); }
+            catch (Exception invalid) { toast("Indiquez des dates valides dans l’ordre, au format AAAA-MM-JJ."); return; }
+            searchFrom = a; searchTo = b; searchTeam = teamIds.get(team.getSelectedItemPosition()); searchPhase = phases.get(phase.getSelectedItemPosition());
+            searchPage = 0; dialog.dismiss(); startSearch();
+        })); dialog.show();
+    }
+
+    private void startSearch() {
+        int generation = ++searchGeneration;
+        if (searchOffline || demoMode() || !hasServer()) { searchMessage = "Résultats limités aux matchs connus sur cet appareil."; searchResponse = new JSONObject(); redrawSearchResults(); return; }
+        if (searchCompetition.isEmpty() || searchSeason.isEmpty()) { searchMessage = "Choisissez une compétition et une saison ou édition."; redrawSearchResults(); return; }
+        searchResponse = new JSONObject(); searchMessage = "Recherche en cours…"; redrawSearchResults();
+        String path = "/v1/football/search?competition=" + android.net.Uri.encode(searchCompetition) + "&season=" + searchSeason + "&page=" + searchPage;
+        if (!searchTeam.isEmpty()) path += "&team=" + android.net.Uri.encode(searchTeam);
+        if (!searchPhase.isEmpty()) path += "&phase=" + android.net.Uri.encode(searchPhase);
+        if (!searchFrom.isEmpty()) path += "&dateFrom=" + searchFrom;
+        if (!searchTo.isEmpty()) path += "&dateTo=" + searchTo;
+        loadSearch(path, generation);
+    }
+
+    private void loadSearch(String path, int generation) {
+        worker.execute(() -> {
+            try {
+                JSONObject data = new JSONObject(get(path));
+                runOnUiThread(() -> {
+                    if (generation != searchGeneration || !"saved".equals(screen)) return;
+                    searchResponse = data;
+                    String state = data.optString("state");
+                    searchMessage = "loading".equals(state) ? "Récupération des matchs de cette saison…" : "error".equals(state) ? "Récupération différée. Les résultats connus restent disponibles. Réessayez plus tard."
+                        : "partial".equals(state) ? "Archives partielles : tous les matchs n’ont pas pu être récupérés." : "Archives ESPN · " + data.optInt("count") + " résultat(s)";
+                    redrawSearchResults();
+                    if ("loading".equals(state)) footballUi.postDelayed(() -> { if (generation == searchGeneration && "saved".equals(screen)) loadSearch(path, generation); }, 2000);
+                });
+            } catch (Exception unavailable) {
+                runOnUiThread(() -> { if (generation == searchGeneration) {
+                    String detail = String.valueOf(unavailable.getMessage());
+                    searchMessage = detail.contains("401") || detail.contains("404")
+                        ? "Le serveur doit être actualisé pour rechercher cette archive. Résultats locaux uniquement."
+                        : "Serveur indisponible · résultats locaux uniquement.";
+                    searchResponse = new JSONObject(); redrawSearchResults();
+                } });
+            }
+        });
+    }
+
+    private void redrawSearchResults() {
+        if (savedRoot == null) return;
+        LinearLayout previous = root; root = savedRoot; renderSavedMatches(); root = previous;
+    }
+
+    private void renderSavedMatches() {
+        root.removeAllViews(); label(searchMessage);
+        try {
+            JSONArray items = searchResponse.optJSONArray("matches");
+            boolean local = items == null && (searchOffline || demoMode() || !hasServer() || searchMessage.startsWith("Serveur indisponible"));
+            if (local) {
+                List<JSONObject> found = new ArrayList<>(); Map<String, JSONObject> teams = new LinkedHashMap<>(); java.util.TreeSet<String> phases = new java.util.TreeSet<>();
+                JSONArray all = localFixtures(null, null);
+                for (int i = 0; i < all.length(); i++) {
+                    JSONObject m = all.getJSONObject(i); JSONObject c = m.optJSONObject("competition");
+                    if (!searchCompetition.isEmpty() && (c == null || !searchCompetition.equals(c.optString("code")))) continue;
+                    if (!searchSeason.isEmpty() && !searchSeason.equals(m.optString("season"))) continue;
+                    for (String side : new String[]{"homeTeam", "awayTeam"}) { JSONObject t = m.optJSONObject(side); if (t != null) teams.put(t.optString("id"), t); }
+                    phases.add(m.optString("stage"));
+                    if (!searchTeam.isEmpty() && !searchTeam.equals(m.optJSONObject("homeTeam").optString("id")) && !searchTeam.equals(m.optJSONObject("awayTeam").optString("id"))) continue;
+                    if (!searchPhase.isEmpty() && !searchPhase.equals(m.optString("stage"))) continue;
+                    String date = m.optString("utcDate"); if (date.length() > 10) date = date.substring(0, 10);
+                    if (!searchFrom.isEmpty() && date.compareTo(searchFrom) < 0 || !searchTo.isEmpty() && date.compareTo(searchTo) > 0) continue;
+                    found.add(m);
+                }
+                searchResponse.put("teams", new JSONArray(teams.values())).put("phases", new JSONArray(phases));
+                searchResponse.put("hasMore", found.size() > (searchPage + 1) * 50);
+                items = new JSONArray(found.subList(Math.min(searchPage * 50, found.size()), Math.min((searchPage + 1) * 50, found.size())));
+            }
+            renderingSearch = true;
+            if (items != null) for (int i = 0; i < items.length(); i++) fixtureCard(items.getJSONObject(i), false);
+            renderingSearch = false;
+            if (items != null && items.length() == 0 && (local || "ready".equals(searchResponse.optString("state")))) label("Aucun match ne correspond à ces critères dans les données disponibles.");
+            if (searchPage > 0) root.addView(button("Page précédente", () -> { searchPage--; startSearch(); }));
+            if (searchResponse.optBoolean("hasMore")) root.addView(button("Page suivante", () -> { searchPage++; startSearch(); }));
+        } catch (Exception problem) { label("Impossible de lire ces résultats."); }
+        finally { renderingSearch = false; }
+    }
+
+    private void prepareOffline(JSONObject fixture) {
+        if (!hasServer() || demoMode()) { toast("Connectez le serveur pour télécharger la fiche."); return; }
+        toast("Téléchargement de la fiche…");
+        worker.execute(() -> {
+            try {
+                JSONObject data = new JSONObject(get("/v1/football/matches/" + fixture.optString("id")));
+                runOnUiThread(() -> { toast("available".equals(data.optString("lineup_status")) ? "Fiche et composition disponibles hors ligne." : "Fiche disponible hors ligne · composition indisponible chez ESPN."); redrawSearchResults(); });
+            } catch (Exception unavailable) { runOnUiThread(() -> toast("Téléchargement impossible. La fiche n’a pas été préparée.")); }
+        });
     }
 
     private void loadFixtures(LocalDate from, LocalDate to) {
@@ -1344,7 +1741,7 @@ public class MainActivity extends Activity {
         if (!hasServer()) return;
         worker.execute(() -> {
             try {
-                get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1) + "&lineups=1");
+                JSONObject loading = new JSONObject(get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1) + footballCompetitionQuery()));
                 runOnUiThread(() -> {
                     if (request != fixturesRequests[0] || requestedPager != browsePager || !browsing()) return;
                     root = homeRoot;
@@ -1355,6 +1752,9 @@ public class MainActivity extends Activity {
                     catch (Exception error) { error(error); }
                     root = savedRoot; renderSavedMatches();
                     selectBrowsePage();
+                    if ("loading".equals(loading.optString("state"))) footballUi.postDelayed(() -> {
+                        if (request == fixturesRequests[0] && requestedPager == browsePager && browsing()) loadFixtures(from, to);
+                    }, 2000);
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
@@ -1362,7 +1762,7 @@ public class MainActivity extends Activity {
                     root = homeRoot;
                     try { renderFixtures(localFixtures(from, to), true); }
                     catch (Exception localError) { error(localError); }
-                    label("Serveur indisponible · données enregistrées, pouvant être anciennes. Les autres matchs restent accessibles dans Matchs enregistrés.");
+                    label("Serveur indisponible · données enregistrées, pouvant être anciennes. Les autres matchs restent accessibles dans Rechercher un match, sur cet appareil.");
                     selectBrowsePage();
                 });
             }
@@ -1651,7 +2051,7 @@ public class MainActivity extends Activity {
         LocalDate to = calendar ? centre.plusDays(14) : centre.plusDays(1);
         String base = server();
         List<String> paths = new ArrayList<>();
-        paths.add("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to + "&lineups=1");
+        paths.add("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to + footballCompetitionQuery());
         if (!calendar) {
             for (String club : prefs.getStringSet("follow_teams", Collections.emptySet()))
                 paths.add("/v1/football/teams/" + club + "/matches?dateFrom=" + centre
@@ -1745,13 +2145,14 @@ public class MainActivity extends Activity {
                     LocalDate today = LocalDate.now();
                     String path = "/v1/football/teams/" + club + "/matches?dateFrom=" + today
                         + "&dateTo=" + today.plusYears(1) + "&limit=100";
-                    store.download(path, get(base, path));
-                    success = true;
+                    JSONObject data = new JSONObject(store.download(path, get(base, path)));
+                    success = !"loading".equals(data.optString("state")) && !"error".equals(data.optString("state"));
                 } catch (Exception unavailable) { /* Previously downloaded fixtures remain usable. */ }
                 boolean fetched = success;
                 runOnUiThread(() -> {
                     clubsFetching.remove(key);
                     if (fetched) clubFetched.put(key, System.currentTimeMillis());
+                    else footballUi.postDelayed(() -> { if (browsing() && !isDestroyed()) refreshClubFixtures(); }, 3000);
                     refreshHomeCard();
                 });
             });
@@ -1849,7 +2250,7 @@ public class MainActivity extends Activity {
         LinearLayout sides = new LinearLayout(this); sides.setOrientation(LinearLayout.VERTICAL);
         sides.setPadding(dp(12), 0, dp(8), 0);
         // A match under way or over carries its score; one still to come has nothing to say yet.
-        JSONObject score = state == null || demo ? null : fixture.optJSONObject("score");
+        JSONObject score = state == null || demo || (renderingSearch && searchHideScores) ? null : fixture.optJSONObject("score");
         JSONObject goals = score == null ? null : score.optJSONObject("fullTime");
         sides.addView(side(homeName, demo ? fixture.optString("demo_score_home", "") : goals == null ? "" : goals.optString("home", "")));
         sides.addView(side(awayName, demo ? fixture.optString("demo_score_away", "") : goals == null ? "" : goals.optString("away", "")));
@@ -1882,6 +2283,18 @@ public class MainActivity extends Activity {
             favoriteAppearance(star, fixture.optString("id"), title);
             star.setOnClickListener(v -> toggleFavorite(fixture, star, title));
             card.addView(star, barSize(0));
+            if (renderingSearch) {
+                Button more = button("⋮", () -> {}); more.setContentDescription("Options du match " + title);
+                more.setMinWidth(0); more.setMinimumWidth(0); more.setPadding(0, 0, 0, 0);
+                more.setOnClickListener(v -> {
+                    PopupMenu menu = new PopupMenu(this, more);
+                    menu.getMenu().add("Préparer hors ligne").setOnMenuItemClickListener(entry -> { prepareOffline(fixture); return true; });
+                    String held = store.downloaded("/v1/football/matches/" + fixture.optString("id"));
+                    if (held != null) menu.getMenu().add("Fiche téléchargée sur cet appareil").setEnabled(false);
+                    menu.show();
+                });
+                card.addView(more, new LinearLayout.LayoutParams(dp(40), dp(48)));
+            }
         } else {
             ImageView chevron = new ImageView(this);
             chevron.setImageResource(R.drawable.ic_chevron_right);
@@ -1918,6 +2331,7 @@ public class MainActivity extends Activity {
             case "GROUP_STAGE": named = "Phase de groupes"; break;
             case "PLAYOFFS": named = "Barrages"; break;
             case "PRELIMINARY_ROUND": named = "Tour préliminaire"; break;
+            case "LAST_32": named = "Seizièmes"; break;
             case "LAST_16": named = "Huitièmes"; break;
             case "QUARTER_FINALS": named = "Quarts de finale"; break;
             case "SEMI_FINALS": named = "Demi-finales"; break;
@@ -1926,6 +2340,23 @@ public class MainActivity extends Activity {
             default: named = code.isEmpty() ? "Match" : code.replace('_', ' ');
         }
         return matchday > 0 ? named + " · J" + matchday : named;
+    }
+
+    /** Order used by a knockout tournament, from its opening phase to its final. */
+    private int phaseRank(String code) {
+        switch (code) {
+            case "REGULAR_SEASON": return 10;
+            case "PRELIMINARY_ROUND": return 20;
+            case "GROUP_STAGE": return 30;
+            case "LAST_32": return 40;
+            case "LAST_16": return 50;
+            case "QUARTER_FINALS": return 60;
+            case "SEMI_FINALS": return 70;
+            case "THIRD_PLACE": return 80;
+            case "FINAL": return 90;
+            case "PLAYOFFS": return 100;
+            default: return 1000;
+        }
     }
 
     /** The provider's status, said plainly. Null when the kickoff time is the thing to show. */
@@ -2208,6 +2639,12 @@ public class MainActivity extends Activity {
         try {
         connection.setConnectTimeout(5000); connection.setReadTimeout(15000);
         connection.setInstanceFollowRedirects(false);
+        // Older deployments protected every football route. Sending the existing token when
+        // present is harmless for the public routes and lets the new search API work during a
+        // rolling backend update.
+        String footballToken = prefs == null ? "" : prefs.getString("token", "");
+        if (path.startsWith("/v1/football/") && !footballToken.isEmpty())
+            connection.setRequestProperty("Authorization", "Bearer " + footballToken);
         int code = connection.getResponseCode();
         java.io.InputStream stream = code < 400 ? connection.getInputStream() : connection.getErrorStream();
         String response;
@@ -2404,9 +2841,8 @@ public class MainActivity extends Activity {
      * and push the notes along the way when a token is configured.
      *
      * <p>The gesture is explicit, so it overrides what holds back the automatic refresh — once a
-     * minute, and only in the window where the lineup changes. Someone pulling the page is asking
-     * now, and "not time yet" cannot be told apart from a failure by whoever is looking at the
-     * screen. Only the real obstacles remain: no address, a match that does not come from the
+     * minute. Someone pulling the page is asking now, and "not time yet" cannot be told apart
+     * from a failure by whoever is looking at the screen. Only the real obstacles remain: no address, a match that does not come from the
      * provider, or an open note — players must not move under the finger. Each one says so;
      * refusing silently would look like a failed gesture.
      *

@@ -18,8 +18,10 @@ from uuid import UUID
 
 if __package__:
     from .espn import Espn
+    from .football_data import FootballData
 else:
     from espn import Espn
+    from football_data import FootballData
 
 DEMO = Path(__file__).resolve().parents[1] / 'android/app/src/main/assets/match.json'
 # Each action carries its own polarity; the client derives colour and balance from it,
@@ -85,6 +87,13 @@ def football(espn, route, query):
     rest = parts[2:]
     if rest == ['competitions']:
         return espn.competitions()
+    if rest == ['search']:
+        return espn.search(one(query, 'competition', ''), one(query, 'season', ''),
+                           one(query, 'team', ''), one(query, 'phase', ''),
+                           one(query, 'dateFrom'), one(query, 'dateTo'),
+                           int(one(query, 'page', '0')), one(query, 'q', ''))
+    if len(rest) == 3 and rest[0] == 'competitions' and rest[2] == 'seasons':
+        return espn.seasons(rest[1])
     if rest == ['matches']:
         today = date.today().isoformat()
         codes = [c for c in (one(query, 'competitions', '') or '').split(',') if c]
@@ -379,9 +388,9 @@ def append(db, op):
 
 
 def make_server(host, port, path, token):
-    espn = Espn()
     with connect(path):
         pass
+    espn = FootballData(path)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -425,7 +434,9 @@ def make_server(host, port, path, token):
                     return self.reply(200, data)
             except LookupError:
                 return self.reply(404, {'error': 'Donnée football inconnue'})
-            except (RuntimeError, OSError, ValueError, KeyError, TypeError, AttributeError):
+            except ValueError:
+                return self.reply(400, {'error': 'Paramètres football invalides'})
+            except (RuntimeError, OSError, KeyError, TypeError, AttributeError):
                 return self.reply(503, {'error': 'Données football indisponibles'})
             if not self.authorized():
                 return
@@ -437,10 +448,39 @@ def make_server(host, port, path, token):
                 return self.reply(200, [{'seq': s, 'operation': json.loads(p)} for s, p in rows])
             self.reply(404, {'error': 'Route inconnue'})
 
+        def do_PUT(self):
+            if not self.authorized():
+                return
+            route = urllib.parse.urlparse(self.path).path
+            prefix = '/v1/football/follows/'
+            if not route.startswith(prefix):
+                return self.reply(404, {'error': 'Route inconnue'})
+            try:
+                device = str(UUID(route[len(prefix):]))
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 65536:
+                    return self.reply(413, {'error': 'Taille de requête invalide'})
+                return self.reply(200, espn.set_follows(device, json.loads(self.rfile.read(length))))
+            except (ValueError, TypeError, LookupError):
+                return self.reply(400, {'error': 'Suivis invalides'})
+
         def do_POST(self):
             self.started = time.monotonic()
             if not self.authorized():
                 return
+            refresh = re.fullmatch(r'/v1/football/competitions/([A-Z0-9]+)/seasons/(\d{4})/refresh', self.path)
+            detail = re.fullmatch(r'/v1/football/matches/(\d+)/refresh', self.path)
+            if refresh or detail:
+                try:
+                    data = (espn.refresh_archive(*refresh.groups()) if refresh else
+                            espn.match(detail.group(1), refresh=True))
+                    return self.reply(200 if data else 404, data or {'error': 'Match inconnu'})
+                except LookupError:
+                    return self.reply(404, {'error': 'Compétition inconnue'})
+                except ValueError:
+                    return self.reply(400, {'error': 'Paramètres invalides'})
+                except OSError:
+                    return self.reply(503, {'error': 'Fournisseur indisponible'})
             if self.path != '/v1/operations':
                 return self.reply(404, {'error': 'Route inconnue'})
             try:
@@ -454,7 +494,16 @@ def make_server(host, port, path, token):
             except (ValueError, KeyError, TypeError, AttributeError):
                 self.reply(400, {'error': 'Opération invalide ou identifiant réutilisé'})
 
-    return ThreadingHTTPServer((host, port), Handler)
+    class FootballServer(ThreadingHTTPServer):
+        def server_close(self):
+            espn.close()
+            super().server_close()
+
+    try:
+        return FootballServer((host, port), Handler)
+    except Exception:
+        espn.close()
+        raise
 
 
 def sources(folder):
@@ -464,7 +513,7 @@ def sources(folder):
     before it writes would otherwise look like a change, and then like a change back.
     """
     marks = {}
-    for path in sorted(Path(folder).glob('*.py')):
+    for path in sorted([*Path(folder).glob('*.py'), *Path(folder).glob('*.json')]):
         try:
             marks[path.name] = path.stat().st_mtime
         except OSError:

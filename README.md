@@ -5,15 +5,25 @@ the ones shown on screen, left as they appear there.
 
 ## Navigation and search
 
-Three cards: **Mes matchs annotés** (my annotated matches) on the left, **Accueil** (home) in the
-centre and **Matchs enregistrés** (saved matches) on the right; from home, swiping right opens the
-annotated matches, swiping left the saved matches. The **Calendrier** (calendar) is a separate
-screen, opened by the "Calendrier ›" links on home: it is a destination you ask for, not a card you
-come across. Once inside, swiping changes the week — left for the next one, right for the
-previous one — like the two arrows in the header, which make exactly the same movement. A week
-always runs from Monday to Sunday: the dates in the header are the calendar's, not a seven-day
-window around the day it was opened. The
-neighbouring week is already drawn before you get there: the three weeks displayed are requested together.
+Three cards: **Mes matchs annotés** on the left, **Accueil** in the centre and
+**Rechercher un match** on the right. The calendar remains a separate screen with three
+adjacent Monday-to-Sunday weeks and a search within the displayed week.
+
+Match search starts with a competition and season/edition, then optionally filters by team,
+phase or dates. Results are paginated by 50. The first request for an unknown season schedules
+an import; the UI shows progress and known results while the server fills its database. Subsequent
+searches read SQLite, without asking ESPN again. Missing, partial and failed imports are distinct
+from an empty result. **Masquer les scores** applies only to search results, not the match sheet.
+**Sur cet appareil** searches local matches without importing anything; its reset action removes
+the competition and season selection to browse all local matches.
+
+**Mes suivis** separates competitions and teams, shows the current selection first, and groups
+competitions by international events, European cups and country, with All/Men/Women filters.
+The curated catalogue has 23 competitions: the previous 13, Europa League, the French and English
+national cups, plus the women's World Cup, Euro, Champions League, French/English/Spanish leagues
+and NWSL. Teams can be loaded by competition rather than depending on previously opened calendars.
+Follows personalise home; they never restrict archive search.
+
 The annotated matches gather the fixtures with at least one non-deleted note, even finished ones,
 including demos and synced notes. Search filters teams, competition, date and note text,
 ignoring case and accents. A match whose details are missing
@@ -32,22 +42,20 @@ each club chosen in **Mes suivis** (my follows), without listing twice a fixture
 followed clubs. Finished, cancelled, postponed or already started matches are left out of this
 section; **Aujourd'hui** (today) remains available.
 
-The server exposes `/v1/football/teams/{id}/matches`. In a club's own schedule, ESPN only
-publishes fixtures already played; so the server reads the schedule of the league the club
-plays in — resolved once for the season — then keeps only its fixtures, adding its European
-nights. The client asks for the year ahead (100 fixtures at most per
-club), then picks the next match by date. Responses join the saved calendars for offline use. A club with no
-known future fixture is flagged, and successful loads are not repeated within five minutes
-during a single session. Restart the server after this update to enable the new route.
+The server exposes `/v1/football/teams/{id}/matches`. Team memberships learned from calendars
+and team catalogues select the relevant competitions; unknown memberships initially search the
+curated catalogue. The client asks for the coming year (at most 100 fixtures per team), keeps
+results locally and polls pending imports without causing duplicate ESPN calls.
 
 ## Offline use
 
 The app automatically keeps the calendars viewed, the details of opened matches
 (lineups, facts and statistics), the competition catalogue viewed and the crests displayed.
-The **Matchs enregistrés** card, to the right of home, also exists in demo mode: this list stays reachable after
-the app is closed, with no server, no follow filter and no date limit. A match known
-only from its calendar already lets you take general notes; its lineup requires
-a first download online.
+The former saved-matches card is now the **Sur cet appareil** mode of match search. It remains
+available after closing the app and without a server. A calendar entry already allows general
+notes; lineups need their first online download. The match's ⋮ menu offers **Préparer hors ligne**:
+this downloads its sheet onto the phone and reports whether a lineup is available. Opening or
+favouriting a match also keeps its sheet. This does not download every season's compositions.
 
 Local copies are displayed immediately. Outside demo mode, calendars are refreshed in the
 background if the server answers; opened matches are too, without replacing a note
@@ -64,8 +72,9 @@ notes, reopening, overlapping calendars, keeping lineups and invalid transaction
 
 ## Football data: ESPN (personal use)
 
-Everything comes from ESPN's public feed, with no key and no account: the competition catalogue,
-calendars, a club's schedule and a match sheet. The `/v1/football/…` contract has not
+Fonote maintains its classified competition catalogue in `backend/competitions.json`. ESPN's
+public feed supplies seasons, teams, calendars and match sheets, with no provider key. The Android
+bundled catalogue is a symlink to the same configuration, so it is available on first launch. The `/v1/football/…` contract has not
 changed shape — it is the one the client saves on the device and reads back offline — but
 the identifiers it carries are ESPN's.
 
@@ -80,14 +89,29 @@ openable for general notes.
 
 Shirt colours come from ESPN: they are lightened so that the number stays
 legible, and the away team switches to its alternate colour if the two look too
-alike. An in-memory cache limits calls: five minutes at least for home, calendars and followed clubs, even today's.
-Only the details of a match opened live may be read again after thirty seconds. The
-catalogue and a league's list of clubs last a day. A calendar queries
-the thirteen competitions, four at a time: requested one after another they would keep the
-client waiting on a page it has already drawn from its local copy, all at once they would arrive
-in a burst on a feed where we are a guest. A league that does not answer stays quiet without
-failing the others. ESPN itself declares its feed stale after nine seconds, so this pace
-stays well below what its own cache expects.
+alike. The Python server persists football responses, fixtures, details, import jobs and explored
+periods in separate SQLite tables alongside the unchanged annotation log. Restarting preserves
+this data and resumes interrupted imports. Imports use calendars only; list views do not fetch
+individual sheets just to discover lineup availability.
+
+All provider requests go through one serial gate. `FONOTE_ESPN_INTERVAL` defaults to 2 seconds
+between starts; `FONOTE_ESPN_BACKGROUND_INTERVAL` defaults to 10 seconds for background imports.
+Interactive requests have priority over background work. These are local traffic policies, not
+an ESPN-guaranteed quota. Errors trigger increasing delays; HTTP 429 honours `Retry-After` and
+pauses all provider URLs. HTTP 403 persists a stop: investigate the refusal before explicitly
+restarting once with `FONOTE_ESPN_RESUME=1`, then remove that setting.
+
+Only followed competitions' current seasons are prepared automatically. Device follows are
+sent through an authenticated, idempotent PUT using the existing server token; preferences remain
+per device, while the server maintains their union. Without that token, follows remain local and
+archive search still works. Removing a follow does not delete its historical data.
+
+Season/team catalogues are checked weekly, followed seasons daily, visible periods containing
+today after five minutes and other active periods after six hours. A live open sheet may refresh
+after thirty seconds, another unfinished sheet after five minutes. Finished archives are retained;
+a final calendar check is made after season closure. Explicit authenticated refresh routes allow
+later corrections. A season response at the 500-result limit is split into smaller date ranges.
+A processed period means requests succeeded, not that ESPN's historical archive is complete.
 
 On home and the calendar, pulling down from the top of the list and releasing
 refreshes the data. A loading indicator appears centred above the content, then
@@ -97,9 +121,9 @@ Home also reads again the favourite matches and the next matches of followed clu
 
 The gesture reads the server again without forcing ESPN: the cache durations above still apply,
 and simultaneous requests for the same resource share a single ESPN read.
-When the provider fails, its last cached response stays available and a new
-attempt waits five minutes, even if no response had been obtained yet. With no connection,
-the data already saved on the phone can still be viewed.
+When the provider fails, previously stored matches and sheets remain usable. Failed imports
+stay retryable and cannot mark a missing archive as an empty completed season. No connection is
+needed to read data already saved on the phone.
 
 The server also reports how the match unfolds — substitutions, goals, cards, actual kick-off and
 half-time — in `timeline` and `clock`, substitutes in `bench`, team counters
@@ -205,9 +229,10 @@ First Android prototype for taking football notes, with a personal server shared
   percentages only repeat the pair above them. A match about which the provider reports
   nothing but still counts has no facts card, and its first swipe right
   therefore leads straight to the figures.
-- During a followed match, the app asks again for the lineup **once a minute**, and only
-  where it is useful: match screen, from an hour before kick-off until the 140th minute,
-  never while a note is open — players must not move under the finger. A
+- While a match is on screen, the app asks the server again **once a minute**, whatever the
+  hour and even once the match is over: whether ESPN is worth asking again is the server's call,
+  and its cache answers a match that has not moved. The only pause is an open note — players
+  must not move under the finger. A
   refresh that fails is a missed refresh, not an error message: notes
   are local and the next minute tries again.
 - The pitch follows the match: a published substitution brings the player on at the stated minute, in the place
@@ -420,7 +445,7 @@ First Android prototype for taking football notes, with a personal server shared
 - SQLite on Android; offline saving, kept after the app is closed.
 - **Pulling any match card down refreshes the match.** The gesture asks the
   provider again for what it publishes about this fixture, and overrides what holds back the automatic
-  tracking — once a minute, and only in the window where the lineup changes: whoever
+  tracking — once a minute: whoever
   pulls the page is asking now, and "not time yet" cannot be told apart from a failure by
   whoever is looking at the screen. Only the real obstacles remain, each stated as it is: no address,
   a match that does not come from the provider, demo mode, or an open note — players must
@@ -468,8 +493,8 @@ During development, `--reload` restarts the server every time a file in `backend
 with no dependency, one process watches modification times and restarts its
 child. The watching process never imports what it watches: a typo only
 kills the child, the traceback shows in the terminal, and the next save brings back a server
-that works. A restart also empties the ESPN in-memory cache and reads the `.env` again, which is
-precisely the point.
+that works. A restart preserves the football SQLite cache and import queue, and reads `.env` again.
+The watcher also detects changes to the competition configuration.
 
 ```bash
 python3 backend/server.py --db fonote.sqlite3 --reload
@@ -620,16 +645,22 @@ Android flows to check on a device: write a note with several players without le
 
 ## Server contract and persistence
 
-Every route requires `Authorization: Bearer <token>`:
+Football GET routes and health are public. Annotation routes, follow declarations and explicit
+archive refreshes require `Authorization: Bearer <token>`:
 
 | Route | Response / effect |
 |---|---|
 | `GET /v1/matches` | The bundled match, its 22 players and its source |
-| `GET /v1/football/competitions` | The thirteen competitions the server can serve |
-| `GET /v1/football/matches?lineups=1` | The calendar, saying which lineups are already published |
+| `GET /v1/football/competitions` | The 23 classified competitions and catalogue version |
+| `GET /v1/football/matches?lineups=1` | Compatibility flag; lists use only already-known lineup information |
 | `GET /v1/football/competitions/{code}/teams` | A competition's teams, to choose one's follows |
 | `GET /v1/football/matches?dateFrom=…&dateTo=…` | Matches in a period, for home and the calendar |
 | `GET /v1/football/matches/{id}` | Details, published lineup, substitutes, match events and actual times |
+| `GET /v1/football/competitions/{code}/seasons` | Known editions and import state |
+| `GET /v1/football/search?competition=WC&season=2022` | Matches, team/phase facets, pagination and import state; optional `team`, `phase`, `dateFrom`, `dateTo`, `page` |
+| `PUT /v1/football/follows/{installation_uuid}` | Replace this device's `competitions` and `teams` arrays |
+| `POST /v1/football/competitions/{code}/seasons/{year}/refresh` | Schedule an explicit archive correction |
+| `POST /v1/football/matches/{id}/refresh` | Refresh a retained match sheet |
 | `POST /v1/operations` | Records an operation; returns `{seq, operation}` |
 | `GET /v1/operations` | Full ordered log, usable by Android or Quest |
 
@@ -757,3 +788,11 @@ bash scripts/check-offline-android.sh
 
 The instrumentation checks real gestures, the diamond's states, navigation, undo,
 annotations and SQLite atomicity in a separate test log.
+
+### Search and provider traffic checks
+
+`python3 -m unittest backend.test_football_data -v` exercises first imports, restarts, deduplication,
+partial calendars, detail retention, per-device follows, serial traffic and global 429/403 pauses
+with a simulated provider. `bash scripts/check-offline-android.sh` also runs a local simulated
+HTTP server inside the emulator to check classified follows, progressive search, hidden scores
+and explicit offline preparation. These checks do not crawl ESPN.
