@@ -517,7 +517,7 @@ Copier `.env.example` vers `.env` et renseigner le jeton :
 
 ```env
 FONOTE_TOKEN=le-meme-jeton-que-dans-l-application
-FONOTE_BACKEND_IMAGE=registry.mmyumu.fr/fonote-backend:1.0.0
+FONOTE_BACKEND_IMAGE=registry.mmyumu.fr/fonote-backend:1.1.0
 ```
 
 Sans `FONOTE_TOKEN`, `docker compose` refuse de démarrer plutôt que de lancer un serveur qui
