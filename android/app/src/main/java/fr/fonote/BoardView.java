@@ -118,13 +118,14 @@ final class BoardView extends View {
     private IntConsumer onSelect;
     private Runnable onChange;
 
-    BoardView(Context context, JSONObject match, boolean glass, int held, int heldEnd,
-              boolean editable, boolean compact) {
+    BoardView(Context context, JSONObject match, boolean glass, int held, int heldEnd, int lawn,
+              int lawnEnd, boolean editable, boolean compact) {
         super(context);
         this.match = match; this.glass = glass; this.held = held; this.heldEnd = heldEnd;
         this.editable = editable; this.compact = compact;
         grass = new Pitch(context);
-        setBackground(Pitch.turf(compact ? 12 : 20, context.getResources().getDisplayMetrics().density));
+        setBackground(Pitch.turf(lawn, lawnEnd, compact ? 12 : 20,
+            context.getResources().getDisplayMetrics().density));
         setClipToOutline(true);
         ink.setTextAlign(Paint.Align.CENTER);
         if (!editable) setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);

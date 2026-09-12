@@ -10,8 +10,11 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
+import android.graphics.Outline;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -237,7 +240,7 @@ public class MainActivity extends Activity {
         forgetTheFormerProvider();
         skin = Skin.of(prefs.getString("skin", null));
         // The window shows for an instant before the first page is built; in its own colour.
-        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(skin.background));
+        getWindow().setBackgroundDrawable(wallpaper());
         // Weight carries the polarity: colour, palette side and the balance all derive from it,
         // instead of asking for "good" or "bad" as if it were a separate action.
         action("positive", "+", "Bonne action", "Bon", 1);
@@ -508,7 +511,7 @@ public class MainActivity extends Activity {
     }
     private LinearLayout frame() {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(16), dp(16), dp(16)); box.setBackgroundColor(skin.background);
+        box.setPadding(dp(16), dp(16), dp(16), dp(16)); box.setBackgroundColor(ground());
         return box;
     }
     private LinearLayout page(String title) { return page(title, null); }
@@ -525,7 +528,7 @@ public class MainActivity extends Activity {
         Pull scroll = new Pull(this);
         if (card == HOME) scroll.onPull(this::refreshData, () -> !refreshing);
         // Without this the page ends where its content does and the window shows through.
-        scroll.setFillViewport(true); scroll.setBackgroundColor(skin.background);
+        scroll.setFillViewport(true); scroll.setBackgroundColor(ground());
         dressWindow();
         root = frame(); root.setPadding(dp(16), dp(10), dp(16), dp(24));
         scroll.addView(root);
@@ -591,10 +594,22 @@ public class MainActivity extends Activity {
         heading.setAllCaps(skin.capitals); heading.setLetterSpacing(skin.tracking);
         return heading;
     }
-    /** Both bars are part of the page, and a light page wants its icons drawn in ink. */
+    /**
+     * What a page is painted on. Its own colour, except under a skin that cuts its ground: one
+     * diagonal across the whole screen, like a wallpaper, and not one per page — a list that
+     * scrolls or a card that slides would carry theirs off with them. The pages go transparent
+     * and the window holds it still behind them.
+     */
+    private int ground() { return skin.sash == 0 ? skin.background : Color.TRANSPARENT; }
+    private Drawable wallpaper() { return cut(rounded(skin.background, 0), skin.sash, 0, 0); }
+    /**
+     * Both bars are part of the page, and a light page wants its icons drawn in ink. Under a
+     * cut ground they let the diagonal run under them to the screen's own corners.
+     */
     private void dressWindow() {
-        getWindow().setStatusBarColor(skin.background);
-        getWindow().setNavigationBarColor(skin.background);
+        getWindow().setBackgroundDrawable(wallpaper());
+        getWindow().setStatusBarColor(ground());
+        getWindow().setNavigationBarColor(ground());
         View decor = getWindow().getDecorView();
         int lit = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         decor.setSystemUiVisibility(skin.light
@@ -626,6 +641,38 @@ public class MainActivity extends Activity {
         GradientDrawable shape = rounded(skin.flat ? Color.TRANSPARENT : fill, skin.card);
         if (skin.bordered && !skin.flat) shape.setStroke(dp(1), skin.hairline);
         return shape;
+    }
+    /**
+     * A ground cut corner to corner, the way a Monaco shirt is: from the top left down to the
+     * bottom right, the upper half in the sash. The edge is left outside the cut, so that a
+     * rounded ground keeps one outline all the way round. A sash of 0 leaves it as it was.
+     */
+    private Drawable cut(GradientDrawable card, int sash, int radius, int stroke) {
+        if (sash == 0) return card;
+        Paint pen = new Paint(Paint.ANTI_ALIAS_FLAG); pen.setColor(sash);
+        Path inside = new Path(), half = new Path();
+        return new Drawable() {
+            @Override protected void onBoundsChange(Rect box) {
+                card.setBounds(box);
+                float edge = dp(stroke), corner = Math.max(0, dp(radius) - edge);
+                inside.reset();
+                inside.addRoundRect(box.left + edge, box.top + edge, box.right - edge,
+                    box.bottom - edge, corner, corner, Path.Direction.CW);
+                half.reset();
+                half.moveTo(box.left, box.top); half.lineTo(box.right, box.top);
+                half.lineTo(box.right, box.bottom); half.close();
+            }
+            @Override public void draw(Canvas canvas) {
+                card.draw(canvas);
+                canvas.save(); canvas.clipPath(inside); canvas.drawPath(half, pen); canvas.restore();
+            }
+            @Override public void getOutline(Outline outline) { card.getOutline(outline); }
+            @Override public void setAlpha(int alpha) { card.setAlpha(alpha); pen.setAlpha(alpha); }
+            @Override public void setColorFilter(ColorFilter filter) {
+                card.setColorFilter(filter); pen.setColorFilter(filter);
+            }
+            @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+        };
     }
     /**
      * What holds a flat list together in place of the cards it does without. Nothing at all on
@@ -768,7 +815,7 @@ public class MainActivity extends Activity {
         screen = "calendar";
         dressWindow();
         LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(skin.background);
+        layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(ground());
         LinearLayout header = frame();
         header.setPadding(dp(16), dp(10), dp(16), dp(12));
         LinearLayout bar = titleBar("Calendrier", this::showHome);
@@ -804,7 +851,7 @@ public class MainActivity extends Activity {
             Pull week = new Pull(this);
             week.onPull(this::refreshData, () -> !refreshing);
             // Without this the page ends where its content does and the window shows through.
-            week.setFillViewport(true); week.setBackgroundColor(skin.background);
+            week.setFillViewport(true); week.setBackgroundColor(ground());
             weekRoots[i] = frame(); weekRoots[i].setPadding(dp(16), 0, dp(16), dp(24));
             week.addView(weekRoots[i]); weekPager.addPage(week);
         }
@@ -975,7 +1022,7 @@ public class MainActivity extends Activity {
         ScrollView list = (ScrollView) root.getParent();
         root.removeView(title); annotatedCard.removeAllViews();
         LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setBackgroundColor(skin.background);
+        layout.setBackgroundColor(ground());
         LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
         header.addView(title);
         header.addView(searchField("Équipe, compétition, date ou note", annotatedSearch, query -> {
@@ -1047,7 +1094,7 @@ public class MainActivity extends Activity {
         root.removeView(title);
         ((android.view.ViewGroup) list.getParent()).removeView(list);
         LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(skin.background);
+        layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(ground());
         LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
         header.addView(title);
         // Hundreds of clubs come back from a season's calendars: typing a name beats a long thumb.
@@ -1172,7 +1219,7 @@ public class MainActivity extends Activity {
         ScrollView list = (ScrollView) root.getParent();
         root.removeView(title); savedCard.removeAllViews();
         LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setBackgroundColor(skin.background);
+        layout.setBackgroundColor(ground());
         LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
         header.addView(title);
         layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
@@ -1421,7 +1468,7 @@ public class MainActivity extends Activity {
         homeCard.removeAllViews();
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setBackgroundColor(skin.background);
+        layout.setBackgroundColor(ground());
         LinearLayout header = frame();
         header.setPadding(dp(16), dp(10), dp(16), 0);
         header.addView(bar);
@@ -2195,7 +2242,7 @@ public class MainActivity extends Activity {
         tallyPage = matchCard(CARD_TALLY);
         LinearLayout screenRoot = new LinearLayout(this);
         screenRoot.setOrientation(LinearLayout.VERTICAL);
-        screenRoot.setBackgroundColor(skin.background);
+        screenRoot.setBackgroundColor(ground());
         // La ligne d'actualisation est au-dessus du pager et non dedans : elle doit prendre
         // exactement la hauteur que le doigt a ouverte, à l'instant où la carte la rend, sinon
         // la page saute d'un pixel au relâchement. Repliée, elle ne coûte rien.
@@ -2224,7 +2271,7 @@ public class MainActivity extends Activity {
         clockLabel.setContentDescription("Chronomètre du match, toucher pour ajuster ou changer de période");
         clockLabel.setOnClickListener(v -> clock()); header.addView(clockLabel,new LinearLayout.LayoutParams(-2,dp(48)));
         pitch = new PitchView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
-            Skin.onGrass(skin.ringEnd), minute, this::tapPlayer, this::pullPlayer);
+            Skin.onGrass(skin.ringEnd), skin.lawn, skin.lawnEnd, minute, this::tapPlayer, this::pullPlayer);
         pitch.setMinimumHeight(dp(300));
         LinearLayout.LayoutParams pitchSize = new LinearLayout.LayoutParams(-1, 0, 1);
         pitchSize.topMargin = dp(8); pitchSize.bottomMargin = dp(8);
@@ -2252,7 +2299,7 @@ public class MainActivity extends Activity {
     private LinearLayout matchCard(int card) {
         Pull scroll = new Pull(this);
         // Sans cela la carte s'arrête où son contenu s'arrête, et la fenêtre transparaît dessous.
-        scroll.setFillViewport(true); scroll.setBackgroundColor(skin.background);
+        scroll.setFillViewport(true); scroll.setBackgroundColor(ground());
         scroll.onPull(this::pullMatch, () -> !refreshing && !syncing);
         LinearLayout page = frame();
         scroll.addView(page);
@@ -2507,7 +2554,7 @@ public class MainActivity extends Activity {
     private int sideColour(String side) {
         JSONObject team = sideTeam(side);
         return team == null ? skin.ink
-            : Skin.readable(Color.parseColor(team.optString("colour")), skin.background);
+            : Skin.readable(Color.parseColor(team.optString("colour")), skin.page());
     }
 
     // ——— Composition d'une note ———
@@ -3063,7 +3110,7 @@ public class MainActivity extends Activity {
         minuteSize.leftMargin = dp(6);
         bar.addView(tacticMinute, minuteSize);
         board = new BoardView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
-            Skin.onGrass(skin.ringEnd), true, false);
+            Skin.onGrass(skin.ringEnd), skin.lawn, skin.lawnEnd, true, false);
         board.setDiagram(diagram);
         board.setTime(tacticTime);
         board.setTravel(prefs.getInt("travel", BoardView.AUTO));
@@ -4383,7 +4430,7 @@ public class MainActivity extends Activity {
         caption.setLineSpacing(dp(4), 1);
         if (schema != null) {
             BoardView preview = new BoardView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
-                Skin.onGrass(skin.ringEnd), false, true);
+                Skin.onGrass(skin.ringEnd), skin.lawn, skin.lawnEnd, false, true);
             preview.setDiagram(Diagram.from(schema));
             LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(150), dp(190));
             size.topMargin = dp(4); size.rightMargin = dp(12);
@@ -4532,7 +4579,7 @@ public class MainActivity extends Activity {
         card.setPadding(dp(12), dp(12), dp(12), dp(12));
         GradientDrawable back = rounded(candidate.background, skin.card);
         back.setStroke(dp(chosen ? 2 : 1), chosen ? skin.accent : skin.hairline);
-        card.setBackground(back);
+        card.setBackground(cut(back, candidate.sash, skin.card, chosen ? 2 : 1));
         LinearLayout sample = strip();
         LinearLayout.LayoutParams leading = new LinearLayout.LayoutParams(0, dp(30), 1);
         leading.rightMargin = dp(6);
@@ -4613,7 +4660,8 @@ public class MainActivity extends Activity {
         card.setOrientation(LinearLayout.VERTICAL); card.setGravity(Gravity.CENTER);
         card.setPadding(dp(10), dp(14), dp(10), dp(14));
         // The sample sits on a patch of pitch, because that is the only place it will ever be seen.
-        GradientDrawable back = rounded(Color.rgb(24, 56, 46), skin.card);
+        GradientDrawable back = Pitch.turf(skin.lawn, skin.lawnEnd, skin.card,
+            getResources().getDisplayMetrics().density);
         back.setStroke(dp(chosen ? 2 : 1), chosen ? skin.accent : skin.hairline);
         card.setBackground(back);
         TextView sample = new TextView(this);

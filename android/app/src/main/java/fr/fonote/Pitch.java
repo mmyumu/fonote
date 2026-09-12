@@ -27,10 +27,10 @@ final class Pitch {
 
     Pitch(Context context) { density = context.getResources().getDisplayMetrics().density; }
 
-    /** The dark green the lines are drawn on, rounded like a card. */
-    static GradientDrawable turf(int radius, float density) {
+    /** The green the lines are drawn on, from the skin's far end to its near one, rounded like a card. */
+    static GradientDrawable turf(int lawn, int lawnEnd, int radius, float density) {
         GradientDrawable background = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-            new int[]{Color.rgb(31, 72, 57), Color.rgb(15, 43, 36)});
+            new int[]{lawn, lawnEnd});
         background.setCornerRadius(radius * density);
         return background;
     }

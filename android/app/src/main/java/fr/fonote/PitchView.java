@@ -61,13 +61,13 @@ final class PitchView extends FrameLayout {
     private final java.util.List<JSONObject> roster = new java.util.ArrayList<>();
     private final java.util.List<LinearLayout> markers = new java.util.ArrayList<>();
     private final java.util.List<TextView> labels = new java.util.ArrayList<>();
-    PitchView(Context context, JSONObject match, boolean glass, int held, int heldEnd, int minute,
-              Consumer<String> select, Consumer<String> pull) {
+    PitchView(Context context, JSONObject match, boolean glass, int held, int heldEnd, int lawn,
+              int lawnEnd, int minute, Consumer<String> select, Consumer<String> pull) {
         super(context);
         this.match = match; this.glass = glass; this.held = held; this.heldEnd = heldEnd;
         setWillNotDraw(false);
         grass = new Pitch(context);
-        setBackground(Pitch.turf(20, getResources().getDisplayMetrics().density));
+        setBackground(Pitch.turf(lawn, lawnEnd, 20, getResources().getDisplayMetrics().density));
         setClipToOutline(true);
         // Team colours travel with the match: identity is data, not theme.
         JSONArray teams = match.optJSONArray("teams");

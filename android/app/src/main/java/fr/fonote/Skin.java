@@ -50,6 +50,19 @@ public final class Skin {
      * on the screen, which suits a football notebook.
      */
     public boolean flat;
+    /**
+     * The half the page is cut in, corner to corner across the screen, or 0 for a page of one
+     * colour. Only a pale one: what is written on the page runs across the cut, and has to read
+     * on either side of it.
+     */
+    public int sash;
+    /**
+     * The turf, from its far end to its near one. The same night green under every skin but
+     * one: a pale page can bring it up a shade, a pitch in daylight rather than under
+     * floodlights, so that it does not sit on the screen as a dark hole. Green whatever the
+     * skin, and never so pale that the white of the lines stops standing out on it.
+     */
+    public int lawn = rgb(31, 72, 57), lawnEnd = rgb(15, 43, 36);
     /** A light skin: the system bars want dark icons, and the dialogs a light sheet. */
     public boolean light;
     /** Headings: the family they are set in, whether they shout, and how far apart they stand. */
@@ -81,6 +94,8 @@ public final class Skin {
         this.ring = ring; this.ringEnd = ringEnd; return this;
     }
     private Skin rows() { this.flat = true; return this; }
+    private Skin cut(int sash) { this.sash = sash; return this; }
+    private Skin lawn(int lawn, int lawnEnd) { this.lawn = lawn; this.lawnEnd = lawnEnd; return this; }
     private Skin polarity(int good, int goodFill, int bad, int badFill, int onBad) {
         this.good = good; this.goodFill = goodFill;
         this.bad = bad; this.badFill = badFill; this.onBad = onBad; return this;
@@ -94,6 +109,14 @@ public final class Skin {
     }
     private Skin headings(String face, boolean capitals, float tracking) {
         this.face = face; this.capitals = capitals; this.tracking = tracking; return this;
+    }
+
+    /**
+     * The ground a colour written on the page has to clear: the page itself, or, where it is cut
+     * in two, whichever half the ink reads worse on. What reads there reads on the other half.
+     */
+    public int page() {
+        return sash != 0 && contrast(ink, sash) < contrast(ink, background) ? sash : background;
     }
 
     /** The accent travels rather than sitting still: a button is painted end to end. */
@@ -254,9 +277,32 @@ public final class Skin {
             .headings("sans-serif-black", false, -.02f);
     }
 
+    /**
+     * La Diagonale : le maillot de l'AS Monaco, rouge et blanc coupés de l'épaule droite à la
+     * hanche gauche. Vue de face, la coupe descend du coin haut gauche au coin bas droit de
+     * l'écran, une seule fois, en fond, le rouge en haut à droite, côté cœur. Les cartes
+     * restent blanches : coupées chacune, une liste de matchs devenait une pile de maillots.
+     *
+     * <p>Le rouge franc est gardé pour ce qui mène quelque part : le bouton principal, les
+     * liens, et l'anneau du joueur qu'on note, qui passe du rouge au blanc. Sur la page, la
+     * moitié rouge n'est qu'un voile, parce que les titres et les listes traversent la coupe.
+     * Le raté prend l'orange brûlé : en rouge, il se confondrait avec l'accent. La pelouse est
+     * d'un vert plus clair que partout ailleurs : le vert de nuit faisait un trou dans la page.
+     */
+    private static Skin diagonale() {
+        return new Skin("diagonale", "Diagonale", "Rouge et blanc coupés en biais, hommage à l’AS Monaco.")
+            .grounds(rgb(246, 243, 243), rgb(255, 255, 255), rgb(243, 236, 237), rgb(28, 16, 18), rgb(110, 86, 90))
+            .leading(rgb(204, 0, 18), rgb(204, 0, 18), rgb(255, 255, 255))
+            .signature(rgb(204, 0, 18), rgb(255, 255, 255))
+            .polarity(rgb(22, 116, 70), rgb(222, 242, 230), rgb(176, 72, 0), rgb(253, 236, 222), rgb(255, 255, 255))
+            .shape(8, 8, 22, SOFT, true).cut(rgb(251, 226, 229)).lawn(rgb(52, 112, 80), rgb(32, 84, 60))
+            .edges(veil(52, 204, 0, 18), LIGHT_RIPPLE, true)
+            .headings("sans-serif-condensed", true, .06f);
+    }
+
     /** In the order they are offered; the first is what a reader who never chose ever sees. */
     public static final List<Skin> ALL = new ArrayList<>(Arrays.asList(
-        terrain(), minuit(), papier(), stade(), argile(), fil(), vert(), bleu()));
+        terrain(), minuit(), papier(), stade(), argile(), fil(), vert(), bleu(), diagonale()));
 
     /** The skin a saved preference names, or the original one — including for a key since dropped. */
     public static Skin of(String key) {

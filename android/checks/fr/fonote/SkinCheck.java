@@ -59,15 +59,35 @@ public final class SkinCheck {
             legible(skin, "action réussie sur le fond", skin.good, skin.background, 4.5);
             legible(skin, "action ratée sur le fond", skin.bad, skin.background, 4.5);
             legible(skin, "libellé sur une action ratée", skin.onBad, skin.bad, 4.5);
+            // A page cut in two halves is read across the cut: what reads on the page has to
+            // read on its other half too.
+            if (skin.sash != 0) {
+                legible(skin, "texte sur la moitié coupée", skin.ink, skin.sash, 7);
+                legible(skin, "texte secondaire sur la moitié coupée", skin.muted, skin.sash, 4.5);
+                legible(skin, "accent sur la moitié coupée", skin.accent, skin.sash, 4.5);
+                legible(skin, "action réussie sur la moitié coupée", skin.good, skin.sash, 4.5);
+                legible(skin, "action ratée sur la moitié coupée", skin.bad, skin.sash, 4.5);
+                require((skin.sash >>> 24) == 255, skin.name + " coupe sa page d’un voile translucide");
+                for (int club : CLUBS)
+                    legible(skin, "couleur de club sur la moitié coupée",
+                        Skin.readable(club, skin.page()), skin.sash, 4.5);
+            }
 
             // The pitch is night green under every skin, and what it carries is lightened to
             // suit it: a dark skin's marks pass untouched, a light one's are brought up.
             for (int mark : new int[]{skin.accent, skin.good, skin.bad, skin.ring, skin.ringEnd})
                 legible(skin, "marque sur le terrain", Skin.onGrass(mark), Skin.GRASS, 4.5);
+            // The turf may be brought up a shade, but it stays green and the white of its lines
+            // and of the names written straight on it keeps standing out, end to end.
+            for (int lawn : new int[]{skin.lawn, skin.lawnEnd}) {
+                legible(skin, "blanc sur la pelouse", 0xFFFFFFFF, lawn, 4.5);
+                require(((lawn >> 8) & 0xFF) > ((lawn >> 16) & 0xFF)
+                    && ((lawn >> 8) & 0xFF) > (lawn & 0xFF), skin.name + " peint une pelouse qui n’est pas verte");
+            }
             // Club colours are the match's, not the theme's: they are nudged, never replaced.
             for (int club : CLUBS) {
                 legible(skin, "couleur de club sur la page",
-                    Skin.readable(club, skin.background), skin.background, 4.5);
+                    Skin.readable(club, skin.page()), skin.background, 4.5);
                 legible(skin, "couleur de club sur le terrain", Skin.onGrass(club), Skin.GRASS, 4.5);
             }
 
