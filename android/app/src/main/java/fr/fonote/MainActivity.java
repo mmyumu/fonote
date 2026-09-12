@@ -57,6 +57,12 @@ public class MainActivity extends Activity {
      * screen comes from here, so a skin changes by assigning this field and redrawing.
      */
     private Skin skin = Skin.of(null);
+    /**
+     * The wordmark's entrance: played on a real start only — not when the activity comes back
+     * from a rotation or a process kill, not when the home page is shown again — and never when
+     * the system is told to remove animations.
+     */
+    private Kickoff kickoff = new Kickoff(false);
     /** A stand-in kit colour: the shirt preview belongs to no team in particular. */
     private static final int SAMPLE_KIT = Color.rgb(126, 178, 235);
     private Store store;
@@ -249,6 +255,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("fonote", MODE_PRIVATE);
         forgetTheFormerProvider();
         skin = Skin.of(prefs.getString("skin", null));
+        kickoff = new Kickoff(saved == null && android.animation.ValueAnimator.areAnimatorsEnabled());
         // The window shows for an instant before the first page is built; in its own colour.
         getWindow().setBackgroundDrawable(wallpaper());
         // Weight carries the polarity: colour, palette side and the balance all derive from it,
@@ -416,6 +423,11 @@ public class MainActivity extends Activity {
         super.onBackPressed();
     }
     @Override protected void onResume() { super.onResume(); ticker.removeCallbacks(tick); ticker.post(tick); }
+    /** The splash screen has gone and the window is in front of the reader: the entrance can play. */
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) kickoff.begin(android.os.SystemClock.uptimeMillis());
+    }
     @Override protected void onPause() { stopTactic(); ticker.removeCallbacks(tick); super.onPause(); }
     private long clockSeconds() { return MatchClock.seconds(System.currentTimeMillis(), clockAnchor, clockBase, clockRunning); }
     private void updateClock() {
@@ -561,11 +573,19 @@ public class MainActivity extends Activity {
     /**
      * The bar a page is headed by. Apart from {@link #page} because the calendar lays out its own
      * screen — a header that stays put above weeks that slide — and still wants the same head.
+     * No title is the home page's: it is headed by the name itself, as the {@link Logo} draws it.
      */
     private LinearLayout titleBar(String title, Runnable back) {
         pageBack = back != null ? back : this::showHome;
         LinearLayout bar = strip();
         if (back != null) bar.addView(barAction(R.drawable.ic_arrow_back, "Revenir", back), barSize(0));
+        if (title == null) {
+            Wordmark name = new Wordmark(this, skin, dp(22), kickoff);
+            // The room a heading's line leaves above and below its capitals, so the page below starts where it did.
+            name.setPadding(0, dp(15), 0, dp(15));
+            bar.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+            return bar;
+        }
         TextView heading = headline(title, 26);
         heading.setPadding(back == null ? 0 : dp(10), dp(8), 0, dp(8));
         bar.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1531,7 +1551,7 @@ public class MainActivity extends Activity {
     private void showHomeShell() {
         screen = "home";
         // Settings are not content: they belong in the bar as icons, not in the middle of the page.
-        LinearLayout bar = page("Fonote", null, HOME);
+        LinearLayout bar = page(null, null, HOME);
         // The title and the loading row stay fixed; only the content belongs to the gesture.
         Pull feed = (Pull) root.getParent();
         root.removeView(bar);
