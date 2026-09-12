@@ -325,6 +325,19 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request()[0]['operation'], op)
         self.assertEqual(self.request(op)['operation'], op)
 
+    def test_version_three_sequence_roundtrip(self):
+        schema = self.animated_schema()
+        schema.update(version=3, steps=[dict(id='step', name='Réception', t=40)])
+        for track_index, track in enumerate([schema['ball']] + [t['keys'] for t in schema['tokens']]):
+            for index, key in enumerate(track):
+                key['id'] = f'{track_index}-{index}'
+        schema['ball'][2].update(after=schema['ball'][1]['id'], offset=10)
+        op = self.diagram(**schema)
+        self.request(op)
+        self.assertEqual(self.request()[0]['operation'], op)
+        self.assertEqual(self.request(op)['operation'], op)
+        self.assertEqual(len(self.request()), 1)
+
     def test_invalid_tracks_rejected(self):
         import copy
         from backend.server import validate_schema

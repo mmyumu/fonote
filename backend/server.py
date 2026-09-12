@@ -30,7 +30,8 @@ ACTIONS = {'positive', 'goal', 'assist', 'pass', 'dribble', 'shot_on', 'defense'
 # client draws — solid, dashed, waved, doubled — never by a colour, which already names a team.
 # 'carry' is no longer written: a run made by the player holding the ball is drawn waved, read
 # off the ball itself. The journal being immutable, what was written before is still accepted.
-STROKES = {'pass', 'run', 'carry', 'shot'}
+# 'tackle' is the one stroke a player's key names itself: a run ending on the man it stops.
+STROKES = {'pass', 'run', 'carry', 'shot', 'tackle'}
 # Bounds a hand-drawn schema stays well inside; anything past them is a client gone wrong,
 # not a moment of football. Twenty-two players is the whole pitch.
 MAX_TOKENS, MAX_SHAPES, MAX_POINTS = 30, 40, 32
@@ -199,17 +200,29 @@ def fraction(value):
     return value
 
 
-def validate_keys(keys, ids, ball=False):
+def validate_keys(keys, ids, ball=False, version=2):
     if not isinstance(keys, list) or len(keys) > 120:
         raise ValueError('Positions clés invalides')
     previous = -1
     for key in keys:
         allowed = {'t', 'x', 'y', 'path', 'kind'} | ({'owner', 'flight'} if ball else set())
+        if version == 3:
+            allowed |= {'id', 'after', 'offset', 'baked'}
         if not isinstance(key, dict) or not {'t', 'x', 'y'} <= key.keys() or not key.keys() <= allowed:
             raise ValueError('Position clé invalide')
         if type(key['t']) is not int or not previous < key['t'] <= 1200:
             raise ValueError('Temps invalide')
         previous = key['t']
+        if version == 3:
+            if not isinstance(key.get('id'), str) or not 1 <= len(key['id']) <= 64:
+                raise ValueError('Identifiant de position invalide')
+            if ('after' in key) != ('offset' in key):
+                raise ValueError('Lien temporel incomplet')
+            if 'after' in key and (not isinstance(key['after'], str) or not 1 <= len(key['after']) <= 64
+                                   or type(key['offset']) is not int or not -1200 <= key['offset'] <= 1200):
+                raise ValueError('Lien temporel invalide')
+            if 'baked' in key and type(key['baked']) is not bool:
+                raise ValueError('Parcours invalide')
         fraction(key['x'])
         fraction(key['y'])
         if 'kind' in key and key['kind'] not in STROKES:
@@ -234,8 +247,11 @@ def validate_schema(schema):
     Deliberately geometry alone. A token names a player and stops there, so nothing here can
     disagree with the composition, the bilan or the journal about who he is or what he did.
     """
-    versioned = isinstance(schema, dict) and type(schema.get('version')) is int and schema.get('version') == 2
+    version = schema.get('version') if isinstance(schema, dict) else None
+    versioned = type(version) is int and version in (2, 3)
     expected = {'board', 'tokens', 'shapes', 'version', 'ball'} if versioned else {'board', 'tokens', 'shapes'}
+    if version == 3:
+        expected |= {'steps'}
     if not isinstance(schema, dict) or set(schema) != expected:
         raise ValueError('Schéma invalide')
     if schema['board'] not in {'blank', 'full'}:
@@ -251,11 +267,11 @@ def validate_schema(schema):
             if not isinstance(token, dict) or not isinstance(token.get('id'), str) or not 1 <= len(token['id']) <= 64 or token['id'] in ids:
                 raise ValueError('Identifiant de pion invalide')
             ids.add(token['id'])
-        validate_keys(schema['ball'], ids, ball=True)
+        validate_keys(schema['ball'], ids, ball=True, version=version)
     known = {p['id'] for p in json.loads(DEMO.read_text())['players']}
     for token in tokens:
         if versioned:
-            validate_keys(token.get('keys'), ids)
+            validate_keys(token.get('keys'), ids, version=version)
             token = {k: v for k, v in token.items() if k not in {'id', 'keys'}}
         if not isinstance(token, dict) or not {'x', 'y'} <= set(token):
             raise ValueError('Joueur du schéma invalide')
@@ -288,6 +304,49 @@ def validate_schema(schema):
                 raise ValueError('Point invalide')
             fraction(point[0])
             fraction(point[1])
+
+    if version == 3:
+        validate_sequence(schema)
+
+
+def validate_sequence(schema):
+    """Références uniques, temps déjà résolus et absence de cycles, sans récursion."""
+    keys = {}
+    for track in [schema['ball']] + [token['keys'] for token in schema['tokens']]:
+        for key in track:
+            if key['id'] in keys:
+                raise ValueError('Identifiant de position en double')
+            keys[key['id']] = key
+    done = set()
+    for identifier in keys:
+        chain = set()
+        current = identifier
+        while current not in done:
+            if current in chain:
+                raise ValueError('Boucle dans les liens temporels')
+            chain.add(current)
+            key = keys[current]
+            if 'after' not in key:
+                break
+            parent = keys.get(key['after'])
+            if parent is None or key['t'] != parent['t'] + key['offset']:
+                raise ValueError('Lien temporel incohérent')
+            current = key['after']
+        done.update(chain)
+    steps = schema['steps']
+    if not isinstance(steps, list) or len(steps) > 120:
+        raise ValueError('Étapes invalides')
+    ids = set()
+    for step in steps:
+        if not isinstance(step, dict) or set(step) != {'id', 'name', 't'}:
+            raise ValueError('Étape invalide')
+        if not isinstance(step['id'], str) or not 1 <= len(step['id']) <= 64 or step['id'] in ids:
+            raise ValueError('Identifiant d’étape invalide')
+        ids.add(step['id'])
+        if not isinstance(step['name'], str) or not 1 <= len(step['name']) <= 80:
+            raise ValueError('Nom d’étape invalide')
+        if type(step['t']) is not int or not 0 <= step['t'] <= 1200:
+            raise ValueError('Temps d’étape invalide')
 
 
 @contextmanager
