@@ -129,7 +129,11 @@ def validate(op):
         remote_match = isinstance(op['match_id'], str) and re.fullmatch(r'(?:fd|espn)-[0-9]+', op['match_id'])
         if op['match_id'] != match['id'] and not remote_match:
             raise ValueError('Match inconnu')
-        if type(op['minute']) is not int or not 0 <= op['minute'] <= 150:
+        # A note on the match as a whole happens at no moment in particular: its minute is null.
+        # It may be about one club or name players — named, never credited: an action happens
+        # at a minute, so this note carries none and the bilan never counts it.
+        timeless = op['minute'] is None
+        if not timeless and (type(op['minute']) is not int or not 0 <= op['minute'] <= 150):
             raise ValueError('Minute invalide')
         # A note names everyone involved in the same moment, each with their own action.
         # Notes written before that carried a single player at the top level; the log is
@@ -140,17 +144,38 @@ def validate(op):
         known = {p['id'] for p in match['players']}
         if not isinstance(entries, list) or len(entries) > len(known):
             raise ValueError('Participants invalides')
+        if timeless and entries:
+            raise ValueError('Minute requise pour une action')
+
+        def player(identifier):
+            # ESPN names no coach for football: the client seats one on each bench, known by the
+            # ESPN id of his club, and he is noted like any player of that match.
+            remote_player = isinstance(identifier, str) and re.fullmatch(r'(?:fd|espn)-[0-9]+|espn-coach-[0-9]+', identifier)
+            if identifier not in known and not (remote_match and remote_player):
+                raise ValueError('Joueur inconnu')
+
         for entry in entries:
             if not isinstance(entry, dict) or not {'player_id', 'action'} <= set(entry):
                 raise ValueError('Participant invalide')
             if not legacy and set(entry) != {'player_id', 'action'}:
                 raise ValueError('Participant invalide')
-            remote_player = isinstance(entry['player_id'], str) and re.fullmatch(r'(?:fd|espn)-[0-9]+', entry['player_id'])
-            if entry['player_id'] not in known and not (remote_match and remote_player):
-                raise ValueError('Joueur inconnu')
+            player(entry['player_id'])
             if entry['action'] not in ACTIONS:
                 raise ValueError('Action inconnue')
         people = [entry['player_id'] for entry in entries]
+        if timeless:
+            # Both may be left out: a note about neither club and nobody in particular.
+            allowed |= {'team', 'players'} & set(op)
+            if op.get('team') not in (None, 'home', 'away'):
+                raise ValueError('Équipe inconnue')
+            people = op.get('players', [])
+            if not isinstance(people, list) or len(people) > len(known):
+                raise ValueError('Joueurs invalides')
+            # About one club, or about some players: a note naming both would say neither.
+            if op.get('team') is not None and people:
+                raise ValueError('Équipe ou joueurs, pas les deux')
+            for identifier in people:
+                player(identifier)
         if len(set(people)) != len(people):
             raise ValueError('Joueur en double')
     if kind == 'comment':

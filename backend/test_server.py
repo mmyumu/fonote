@@ -205,6 +205,27 @@ class ServerTest(unittest.TestCase):
         self.request(op)
         self.assertEqual(self.request()[-1]['operation'], op)
 
+    def test_a_coach_is_noted_like_a_player(self):
+        notes = [self.note(match_id='espn-401915445',
+                           entries=[dict(player_id='espn-coach-148', action='yellow'),
+                                    dict(player_id='espn-456', action='negative')]),
+                 self.match_note(match_id='espn-401915445', players=['espn-coach-493'])]
+        for op in notes:
+            self.request(op)
+        self.assertEqual([r['operation'] for r in self.request()], notes)
+
+    def test_a_coach_belongs_to_an_espn_match(self):
+        rejected = [self.note(entries=[dict(player_id='espn-coach-148', action='yellow')]),
+                    self.note(match_id='espn-401915445',
+                              entries=[dict(player_id='espn-coach-', action='yellow')]),
+                    self.note(match_id='espn-401915445',
+                              entries=[dict(player_id='fd-coach-148', action='yellow')])]
+        for op in rejected:
+            with self.assertRaises(HTTPError) as error:
+                self.request(op)
+            self.assertEqual(error.exception.code, 400, op)
+        self.assertEqual(self.request(), [])
+
     def test_espn_players_sync_under_the_original_match_id(self):
         op = self.note(match_id='fd-123', entries=[dict(player_id='espn-456', action='pass')])
         self.assertEqual(self.request(op)['operation'], op)
@@ -215,6 +236,47 @@ class ServerTest(unittest.TestCase):
         self.request(op)
         self.request(comment)
         self.assertEqual([r['operation'] for r in self.request()], [op, comment])
+
+    def match_note(self, **fields):
+        """A note on the match as a whole: no minute, no action, maybe a club and some names."""
+        return self.note(**{'minute': None, 'entries': [], 'team': None, 'players': [], **fields})
+
+    def test_a_note_on_the_whole_match_has_no_minute(self):
+        op = self.match_note()
+        comment = dict(id=str(uuid4()), note_id=op['note_id'], kind='comment', text='Lyon subit tout le match')
+        self.request(op)
+        self.request(comment)
+        self.assertEqual([r['operation'] for r in self.request()], [op, comment])
+
+    def test_a_match_note_may_be_about_a_club_or_name_players(self):
+        notes = [self.match_note(players=[PLAYERS[0], PLAYERS[1]]),
+                 self.match_note(team='away'),
+                 self.match_note(match_id='espn-401915445', players=['espn-456']),
+                 self.note(minute=None, entries=[])]
+        for op in notes:
+            self.request(op)
+        self.assertEqual([r['operation'] for r in self.request()], notes)
+
+    def test_a_match_note_names_players_without_crediting_them(self):
+        legacy = self.legacy_note()
+        legacy['minute'] = None
+        rejected = [
+            self.match_note(entries=[dict(player_id=PLAYERS[0], action='goal')]),
+            legacy,
+            self.match_note(team='neutral'),
+            self.match_note(players=['unknown']),
+            self.match_note(players=[PLAYERS[0], PLAYERS[0]]),
+            self.match_note(players=[dict(player_id=PLAYERS[0])]),
+            self.match_note(players=PLAYERS[0]),
+            self.match_note(team='home', players=[PLAYERS[0]]),
+            # A club and names belong to the note without a minute, and to no other.
+            self.note(team='home', players=[]),
+        ]
+        for op in rejected:
+            with self.assertRaises(HTTPError) as error:
+                self.request(op)
+            self.assertEqual(error.exception.code, 400, op)
+        self.assertEqual(self.request(), [])
 
     def test_single_player_notes_written_before_stay_valid(self):
         op = self.legacy_note()
