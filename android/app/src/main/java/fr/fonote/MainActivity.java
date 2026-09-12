@@ -36,11 +36,13 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.Collator;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
@@ -59,12 +61,25 @@ public class MainActivity extends Activity {
     private JSONObject match;
     private JSONObject demoMatch;
     private final List<JSONObject> demoMatches = new ArrayList<>();
-    private LinearLayout root, composer, factsPage, statsPage;
+    private LinearLayout root, composer, factsPage, statsPage, notesPage, tallyPage;
     private Pager pager;
+    /**
+     * Les cartes du match, de gauche à droite, le terrain au milieu : ce que le fournisseur
+     * raconte se prend en balayant vers la droite, ce que j'ai écrit en balayant vers la gauche.
+     * Le travail reste au centre, et aucune des deux directions ne coûte un bouton.
+     */
+    private static final int CARD_STATS = 0, CARD_FACTS = 1, CARD_PITCH = 2,
+                             CARD_NOTES = 3, CARD_TALLY = 4, CARDS = 5;
+    /** Où chaque carte est tombée dans le pager, ou -1 quand ce match ne la porte pas. */
+    private final int[] cardPlace = new int[CARDS];
+    /** Quelle carte occupe chaque page du pager, dans l'autre sens. */
+    private final int[] cardAt = new int[CARDS];
+    /** La carte montrée, retenue par ce qu'elle est et non par son rang : les rangs bougent. */
+    private int shownCard = CARD_PITCH;
     /** Which screen is shown: these pages replace the view, so back has to unwind them itself. */
     private String screen = "home";
     private PitchView pitch;
-    private TextView status, clockLabel;
+    private TextView clockLabel;
     private int minute;
     /** One refresh a minute while a match is current; ESPN calls its own feed stale after nine
      *  seconds, so this is conservative, and the server caches hard enough to absorb it. */
@@ -82,7 +97,9 @@ public class MainActivity extends Activity {
     private static final int HALF = 45, BREAK = 15 * 60;
     private boolean syncing;
     private boolean refreshing;
-    private View homeRefresh, calendarRefresh;
+    /** Le temps qu'une hauteur met à se ranger : celui de la ligne d'actualisation. */
+    private static final int SETTLE = 240;
+    private View homeRefresh, calendarRefresh, matchRefresh;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     /** key → {symbole, nom, nom court, poids}. */
     private final LinkedHashMap<String,String[]> actions = new LinkedHashMap<>();
@@ -100,9 +117,45 @@ public class MainActivity extends Activity {
     private String draft = "", draftWritten = "";
     /** True once the open note exists in the log, so later edits must rewrite it. */
     private boolean written;
-    /** How many trailing operations undo has already walked back over. */
+    /**
+     * Combien de lignes de queue du journal annuler a déjà parcourues — celles des gestes défaits
+     * et celles de leurs compensations —, pour que le pas suivant reparte avant elles.
+     */
     private int undone;
+    /**
+     * Les sortes d'opérations qu'un même geste peut écrire ensemble. Une suppression et un
+     * rétablissement se tiennent seuls : ils ne sont pas une écriture, ils en défont une.
+     */
+    private static final Set<String> WRITTEN = new HashSet<>(Arrays.asList("note", "comment", "diagram"));
+    /**
+     * Un geste défait : ce qu'il faut réécrire pour le refaire, et où il se tient dans le journal.
+     *
+     * <p>Sa place et non le nombre de lignes qui le suivent : le journal ne fait que s'allonger,
+     * donc une place ne bouge pas, alors que ce qui suit grandit à chaque aller-retour. Refait, le
+     * curseur se repose dessus, de sorte qu'un nouveau « annuler » le défasse encore et qu'un
+     * troisième remonte enfin au geste d'avant.
+     */
+    private static final class Undone {
+        final List<JSONObject> replay;
+        final int end;
+        Undone(List<JSONObject> replay, int end) { this.replay = replay; this.end = end; }
+    }
+    /**
+     * Les gestes défaits, du plus récent au plus ancien. En mémoire et pour la session seulement :
+     * refaire n'est pas une opération du journal, c'est le chemin qu'on vient de parcourir à
+     * l'envers, et il ne vaut que tant qu'on n'a rien écrit de nouveau.
+     */
+    private final Deque<Undone> redoable = new ArrayDeque<>();
     private int noteMinute;
+    /**
+     * The minute of a note on the match as a whole, which has none. While such a note is open,
+     * {@link #entries} holds the players it names, each with no action, and {@link #noteTeam}
+     * the club it is about instead — one or the other, never both.
+     */
+    private static final int TIMELESS = -1;
+    private String noteTeam = "";
+    /** The two clubs under the pitch, while a match note is open: a crest makes it the club's. */
+    private LinearLayout clubs;
     /**
      * The schema an advanced note carries, or null while the open note is a plain one. A schema
      * is written beside the note under the same id, the way a comment is: the journal keeps one
@@ -223,6 +276,9 @@ public class MainActivity extends Activity {
                 written = saved.getBoolean("written", false);
                 noteMinute = saved.getInt("note_minute", 0);
                 loadEntries(new JSONArray(saved.getString("entries", "[]")));
+                JSONArray mentions = new JSONArray(saved.getString("mentions", "[]"));
+                for (int i = 0; i < mentions.length(); i++) entries.put(mentions.getString(i), "");
+                noteTeam = saved.getString("note_team", "");
                 entriesWritten = saved.getString("entries_written", "");
                 tacticTime = saved.getInt("tactic_time", 0);
                 diagramWritten = saved.getString("diagram_written", "");
@@ -243,6 +299,9 @@ public class MainActivity extends Activity {
         state.putString("draft", draft); state.putString("draft_written", draftWritten);
         state.putBoolean("written", written); state.putInt("note_minute", noteMinute);
         state.putString("entries", draftEntries().toString());
+        // A match note's players carry no action, which draftEntries leaves out on purpose.
+        if (noteMinute == TIMELESS) state.putString("mentions", new JSONArray(entries.keySet()).toString());
+        state.putString("note_team", noteTeam);
         state.putString("entries_written", entriesWritten);
         state.putString("diagram_written", diagramWritten);
         state.putInt("tactic_time", board == null ? tacticTime : board.time());
@@ -280,9 +339,15 @@ public class MainActivity extends Activity {
     private LinearLayout homeRoot, annotatedRoot, savedRoot;
     private String calendarSearch = "", annotatedSearch = "", followSearch = "";
     private LinearLayout profileRoot;
-    private Runnable profileBack = this::showHome;
+    /**
+     * Where the back arrow of the page on screen leads. Set by {@link #titleBar}, so that the
+     * system gesture leaves by the door the page itself draws: the notes of a match lead back
+     * to the match, not to the home screen the reader left three screens ago.
+     */
+    private Runnable pageBack = this::showHome;
     private JSONObject followCatalogue = new JSONObject(), followFixtures = new JSONObject();
-    private LocalDate calendarCentre = LocalDate.now();
+    /** The Monday of the week the calendar shows: a week runs from a Monday to the Sunday. */
+    private LocalDate calendarWeek = monday(LocalDate.now());
     /** The week the calendar shows, and the two it is swiped to, on either side of it. */
     private static final int WEEKS = 3;
     private Pager weekPager;
@@ -317,14 +382,19 @@ public class MainActivity extends Activity {
         if ("tactic".equals(screen)) { leaveTactic(); return; }
         if ("match".equals(screen)) {
             // Undo the screen before undoing the work: the card first, then the note, then leave.
-            // One card at a time: facts sit between the pitch and the figures.
-            if (pager != null && pager.page() > 0) { pager.show(pager.page() - 1, true); return; }
+            // One card at a time, towards the pitch: the work sits at the middle of the stack,
+            // the provider's account on one side of it and my own notes on the other.
+            if (pager != null && pager.page() != cardPlace[CARD_PITCH]) {
+                pager.show(pager.page() + (pager.page() < cardPlace[CARD_PITCH] ? 1 : -1), true);
+                return;
+            }
+            // A match note keeps its text until it is written: leaving it is finishing it.
+            if (!noteId.isEmpty() && noteMinute == TIMELESS) { finishMatchNote(); return; }
             if (!noteId.isEmpty()) { closeNote(); return; }
             showHome(); return;
         }
         // The arrow and the system gesture lead to the same place, wherever the reader came from.
-        if ("profile".equals(screen)) { profileBack.run(); return; }
-        if (!"home".equals(screen)) { showHome(); return; }
+        if (!"home".equals(screen)) { pageBack.run(); return; }
         super.onBackPressed();
     }
     @Override protected void onResume() { super.onResume(); ticker.removeCallbacks(tick); ticker.post(tick); }
@@ -337,7 +407,7 @@ public class MainActivity extends Activity {
         // The pitch belongs to the same clock as the notes: one minute, one set of players.
         if (minute != previous && pitch != null) pitch.setMinute(minute);
         follow();
-        if (minute != previous && !noteId.isEmpty() && minute - noteMinute == 2) renderComposer();
+        if (minute != previous && !noteId.isEmpty() && noteMinute != TIMELESS && minute - noteMinute == 2) renderComposer();
         long left = (clockAnchor - System.currentTimeMillis()) / 1000;
         // A match whistled off is fixed at the minute it ended: seconds tick for nobody.
         boolean over = match != null && match.optLong("end_epoch_ms") > 0 && !clockRunning;
@@ -409,6 +479,8 @@ public class MainActivity extends Activity {
         // The card is rebuilt where it stands: a reader of the facts is not sent back to the pitch.
         if (factsPage != null) renderFacts();
         if (statsPage != null) renderStats();
+        // La ligne grise du bilan porte les compteurs du fournisseur : eux aussi viennent de bouger.
+        if (tallyPage != null) renderTally();
     }
 
     /** Who the match knows about, as one comparable string. */
@@ -473,6 +545,7 @@ public class MainActivity extends Activity {
      * screen — a header that stays put above weeks that slide — and still wants the same head.
      */
     private LinearLayout titleBar(String title, Runnable back) {
+        pageBack = back != null ? back : this::showHome;
         LinearLayout bar = strip();
         if (back != null) bar.addView(barAction(R.drawable.ic_arrow_back, "Revenir", back), barSize(0));
         TextView heading = headline(title, 26);
@@ -647,7 +720,7 @@ public class MainActivity extends Activity {
     private LinearLayout strip() {
         LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL); return row;
     }
-    private void full(String text, Runnable action) {
+    private Button full(String text, Runnable action) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = gap(8);
         Button button = button(text, action);
         if (skin.flat) button.setBackground(tappable(rounded(Color.TRANSPARENT, skin.control)));
@@ -655,6 +728,7 @@ public class MainActivity extends Activity {
         button.setPadding(dp(14), dp(10), dp(14), dp(10));
         root.addView(button, p);
         separator();
+        return button;
     }
 
     // ——— Accueil, calendrier et préférences ———
@@ -689,8 +763,8 @@ public class MainActivity extends Activity {
      * <p>The header stays put and only the weeks slide: the week swiped to is already drawn on
      * the page next door, and comes to rest in the middle as the week the calendar is centred on.
      */
-    private void calendar(LocalDate centre) {
-        calendarCentre = centre;
+    private void calendar(LocalDate day) {
+        calendarWeek = monday(day);
         screen = "calendar";
         dressWindow();
         LinearLayout layout = new LinearLayout(this);
@@ -742,12 +816,17 @@ public class MainActivity extends Activity {
         loadCalendar();
     }
 
-    /** The week a page holds: the middle one is the week the calendar is centred on. */
-    private LocalDate weekOf(int page) { return calendarCentre.plusDays((page - 1) * 7L); }
+    /** The Monday a day belongs to: a week is read from that Monday to the Sunday that ends it. */
+    private static LocalDate monday(LocalDate day) {
+        return day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+    }
 
-    private String span(LocalDate centre) {
+    /** The Monday a page holds: the middle one is the week the calendar is centred on. */
+    private LocalDate weekOf(int page) { return calendarWeek.plusDays((page - 1) * 7L); }
+
+    private String span(LocalDate week) {
         DateTimeFormatter span = DateTimeFormatter.ofPattern("d MMM", Locale.FRANCE);
-        return "du " + centre.minusDays(3).format(span) + " au " + centre.plusDays(3).format(span);
+        return "du " + week.format(span) + " au " + week.plusDays(6).format(span);
     }
 
     /** The dates are those of the week being turned to, from the moment the card starts moving. */
@@ -763,7 +842,7 @@ public class MainActivity extends Activity {
         if (!"calendar".equals(screen)) return;
         int turned = weekPager.page();
         if (turned == 1) return;
-        calendarCentre = weekOf(turned);
+        calendarWeek = weekOf(turned);
         weekPager.show(1, false);
         loadCalendar();
     }
@@ -775,13 +854,14 @@ public class MainActivity extends Activity {
     private void loadCalendar() {
         int request = ++fixturesRequests[1];
         Pager requested = weekPager;
-        LocalDate centre = calendarCentre;
-        weekSpan.setText(span(centre));
+        LocalDate week = calendarWeek;
+        weekSpan.setText(span(week));
         renderWeeks();
         if (demoMode()) return;
         label("Copie locale · actualisation si le serveur est disponible.");
         if (!hasServer()) return;
-        LocalDate from = centre.minusDays(10), to = centre.plusDays(10);
+        // The week before and the week after are drawn too: one request covers all three.
+        LocalDate from = week.minusDays(7), to = week.plusDays(13);
         worker.execute(() -> {
             try {
                 get("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to.plusDays(1) + "&lineups=1");
@@ -818,10 +898,46 @@ public class MainActivity extends Activity {
                 continue;
             }
             LocalDate week = weekOf(i);
-            try { renderFixtures(localFixtures(week.minusDays(3), week.plusDays(3)), false); }
+            try { renderFixtures(localFixtures(week, week.plusDays(6)), false); }
             catch (Exception error) { error(error); }
         }
         root = weekRoots[1];
+    }
+
+    /**
+     * Where a note's words are typed, whatever kind of note it is — a moment's comment, a schema's,
+     * a note without a player, a note on the whole match. One field for all of them, drawn as the
+     * skin draws its controls rather than on the platform's bare underline, which read as another
+     * application's form dropped into this one; the accent edge says where the caret is.
+     */
+    private EditText noteField(String hint, String value) {
+        EditText field = new EditText(this);
+        field.setHint(hint); field.setText(value);
+        field.setTextSize(15); field.setTextColor(skin.ink); field.setHintTextColor(skin.muted);
+        field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        field.setGravity(Gravity.TOP | Gravity.START);
+        field.setLineSpacing(dp(2), 1);
+        field.setPadding(dp(14), dp(12), dp(14), dp(12));
+        field.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
+        // Edged at rest like the side buttons beside it: a skin whose fill matches the panel would
+        // otherwise leave nothing on screen but a floating hint.
+        android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
+        GradientDrawable caret = rounded(skin.chip, skin.control); caret.setStroke(dp(1), skin.accent);
+        GradientDrawable rest = rounded(skin.chip, skin.control); rest.setStroke(dp(1), skin.hairline);
+        states.addState(new int[]{android.R.attr.state_focused}, caret);
+        states.addState(new int[0], rest);
+        field.setBackground(states);
+        field.setSelection(field.getText().length());
+        return field;
+    }
+    /** The same field in a dialog: three lines to write in, set in from the edges like its title. */
+    private View dialogField(EditText field) {
+        field.setMinLines(3);
+        FrameLayout frame = new FrameLayout(this);
+        frame.setPadding(dp(20), dp(8), dp(20), 0);
+        frame.addView(field, new FrameLayout.LayoutParams(-1, -2));
+        return frame;
     }
 
     private EditText searchField(String hint, String value, java.util.function.Consumer<String> changed) {
@@ -923,7 +1039,7 @@ public class MainActivity extends Activity {
      * a field that is destroyed to be redrawn loses the caret and the keyboard with it.
      */
     private void profile(Runnable back) {
-        screen = "profile"; profileBack = back;
+        screen = "profile";
         // A filter left over from a visit made an hour ago reads as a catalogue gone missing.
         followSearch = "";
         LinearLayout title = page("Mes suivis", back);
@@ -1333,47 +1449,68 @@ public class MainActivity extends Activity {
         return loading;
     }
 
-    private void refreshIndicators() {
-        for (View indicator : new View[]{homeRefresh, calendarRefresh}) {
+    /**
+     * Ouvre ou referme la ligne d'actualisation. Elle vit au-dessus du défilement et sa hauteur
+     * pousse donc la page : ouverte d'un coup, celle-ci sautait de toute sa hauteur à l'instant
+     * du relâchement. Elle reprend maintenant la place que le doigt venait d'ouvrir, que le geste
+     * lui passe en même temps qu'il rend la sienne, puis se range à sa propre hauteur.
+     *
+     * @param opened la place laissée par le doigt, en pixels ; zéro hors d'un geste.
+     */
+    private void refreshIndicators(int opened) {
+        int line = dp(56);
+        for (View indicator : new View[]{homeRefresh, calendarRefresh, matchRefresh}) {
             if (indicator == null) continue;
             if (indicator.getTag() instanceof android.animation.ValueAnimator)
                 ((android.animation.ValueAnimator) indicator.getTag()).cancel();
             if (refreshing) {
-                indicator.getLayoutParams().height = dp(56);
+                indicator.getLayoutParams().height = opened > 0 ? opened : line;
                 indicator.setAlpha(1);
                 indicator.setVisibility(View.VISIBLE);
                 indicator.requestLayout();
+                if (opened > 0 && opened != line) slide(indicator, opened, line, false);
             } else if (indicator.getVisibility() == View.VISIBLE) {
-                android.animation.ValueAnimator collapse = android.animation.ValueAnimator.ofInt(
-                    indicator.getLayoutParams().height, 0);
-                indicator.setTag(collapse);
-                collapse.setDuration(240);
-                collapse.setInterpolator(new android.view.animation.DecelerateInterpolator());
-                collapse.addUpdateListener(animation -> {
-                    indicator.getLayoutParams().height = (int) animation.getAnimatedValue();
-                    indicator.setAlpha(1 - animation.getAnimatedFraction());
-                    indicator.requestLayout();
-                });
-                collapse.addListener(new android.animation.AnimatorListenerAdapter() {
-                    private boolean cancelled;
-                    @Override public void onAnimationCancel(android.animation.Animator animation) { cancelled = true; }
-                    @Override public void onAnimationEnd(android.animation.Animator animation) {
-                        if (!cancelled) indicator.setVisibility(View.GONE);
-                    }
-                });
-                collapse.start();
+                slide(indicator, indicator.getLayoutParams().height, 0, true);
             }
         }
     }
 
+    /**
+     * Mène la hauteur d'une vue d'un point à l'autre, la seule façon de lui faire prendre ou
+     * rendre sa place aux autres. Rendue, la ligne s'efface avec elle et n'attend la fin que
+     * pour disparaître : partie plus tôt, elle laisserait un trou à combler.
+     */
+    private void slide(View view, int from, int to, boolean away) {
+        android.animation.ValueAnimator move = android.animation.ValueAnimator.ofInt(from, to);
+        view.setTag(move);
+        move.setDuration(SETTLE);
+        move.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        move.addUpdateListener(animation -> {
+            view.getLayoutParams().height = (int) animation.getAnimatedValue();
+            if (away) view.setAlpha(1 - animation.getAnimatedFraction());
+            view.requestLayout();
+        });
+        if (away) move.addListener(new android.animation.AnimatorListenerAdapter() {
+            private boolean cancelled;
+            @Override public void onAnimationCancel(android.animation.Animator animation) { cancelled = true; }
+            @Override public void onAnimationEnd(android.animation.Animator animation) {
+                if (!cancelled) view.setVisibility(View.GONE);
+            }
+        });
+        move.start();
+    }
+
     /** Relit le serveur ; seul son cache décide quand interroger ESPN. */
-    private void refreshData() {
-        if (refreshing) return;
-        if (!hasServer() || demoMode()) { toast("Actualisation indisponible en mode local."); return; }
+    private boolean refreshData(float opened) {
+        if (refreshing) return false;
+        if (!hasServer() || demoMode()) {
+            toast("Actualisation indisponible en mode local.");
+            return false;
+        }
         boolean calendar = "calendar".equals(screen);
         LocalDate centre = calendar ? weekOf(weekPager.page()) : LocalDate.now();
-        LocalDate from = calendar ? centre.minusDays(10) : centre;
-        LocalDate to = calendar ? centre.plusDays(11) : centre.plusDays(1);
+        LocalDate from = calendar ? centre.minusDays(7) : centre;
+        LocalDate to = calendar ? centre.plusDays(14) : centre.plusDays(1);
         String base = server();
         List<String> paths = new ArrayList<>();
         paths.add("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to + "&lineups=1");
@@ -1385,7 +1522,7 @@ public class MainActivity extends Activity {
                 paths.add("/v1/football/matches/" + id + "?overview=1");
         }
         refreshing = true;
-        refreshIndicators();
+        refreshIndicators((int) opened);
         worker.execute(() -> {
             boolean failed = false;
             for (String path : paths) {
@@ -1395,22 +1532,28 @@ public class MainActivity extends Activity {
             boolean incomplete = failed;
             runOnUiThread(() -> {
                 if (isDestroyed()) { refreshing = false; return; }
-                // Reconstruire avec la ligne encore visible, puis réduire sa place doucement.
-                if ("calendar".equals(screen)) renderWeeks();
-                else if (browsing()) refreshHomeCard();
                 refreshing = false;
-                refreshIndicators();
+                // Refermer la ligne avant de reconstruire, et non l'inverse : redessiner la
+                // page tient l'image une bonne fraction de seconde, et une fermeture lancée
+                // dans cette image-là y passe tout entière — la page remonte alors d'un bond.
+                refreshIndicators(0);
+                ticker.postDelayed(() -> {
+                    if (isDestroyed()) return;
+                    if ("calendar".equals(screen)) renderWeeks();
+                    else if (browsing()) refreshHomeCard();
+                }, SETTLE);
                 toast(incomplete ? "Actualisation incomplète. Données enregistrées conservées."
                     : "Données actualisées");
             });
         });
+        return true;
     }
 
     private void homeFollows() {
         try {
             JSONArray all = localFixtures(null, null);
             Set<String> favorites = prefs.getStringSet("follow_matches", Collections.emptySet());
-            section("Mes matchs favoris", "Calendrier ›", () -> calendar(calendarCentre));
+            section("Mes matchs favoris", "Calendrier ›", () -> calendar(calendarWeek));
             int shown = 0;
             for (int i = 0; i < all.length(); i++) {
                 JSONObject fixture = all.getJSONObject(i);
@@ -1711,6 +1854,8 @@ public class MainActivity extends Activity {
         if (complete) {
             addBench(players, home.optJSONArray("bench"), "home");
             addBench(players, away.optJSONArray("bench"), "away");
+            addCoach(players, home, "home");
+            addCoach(players, away, "away");
         }
         JSONObject goals = source.optJSONObject("score") == null ? null
             : source.optJSONObject("score").optJSONObject("fullTime");
@@ -1829,8 +1974,24 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * The coach of a side, on its bench beside the substitutes and noted like any of them. ESPN
+     * publishes no coach for football, not even a name, so he is known by his club: one id per
+     * club rather than per match, the way a player keeps his from one match to the next.
+     */
+    private void addCoach(JSONArray target, JSONObject team, String side) throws Exception {
+        int club = team.optInt("id");
+        if (club <= 0) return;
+        target.put(new JSONObject().put("id", REMOTE + "coach-" + club).put("name", "Coach")
+            .put("role", "coach").put("team", side).put("stats", new JSONObject()));
+    }
+
     private void openMatch() {
         noteId = ""; focus = ""; entries.clear(); written = false;
+        // Un match s'ouvre sur son terrain : la carte laissée en dernier appartenait au précédent.
+        shownCard = CARD_PITCH;
+        // Et sans chemin à refaire : celui-là menait à des notes qu'on ne regarde plus.
+        redoable.clear();
         adoptClock();
         // The detail was just fetched: the first refresh is due a minute from now, not at once.
         polled = System.currentTimeMillis(); showMatch();
@@ -2021,13 +2182,27 @@ public class MainActivity extends Activity {
 
     private void showMatch() {
         screen = "match";
-        // The match and what the provider says about it are two cards side by side: the notes
-        // are the work, the facts are a glance away, and neither is a detour through a menu.
-        int showing = pager == null ? 0 : pager.page();
-        pager = new Pager(this); factsPage = null; statsPage = null;
-        // Fills the screen when it fits, scrolls when it does not: the composer stays reachable.
-        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
-        root = frame(); scroll.addView(root); pager.addPage(scroll); setContentView(pager);
+        // Cinq cartes posées côte à côte, le terrain au milieu. Les faits et les chiffres du
+        // fournisseur sont à gauche, mes notes et mon bilan à droite : chaque direction dit ce
+        // qu'elle rapporte, et rien de tout cela n'est plus caché derrière un menu.
+        pager = new Pager(this);
+        factsPage = statsPage = notesPage = tallyPage = null;
+        java.util.Arrays.fill(cardPlace, -1);
+        if (counted()) statsPage = matchCard(CARD_STATS);
+        if (told()) factsPage = matchCard(CARD_FACTS);
+        LinearLayout pitchCard = matchCard(CARD_PITCH);
+        notesPage = matchCard(CARD_NOTES);
+        tallyPage = matchCard(CARD_TALLY);
+        LinearLayout screenRoot = new LinearLayout(this);
+        screenRoot.setOrientation(LinearLayout.VERTICAL);
+        screenRoot.setBackgroundColor(skin.background);
+        // La ligne d'actualisation est au-dessus du pager et non dedans : elle doit prendre
+        // exactement la hauteur que le doigt a ouverte, à l'instant où la carte la rend, sinon
+        // la page saute d'un pixel au relâchement. Repliée, elle ne coûte rien.
+        matchRefresh = refreshIndicator(screenRoot);
+        screenRoot.addView(pager, new LinearLayout.LayoutParams(-1, 0, 1));
+        setContentView(screenRoot);
+        root = pitchCard;
         // A composition that is there says so in one word at the foot of the screen; only its
         // absence needs a sentence, and an empty pitch has all the room to carry one.
         if (match.has("lineup_available") && !match.optBoolean("lineup_available")) {
@@ -2054,56 +2229,96 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams pitchSize = new LinearLayout.LayoutParams(-1, 0, 1);
         pitchSize.topMargin = dp(8); pitchSize.bottomMargin = dp(8);
         root.addView(pitch, pitchSize);
+        clubs = strip(); clubs.setVisibility(View.GONE);
+        LinearLayout.LayoutParams clubsSize = new LinearLayout.LayoutParams(-1, dp(40));
+        clubsSize.bottomMargin = dp(8);
+        root.addView(clubs, clubsSize);
         composer = new LinearLayout(this); composer.setOrientation(LinearLayout.VERTICAL);
         composer.setBackground(skin.flat ? rounded(skin.chip, 16) : panel(skin.surface));
         composer.setPadding(dp(10), dp(8), dp(10), dp(8));
         root.addView(composer, new LinearLayout.LayoutParams(-1, dp(COMPOSER)));
-        String source = match.optBoolean("lineup_available")
-            ? "  ·  " + match.optString("lineup_source", "ESPN") + ", placement schématique" : "";
-        LinearLayout footer = strip(); root.addView(footer, new LinearLayout.LayoutParams(-1, -2));
-        status = new TextView(this);
-        status.setText(formations() + source + "  ·  " + match.optString("competition"));
-        status.setTextSize(12); status.setTextColor(skin.muted);
-        status.setPadding(0, dp(8), 0, dp(8));
-        status.setMaxLines(1); status.setEllipsize(TextUtils.TruncateAt.END);
-        footer.addView(status, new LinearLayout.LayoutParams(0, -2, 1));
-        // A card nobody knows about is a card nobody opens; this says so without costing a row.
-        if (told() || counted()) {
-            TextView hint = new TextView(this);
-            hint.setText(told() ? "Faits  ›" : "Statistiques  ›");
-            hint.setTextSize(12); hint.setTextColor(skin.accent);
-            hint.setPadding(dp(10), dp(8), 0, dp(8));
-            hint.setContentDescription((told() ? "Faits du match" : "Statistiques")
-                + ", ou balayer vers la gauche");
-            hint.setOnClickListener(v -> pager.show(1, true));
-            footer.addView(hint, new LinearLayout.LayoutParams(-2, -2));
-        }
-        LinearLayout navigation = strip(); root.addView(navigation);
-        String[] titles = {"↶", "≡ Notes", "☆ Bilan", "•••"};
-        String[] described = {"Annuler la dernière action", "Mes observations", "Bilan par joueur", "Autres actions"};
-        Runnable[] clicks = {this::undo, this::history, this::standings, () -> dialog().setTitle("Mon match")
-            .setItems(new String[]{"Accueil", "Synchroniser", "Configurer le serveur", "Exporter mes observations"}, (d,n) -> {
-                if(n==0) showHome(); else if(n==1) sync(); else if(n==2) settings(); else export();
-            }).show()};
-        for(int i=0;i<titles.length;i++) {
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0,dp(48),1); p.setMargins(dp(3),0,dp(3),0);
-            Button tab = button(titles[i], clicks[i]);
-            tab.setContentDescription(described[i]);
-            navigation.addView(tab, p);
-        }
-        if (told()) {
-            ScrollView beside = new ScrollView(this); beside.setFillViewport(true);
-            factsPage = frame(); beside.addView(factsPage); pager.addPage(beside);
-            renderFacts();
-        }
-        if (counted()) {
-            ScrollView further = new ScrollView(this); further.setFillViewport(true);
-            statsPage = frame(); further.addView(statsPage); pager.addPage(further);
-            renderStats();
-        }
-        root = (LinearLayout)scroll.getChildAt(0);
-        pager.show(showing, false);
+        if (factsPage != null) renderFacts();
+        if (statsPage != null) renderStats();
+        renderNotes(); renderTally();
+        pager.onTurn(this::turnCard);
+        pager.show(cardPlace[shownCard] < 0 ? cardPlace[CARD_PITCH] : cardPlace[shownCard], false);
         updateClock(); renderComposer();
+    }
+
+    /**
+     * Une carte du match, ajoutée au pager à sa place et rendue prête à être tirée vers le bas :
+     * le geste vaut partout où le match est ouvert, et non sur la seule carte qui le porterait.
+     */
+    private LinearLayout matchCard(int card) {
+        Pull scroll = new Pull(this);
+        // Sans cela la carte s'arrête où son contenu s'arrête, et la fenêtre transparaît dessous.
+        scroll.setFillViewport(true); scroll.setBackgroundColor(skin.background);
+        scroll.onPull(this::pullMatch, () -> !refreshing && !syncing);
+        LinearLayout page = frame();
+        scroll.addView(page);
+        cardPlace[card] = pager.pages(); cardAt[pager.pages()] = card;
+        pager.addPage(scroll);
+        return page;
+    }
+
+    /**
+     * Tirer une carte du match vers le bas : redemander au fournisseur ce qu'il publie de ce
+     * match, et pousser les notes au passage quand un jeton est configuré.
+     *
+     * <p>Le geste est explicite, donc il passe outre ce qui retient le rafraîchissement
+     * automatique — une fois par minute, et seulement dans la fenêtre où la composition bouge.
+     * Quelqu'un qui tire la page demande maintenant, et « pas encore l'heure » ne se distingue
+     * pas d'une panne pour qui regarde l'écran. Ne restent que les empêchements réels : pas
+     * d'adresse, un match qui ne vient pas du fournisseur, ou une note ouverte — les joueurs ne
+     * doivent pas bouger sous le doigt. Chacun le dit ; refuser en silence, c'est passer pour
+     * un geste raté.
+     *
+     * <p>La synchronisation, elle, ne se réclame pas : sans jeton elle n'a rien à faire et se
+     * tait. Reprocher un jeton absent à qui demandait une actualisation, c'est répondre à côté.
+     *
+     * <p>Répondre vrai, c'est prendre la place que le doigt a ouverte : elle va à la ligne
+     * d'actualisation, comme à l'accueil et au calendrier, et c'est elle qui dit que ça
+     * travaille. Une réussite n'a donc plus rien à annoncer — la ligne l'a montré puis s'est
+     * repliée ; seul un échec mérite encore une phrase.
+     */
+    private boolean pullMatch(float opened) {
+        if (hasServer() && !prefs.getString("token", "").isEmpty()) sync();
+        if (!noteId.isEmpty()) { toast("Note ouverte : le terrain ne bouge pas tant qu'elle l'est."); return false; }
+        if (demoMode()) { toast("Mode démo : ces deux matchs ne viennent d'aucun serveur."); return false; }
+        if (match == null || !match.optString("id").startsWith(REMOTE)) {
+            toast("Match local : il n'y a rien à redemander."); return false;
+        }
+        if (!hasServer()) { toast("Aucun serveur configuré : Accueil → Options."); return false; }
+        refreshing = true;
+        refreshIndicators((int) opened);
+        // Le compteur du suivi automatique repart d'ici : on vient de demander pour lui.
+        polled = System.currentTimeMillis();
+        String id = match.optString("id").substring(REMOTE.length());
+        worker.execute(() -> {
+            JSONObject fetched = null;
+            try { fetched = convertMatch(new JSONObject(get("/v1/football/matches/" + id))); }
+            catch (Exception unreachable) { }
+            JSONObject fresh = fetched;
+            runOnUiThread(() -> {
+                if (isDestroyed()) { refreshing = false; return; }
+                refreshing = false;
+                // Refermer la ligne avant de redessiner, et non l'inverse : une composition qui a
+                // changé reconstruit l'écran, ce qui tient l'image le temps d'une fermeture.
+                refreshIndicators(0);
+                if (fresh == null) { toast("Fournisseur injoignable. Notes conservées sur cet appareil."); return; }
+                ticker.postDelayed(() -> { if (!isDestroyed()) absorb(fresh); }, SETTLE);
+            });
+        });
+        return true;
+    }
+
+    /** La carte vient de changer : on retient laquelle, et on la rafraîchit. */
+    private void turnCard() {
+        shownCard = cardAt[pager.page()];
+        // Les faits ne bougent qu'avec le fournisseur, mes notes à chaque geste : elles se
+        // redessinent en arrivant plutôt qu'à chaque frappe sur le terrain.
+        if (shownCard == CARD_NOTES) renderNotes();
+        else if (shownCard == CARD_TALLY) renderTally();
     }
 
     /** Whether the provider gave any account of this match to put on the second card. */
@@ -2126,15 +2341,14 @@ public class MainActivity extends Activity {
     // ——— Ce que le fournisseur raconte, à côté des notes ———
 
     /**
-     * The provider's own account of the match, on a page of its own. Deliberately not folded into
-     * the notes: the bilan promises to measure only what was observed, so a goal ESPN counted is
-     * shown next to that promise, never inside it.
+     * The provider's own account of the match, on a card of its own, left of the pitch.
+     * Deliberately not folded into the notes: the bilan promises to measure only what was
+     * observed, so a goal ESPN counted is shown next to that promise, never inside it.
      */
     private void renderFacts() {
         LinearLayout previous = root;
         root = factsPage; factsPage.removeAllViews();
-        TextView title = label("Faits du match");
-        title.setTextSize(24); title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        cardTitle("Faits du match");
         TextView caveat = label("Relevé du fournisseur, à côté de vos notes. Rien ici n’entre dans "
             + "votre journal ni dans votre bilan.");
         caveat.setTextSize(12); caveat.setTextColor(skin.muted);
@@ -2147,45 +2361,33 @@ public class MainActivity extends Activity {
         }
         timelineSection();
         groundSection();
-        crumbs("‹  Balayer vers la droite pour revenir au terrain",
-            counted() ? "Statistiques  ›" : null, 2);
         root = previous;
     }
 
     /**
-     * The figures, one more card to the right. Their own page because they are read differently
+     * The figures, one more card to the left. Their own page because they are read differently
      * from the story of the match: a column of counts is scanned, a timeline is followed.
      */
     private void renderStats() {
         LinearLayout previous = root;
         root = statsPage; statsPage.removeAllViews();
         // Named for what it shows, not for who supplies it; the caveat below says where it comes from.
-        TextView title = label("Statistiques");
-        title.setTextSize(24); title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        cardTitle("Statistiques");
         TextView caveat = label("Compteurs " + match.optString("lineup_source", "du fournisseur")
             + ", à côté de vos notes. Rien ici n’entre dans votre journal ni dans votre bilan.");
         caveat.setTextSize(12); caveat.setTextColor(skin.muted);
         countedSection();
-        crumbs("‹  Balayer vers la droite pour revenir "
-            + (told() ? "aux faits" : "au terrain"), null, 0);
         root = previous;
     }
 
-    /** Where this card sits and where the next one is, on the line that closes a page. */
-    private void crumbs(String back, String forward, int page) {
-        LinearLayout row = strip();
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-        p.topMargin = dp(14); root.addView(row, p);
-        TextView here = new TextView(this);
-        here.setText(back); here.setTextSize(12); here.setTextColor(skin.muted);
-        row.addView(here, new LinearLayout.LayoutParams(0, -2, 1));
-        if (forward == null) return;
-        TextView next = new TextView(this);
-        next.setText(forward); next.setTextSize(12); next.setTextColor(skin.accent);
-        next.setPadding(dp(10), dp(6), 0, dp(6));
-        next.setContentDescription(forward.replace("  ›", "") + ", ou balayer vers la gauche");
-        next.setOnClickListener(v -> pager.show(page, true));
-        row.addView(next, new LinearLayout.LayoutParams(-2, -2));
+    /**
+     * Le titre d'une carte du match. Une carte n'a pas de barre de titre : elle n'est pas une
+     * destination qu'on a demandée, c'est la page d'à côté, et elle porte son nom en tête.
+     */
+    private TextView cardTitle(String text) {
+        TextView title = label(text);
+        title.setTextSize(24); title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return title;
     }
 
     /** Goals, cards and changes, in the order they happened. The rest is clock keeping. */
@@ -2331,6 +2533,7 @@ public class MainActivity extends Activity {
      * so the only thing left to say out loud is when one moment ends and the next begins.
      */
     private void tapPlayer(String id) {
+        if (!noteId.isEmpty() && noteMinute == TIMELESS) { mention(id); return; }
         if (noteId.isEmpty()) {
             noteId = UUID.randomUUID().toString(); entries.clear();
             draft = ""; draftWritten = ""; written = false;
@@ -2342,10 +2545,14 @@ public class MainActivity extends Activity {
     /** Long press on the pitch: the most visual way to take someone back out of the note. */
     private void pullPlayer(String id) {
         if (noteId.isEmpty() || !entries.containsKey(id)) return;
+        // A match note is written when it is finished, so taking someone out writes nothing yet.
+        if (noteMinute == TIMELESS) { mention(id); return; }
         entries.remove(id);
         if (id.equals(focus)) focus = entries.isEmpty() ? "" : last(entries.keySet());
         pitch.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-        if (written && entries.isEmpty()) {
+        // With nobody left and nothing written or drawn, there is no note left either; a comment
+        // or a schema keeps it alive, as a note without a player.
+        if (written && entries.isEmpty() && draft.trim().isEmpty() && diagram == null) {
             try { record(operation("delete", noteId)); toast("Note supprimée"); }
             catch (Exception e) { error(e); }
             closeNote(); return;
@@ -2359,9 +2566,7 @@ public class MainActivity extends Activity {
         entries.put(focus, key);
         if (!writeNote()) return;
         composer.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-        String recap = shortName(focus) + " · " + actionName(key);
-        status.setText(noteMinute + "′ · " + recap);
-        toast("Noté · " + noteMinute + "′  " + recap);
+        toast("Noté · " + noteMinute + "′  " + shortName(focus) + " · " + actionName(key));
         renderComposer();
     }
     /**
@@ -2373,10 +2578,15 @@ public class MainActivity extends Activity {
      */
     private boolean writeNote() {
         try {
-            String people = noteMinute + "·" + draftEntries();
+            String people = peopleKey();
             if (!written || !people.equals(entriesWritten)) {
-                record(operation("note", noteId).put("match_id", match.getString("id"))
-                    .put("minute", noteMinute).put("entries", draftEntries()));
+                JSONObject note = operation("note", noteId).put("match_id", match.getString("id"));
+                if (noteMinute == TIMELESS)
+                    note.put("minute", JSONObject.NULL).put("entries", new JSONArray())
+                        .put("team", noteTeam.isEmpty() ? JSONObject.NULL : noteTeam)
+                        .put("players", new JSONArray(entries.keySet()));
+                else note.put("minute", noteMinute).put("entries", draftEntries());
+                record(note);
                 entriesWritten = people;
             }
             if (!draft.trim().equals(draftWritten)) {
@@ -2391,6 +2601,42 @@ public class MainActivity extends Activity {
             return true;
         } catch (Exception e) { error(e); return false; }
     }
+    /** Who the open note is about, as one comparable string: equal means nothing to rewrite. */
+    private String peopleKey() {
+        return noteMinute == TIMELESS ? "match·" + noteTeam + "·" + entries.keySet()
+            : noteMinute + "·" + draftEntries();
+    }
+    /**
+     * A note on the match as a whole, opened in the panel like any other. The pitch and its two
+     * benches name the players and the coaches, the strip under it the two clubs; nothing is
+     * written before it is finished, since here the text is the note and it is typed last.
+     */
+    private void openMatchNote() {
+        noteId = UUID.randomUUID().toString(); entries.clear(); focus = "";
+        draft = ""; draftWritten = ""; entriesWritten = ""; written = false;
+        noteMinute = TIMELESS; noteTeam = "";
+        renderComposer();
+    }
+    /** In or out of the match note: a club and players are its two ways of being about someone. */
+    private void mention(String id) {
+        if (entries.remove(id) == null) { entries.put(id, ""); noteTeam = ""; }
+        renderComposer();
+    }
+    private void aboutClub(String side) {
+        noteTeam = side.equals(noteTeam) ? "" : side;
+        if (!noteTeam.isEmpty()) entries.clear();
+        renderComposer();
+    }
+    /** Writes what changed, or drops a note left with nothing in it. */
+    private void finishMatchNote() {
+        if (entries.isEmpty() && noteTeam.isEmpty() && draft.trim().isEmpty()) {
+            if (written) discardNote(); else closeNote();
+            return;
+        }
+        boolean fresh = !written;
+        if (writeNote()) toast(fresh ? "Noté" : "Note modifiée");
+        closeNote();
+    }
     /** The open schema as it would be written down; "" when the note carries none. */
     private String drawnJson() {
         try { return diagram == null ? "" : diagram.toJson().toString(); }
@@ -2404,7 +2650,7 @@ public class MainActivity extends Activity {
     }
     private void closeNote() {
         noteId = ""; entries.clear(); focus = ""; draft = ""; draftWritten = ""; written = false;
-        tacticTime = 0;
+        tacticTime = 0; noteTeam = "";
         diagram = null; entriesWritten = ""; diagramWritten = "";
         renderComposer();
     }
@@ -2413,28 +2659,25 @@ public class MainActivity extends Activity {
      * where it was drawn: the board is the note, and the panel could not show it.
      */
     private void amend(JSONObject note) {
-        noteId = note.optString("note_id"); noteMinute = note.optInt("minute");
+        noteId = note.optString("note_id"); noteMinute = minuteOf(note);
         loadEntries(entriesOf(note));
+        // A match note's players come back as named, with no action waiting for them.
+        for (String id : mentionsOf(note)) entries.put(id, "");
+        noteTeam = clubOf(note);
         draft = note.optString("comment"); draftWritten = draft; written = true;
-        entriesWritten = noteMinute + "·" + draftEntries();
+        entriesWritten = peopleKey();
         JSONObject drawn = note.optJSONObject("schema");
         diagram = drawn == null ? null : Diagram.from(drawn);
         diagramWritten = drawnJson();
-        focus = "";
+        // The last player named is the one in hand, so the palette can change his action at once.
+        focus = noteMinute == TIMELESS || draftEntries().length() == 0 ? "" : last(entries.keySet());
         if (diagram != null) showTactic(); else renderComposer();
-    }
-    private void removeNote(JSONObject note) {
-        try {
-            record(operation("delete", note.getString("note_id")));
-            toast("Note supprimée"); renderComposer();
-        } catch (Exception e) { error(e); }
     }
     /** A note with nobody in it is its text, so it is written straight from the text. */
     private void generalNote() {
         updateClock();
-        EditText input = new EditText(this); input.setHint("Ce que je veux noter");
-        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
-        dialog().setTitle("Note sans joueur · " + minute + "′").setView(input)
+        EditText input = noteField("Ce que je veux noter", "");
+        dialog().setTitle("Note sans joueur · " + minute + "′").setView(dialogField(input))
             .setNegativeButton("Annuler", null).setPositiveButton("Noter", (d,w) -> {
                 if (input.getText().toString().trim().isEmpty()) { toast("Note vide, rien n’a été écrit"); return; }
                 noteId = UUID.randomUUID().toString(); entries.clear();
@@ -2443,18 +2686,121 @@ public class MainActivity extends Activity {
                 closeNote();
             }).show();
     }
+    /**
+     * The panel of a note on the whole match. Its players are touched on the pitch, as for any
+     * note, only nobody here takes an action; a crest in the strip under the pitch makes it the
+     * club's note instead. The text is typed right here, because here the text is the note.
+     */
+    private void renderMatchDraft() {
+        LinearLayout line = strip();
+        TextView tag = new TextView(this);
+        tag.setText("Match"); tag.setTextSize(15); tag.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tag.setTextColor(skin.accent); tag.setGravity(Gravity.CENTER);
+        tag.setBackground(control(skin.chip, skin.control));
+        tag.setContentDescription("Note de match, sans minute");
+        LinearLayout.LayoutParams tagSize = new LinearLayout.LayoutParams(dp(70), dp(44));
+        tagSize.rightMargin = dp(8); line.addView(tag, tagSize);
+        HorizontalScrollView chips = sideways();
+        LinearLayout chipRow = strip(); chips.addView(chipRow);
+        if (!noteTeam.isEmpty())
+            subjectChip(chipRow, teamName(noteTeam), "Retirer " + teamName(noteTeam), () -> aboutClub(noteTeam));
+        for (String id : new ArrayList<>(entries.keySet()))
+            subjectChip(chipRow, shortName(id), "Retirer " + shortName(id), () -> mention(id));
+        if (noteTeam.isEmpty() && entries.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("↑  Des joueurs, un club — ou personne");
+            empty.setTextSize(12); empty.setTextColor(skin.muted); empty.setGravity(Gravity.CENTER_VERTICAL);
+            chipRow.addView(empty, new LinearLayout.LayoutParams(-2, dp(44)));
+        }
+        line.addView(chips, new LinearLayout.LayoutParams(0, dp(44), 1));
+        composer.addView(line, new LinearLayout.LayoutParams(-1, dp(44)));
+
+        Button done = accent(button("", this::finishMatchNote));
+        done.setTextSize(15);
+        Runnable label = () -> {
+            boolean something = written || !entries.isEmpty() || !noteTeam.isEmpty() || !draft.trim().isEmpty();
+            done.setText(something ? "Terminé" : "Abandonner");
+            done.setContentDescription(something ? "Enregistrer cette note de match"
+                : "Abandonner cette note de match");
+        };
+        EditText text = noteField("Ce que je retiens du match", draft);
+        text.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(android.text.Editable s) { draft = s.toString(); label.run(); }
+        });
+        LinearLayout.LayoutParams textSize = new LinearLayout.LayoutParams(-1, 0, 1);
+        textSize.topMargin = dp(6);
+        composer.addView(text, textSize);
+
+        LinearLayout footer = strip();
+        if (written) {
+            Button drop = button("🗑  Supprimer", this::discardNote);
+            drop.setTextSize(13); drop.setContentDescription("Supprimer cette note");
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(126), dp(46));
+            p.rightMargin = dp(6); footer.addView(drop, p);
+        }
+        label.run();
+        footer.addView(done, new LinearLayout.LayoutParams(0, dp(46), 1));
+        LinearLayout.LayoutParams footerSize = new LinearLayout.LayoutParams(-1, dp(46));
+        footerSize.topMargin = dp(6); composer.addView(footer, footerSize);
+    }
+    /** Whom the note is about, one chip each, and the chip itself takes it back out. */
+    private void subjectChip(LinearLayout row, String name, String described, Runnable remove) {
+        Button chip = button(name + "   ×", remove);
+        chip.setTextSize(13); chip.setTextColor(skin.accent); chip.setMinHeight(0);
+        chip.setPadding(dp(10), 0, dp(10), 0); chip.setContentDescription(described);
+        GradientDrawable shape = rounded(skin.chip, skin.control); shape.setStroke(dp(1), skin.accent);
+        chip.setBackground(tappable(shape));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(44));
+        p.rightMargin = dp(6); row.addView(chip, p);
+    }
+    /**
+     * The two crests under the pitch while a match note is open: touching one makes it the club's
+     * note. Everyone else — the eleven, the substitutes, the coaches — is touched where they
+     * stand, on the grass or on their bench, the same as for any note.
+     */
+    private void renderClubs() {
+        if (clubs == null) return;
+        boolean shown = !noteId.isEmpty() && noteMinute == TIMELESS && "match".equals(screen);
+        clubs.setVisibility(shown ? View.VISIBLE : View.GONE);
+        if (!shown) return;
+        clubs.removeAllViews();
+        for (String side : new String[]{"home", "away"}) {
+            boolean chosen = side.equals(noteTeam);
+            Button crest = button(teamName(side), () -> aboutClub(side));
+            crest.setTextSize(13); crest.setMinHeight(0); crest.setMinWidth(0); crest.setMinimumWidth(0);
+            crest.setPadding(dp(10), 0, dp(12), 0);
+            crest.setSingleLine(true); crest.setEllipsize(TextUtils.TruncateAt.END);
+            paintChoice(crest, chosen);
+            if (!chosen) crest.setTextColor(sideColour(side));
+            crest.setContentDescription((chosen ? "Retirer " : "Note sur ") + teamName(side));
+            JSONObject team = sideTeam(side);
+            wearCrest(crest, team == null ? "" : team.optString("logo"));
+            LinearLayout.LayoutParams crestSize = new LinearLayout.LayoutParams(0, -1, 1);
+            if ("away".equals(side)) crestSize.leftMargin = dp(8);
+            clubs.addView(crest, crestSize);
+        }
+    }
+    /** Chosen or not, said by the fill alone: the same language as the palette's cells. */
+    private void paintChoice(Button choice, boolean chosen) {
+        choice.setBackground(tappable(chosen ? leading(skin.control) : control(skin.chip, skin.control)));
+        choice.setTextColor(chosen ? skin.onAccent : skin.ink);
+    }
     private void renderComposer() {
         // The panel belongs to the match screen; a note closed from anywhere else has none to dress.
         if (composer == null || !"match".equals(screen)) return;
         composer.removeAllViews();
-        boolean open = !noteId.isEmpty();
-        if (open) renderDraft(); else renderIdle();
+        boolean open = !noteId.isEmpty(), timeless = open && noteMinute == TIMELESS;
+        if (timeless) renderMatchDraft(); else if (open) renderDraft(); else renderIdle();
+        renderClubs();
         Map<String,String> marks = new HashMap<>();
         Map<String,Integer> tints = new HashMap<>();
         if (open) {
             for (Map.Entry<String,String> entry : entries.entrySet()) {
                 String action = entry.getValue();
-                marks.put(entry.getKey(), action.isEmpty() ? "?" : icon(action));
+                // Named in a match note is all there is to it: a tick, never a question mark.
+                marks.put(entry.getKey(), timeless ? "✓" : action.isEmpty() ? "?" : icon(action));
                 tints.put(entry.getKey(), Skin.onGrass(action.isEmpty() ? skin.accent : solid(action)));
             }
         } else {
@@ -2475,10 +2821,20 @@ public class MainActivity extends Activity {
      * — giving that one the accent button sent everybody down the one path that leads nowhere.
      */
     private void renderIdle() {
+        LinearLayout head = strip();
         TextView prompt = new TextView(this);
         prompt.setText("↑   Touche un joueur sur le terrain");
         prompt.setTextSize(15); prompt.setTextColor(skin.ink);
-        composer.addView(prompt);
+        head.addView(prompt, new LinearLayout.LayoutParams(0, -2, 1));
+        // Annuler et refaire se rangent ici, en bout d'invite : le panneau au repos a la place de
+        // reste, donc les deux ne coûtent pas une rangée au terrain. Toujours là, éteints quand
+        // ils n'ont rien à faire : un bouton qui apparaît et disparaît déplace son voisin, et le
+        // doigt qui visait « annuler » tombe sur « refaire ».
+        head.addView(historyAction(R.drawable.ic_undo, "Annuler le dernier geste",
+            this::undo, undoable()), new LinearLayout.LayoutParams(dp(36), dp(36)));
+        head.addView(historyAction(R.drawable.ic_redo, "Refaire le geste annulé",
+            this::redo, !redoable.isEmpty()), new LinearLayout.LayoutParams(dp(36), dp(36)));
+        composer.addView(head, new LinearLayout.LayoutParams(-1, -2));
         TextView how = new TextView(this);
         how.setText("puis son action — la note s’écrit aussitôt");
         how.setTextSize(12); how.setTextColor(skin.muted); how.setPadding(0, dp(3), 0, dp(4));
@@ -2489,21 +2845,17 @@ public class MainActivity extends Activity {
                 JSONObject note = recent.get(i);
                 LinearLayout line = strip();
                 TextView text = new TextView(this);
-                text.setText(note.optInt("minute") + "′   " + summary(note));
+                text.setText(stamp(note) + "   " + summary(note));
                 text.setTextSize(12); text.setTextColor(i == 0 ? skin.ink : skin.muted);
-                // The newest note shares its line with two controls, so let it breathe over two.
+                // The newest note may share its line with a control, so let it breathe over two.
                 text.setMaxLines(i == 0 ? 2 : 1); text.setEllipsize(TextUtils.TruncateAt.END);
                 line.addView(text, new LinearLayout.LayoutParams(0, -1, 1));
-                // The moment just written is the one still likely to need a second name, or none at all.
-                if (i == 0) {
-                    boolean drawn = note.optJSONObject("schema") != null;
-                    line.addView(mini(drawn ? "▤ ouvrir" : "＋ joueur",
-                            drawn ? "Rouvrir le schéma de cette note" : "Ajouter un joueur à cette note",
-                            () -> amend(note)),
+                // The moment just written is the one still likely to need a second name.
+                // Giving it that second name is still writing it. Editing or deleting a note —
+                // reopening a schema, rewriting a note on the match — is done from the list of notes.
+                if (i == 0 && minuteOf(note) != TIMELESS && note.optJSONObject("schema") == null)
+                    line.addView(mini("＋ joueur", "Ajouter un joueur à cette note", () -> amend(note)),
                         new LinearLayout.LayoutParams(dp(86), dp(34)));
-                    line.addView(mini("🗑", "Supprimer cette note", () -> removeNote(note)),
-                        new LinearLayout.LayoutParams(dp(44), dp(34)));
-                }
                 LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(i == 0 ? 46 : 24));
                 p.topMargin = dp(i == 0 ? 4 : 2);
                 composer.addView(line, p);
@@ -2511,13 +2863,17 @@ public class MainActivity extends Activity {
         } catch (Exception e) { error(e); }
         composer.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout bottom = strip();
-        bottom.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        // The two other ways of writing, offered as what they are: side paths off the fast one.
+        // The other ways of writing, offered as what they are: side paths off the fast one.
         bottom.addView(ghost("▤  Tactique", "Note tactique : placer les joueurs et tracer le jeu",
-            this::openTactic), new LinearLayout.LayoutParams(dp(112), dp(40)));
-        LinearLayout.LayoutParams generalSize = new LinearLayout.LayoutParams(dp(146), dp(40));
+            this::openTactic), new LinearLayout.LayoutParams(0, dp(40), 1));
+        LinearLayout.LayoutParams generalSize = new LinearLayout.LayoutParams(0, dp(40), 1);
         generalSize.leftMargin = dp(6);
-        bottom.addView(ghost("+  Note sans joueur", "Note sans joueur", this::generalNote), generalSize);
+        bottom.addView(ghost("+  Note sans joueur", "Note sans joueur, à la minute du chrono",
+            this::generalNote), generalSize);
+        LinearLayout.LayoutParams matchSize = new LinearLayout.LayoutParams(0, dp(40), 1);
+        matchSize.leftMargin = dp(6);
+        bottom.addView(ghost("✎  Note de match", "Note de match, sans minute",
+            this::openMatchNote), matchSize);
         composer.addView(bottom, new LinearLayout.LayoutParams(-1, dp(40)));
     }
     private void renderDraft() {
@@ -2632,11 +2988,8 @@ public class MainActivity extends Activity {
         TextView remove = new TextView(this);
         remove.setText("×"); remove.setTextSize(18); remove.setTextColor(skin.muted);
         remove.setGravity(Gravity.CENTER); remove.setContentDescription("Retirer " + shortName(id));
-        remove.setOnClickListener(v -> {
-            entries.remove(id);
-            if (id.equals(focus)) focus = entries.isEmpty() ? "" : last(entries.keySet());
-            renderComposer();
-        });
+        // The same as a long press on the pitch: a note reopened to be corrected must hear it.
+        remove.setOnClickListener(v -> pullPlayer(id));
         chip.addView(remove, new LinearLayout.LayoutParams(dp(32), -1));
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(44));
         p.rightMargin = dp(6); row.addView(chip, p);
@@ -2656,10 +3009,8 @@ public class MainActivity extends Activity {
             }).setNegativeButton("Annuler", null).show();
     }
     private void editDraft() {
-        EditText input = new EditText(this); input.setHint("Commentaire facultatif");
-        input.setText(draft);
-        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
-        dialog().setTitle("Commentaire").setView(input)
+        EditText input = noteField("Commentaire facultatif", draft);
+        dialog().setTitle("Commentaire").setView(dialogField(input))
             .setNegativeButton("Annuler", null).setPositiveButton("Enregistrer", (d,w) -> {
                 draft = input.getText().toString();
                 // A tactical note may carry nothing else, so its comment is written straight away.
@@ -3288,10 +3639,7 @@ public class MainActivity extends Activity {
             if (already.contains(id) || !standing.containsKey(id)) continue;
             available.add(player);
         }
-        available.sort(Comparator.comparingInt((JSONObject player) -> {
-            int number = player.optInt("number", 0);
-            return number > 0 ? number : Integer.MAX_VALUE;
-        }).thenComparing(player -> player.optString("name"), String.CASE_INSENSITIVE_ORDER));
+        available.sort(Lineup.SHIRT_ORDER);
         for (JSONObject player : available) {
             String id = player.optString("id");
             ids.add(id); items.add(shortName(id));
@@ -3544,8 +3892,40 @@ public class MainActivity extends Activity {
             : token.label.isEmpty() ? "un pion" : "pion " + token.label;
     }
 
+    /** A note's minute, or TIMELESS when it speaks of the match as a whole. */
+    private static int minuteOf(JSONObject note) {
+        return note.isNull("minute") ? TIMELESS : note.optInt("minute");
+    }
+    /** Where a note sits in the match, the way a list shows it: "34′", or "Match · PSV" for none. */
+    private String stamp(JSONObject note) {
+        if (minuteOf(note) != TIMELESS) return note.optInt("minute") + "′";
+        return clubOf(note).isEmpty() ? "Match" : "Match · " + clubLabel(clubOf(note));
+    }
+    /** The club a match note is about, "home" or "away", or "" when it is about both. */
+    private static String clubOf(JSONObject note) {
+        return note.isNull("team") ? "" : note.optString("team");
+    }
+    /** The players a match note names, in the order they were named. */
+    private static List<String> mentionsOf(JSONObject note) {
+        List<String> ids = new ArrayList<>();
+        JSONArray list = note.optJSONArray("players");
+        for (int i = 0; list != null && i < list.length(); i++) ids.add(list.optString(i));
+        return ids;
+    }
+    /** A club where room is short: its three letters when the provider gives them. */
+    private String clubLabel(String side) {
+        JSONObject team = sideTeam(side);
+        String tla = team == null ? "" : team.optString("tla");
+        return tla.isEmpty() ? teamName(side) : tla;
+    }
     /** One line: "⚽ 10 Mbappé · → 6 Pogba". */
     private String summary(JSONObject note) {
+        if (minuteOf(note) == TIMELESS) {
+            List<String> said = new ArrayList<>();
+            for (String id : mentionsOf(note)) said.add(shortName(id));
+            String names = String.join(", ", said), text = note.optString("comment");
+            return names.isEmpty() ? text : text.isEmpty() ? names : names + " · " + text;
+        }
         List<JSONObject> list = ordered(entriesOf(note));
         String drawn = note.optJSONObject("schema") == null ? "" : "▤  ";
         if (list.isEmpty())
@@ -3560,7 +3940,7 @@ public class MainActivity extends Activity {
         return text.toString();
     }
     /** Anything the user asks for lands here, and puts undo back at the end of the log. */
-    private void record(JSONObject op) { store.add(op); undone = 0; }
+    private void record(JSONObject op) { store.add(op); undone = 0; redoable.clear(); }
     private JSONObject operation(String kind, String noteId) throws Exception {
         return new JSONObject().put("id", UUID.randomUUID().toString()).put("kind", kind).put("note_id", noteId);
     }
@@ -3589,13 +3969,17 @@ public class MainActivity extends Activity {
     }
     private String playerName(String id) {
         JSONObject player = playerById(id);
-        return player == null ? id : player.optInt("number") + " · " + PlayerName.shorten(player.optString("name"))
-            + " (" + teamName(player.optString("team")) + ")";
+        if (player == null) return id;
+        String team = " (" + teamName(player.optString("team")) + ")";
+        return Lineup.coach(player) ? "Coach" + team
+            : player.optInt("number") + " · " + PlayerName.shorten(player.optString("name")) + team;
     }
-    /** Short enough for a chip: "10 Mbappé". */
+    /** Short enough for a chip: "10 Mbappé", or "Coach PSV" for the one without a number. */
     private String shortName(String id) {
         JSONObject player = playerById(id);
-        return player == null ? id : player.optInt("number") + " " + PlayerName.shorten(player.optString("name"));
+        if (player == null) return id;
+        return Lineup.coach(player) ? "Coach " + clubLabel(player.optString("team"))
+            : player.optInt("number") + " " + PlayerName.shorten(player.optString("name"));
     }
     private List<JSONObject> notes() throws Exception { return notes(match.optString("id")); }
 
@@ -3685,14 +4069,20 @@ public class MainActivity extends Activity {
         return line.toString();
     }
 
-    private void standings() {
-        screen = "standings"; page("Bilan de mes notes", this::showMatch);
-
-        TextView caveat = label("Calculé sur mes seules notes : ce que j’ai remarqué, pas le match complet. "
-            + "Base 6, une demi-note par point. La ligne grise est le compte du fournisseur, "
-            + "montré à côté et jamais compris dans la note.");
-        caveat.setTextSize(12); caveat.setTextColor(skin.muted);
+    /**
+     * Le bilan, la carte la plus à droite : deux balayages depuis le terrain, en passant par mes
+     * notes — la note par joueur se lit après les notes qui la font, jamais avant.
+     */
+    private void renderTally() {
+        if (tallyPage == null) return;
+        LinearLayout previous = root;
+        root = tallyPage; tallyPage.removeAllViews();
         try {
+            cardTitle("Bilan de mes notes");
+            TextView caveat = label("Calculé sur mes seules notes : ce que j’ai remarqué, pas le match complet. "
+                + "Base 6, une demi-note par point. La ligne grise est le compte du fournisseur, "
+                + "montré à côté et jamais compris dans la note.");
+            caveat.setTextSize(12); caveat.setTextColor(skin.muted);
             Map<String,int[]> balance = balances();
             Map<String,LinkedHashMap<String,Integer>> detail = new HashMap<>();
             for (JSONObject note : notes()) {
@@ -3740,6 +4130,7 @@ public class MainActivity extends Activity {
             int silent = match.optJSONArray("players").length() - ranked.size();
             if (silent > 0) label(silent + (silent > 1 ? " joueurs sans note" : " joueur sans note"));
         } catch (Exception e) { error(e); }
+        finally { root = previous; }
     }
     private void card(CharSequence text, int accentColour) {
         TextView view = new TextView(this); view.setText(text); view.setTextSize(13);
@@ -3750,59 +4141,144 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(8);
         root.addView(view, p);
     }
+    /** S'il reste une ligne à défaire, en comptant celles qu'annuler a déjà remontées. */
+    private boolean undoable() {
+        try { return store.operations(false).length() - 1 - undone >= 0; }
+        catch (Exception unreadable) { return false; }
+    }
+
     /**
-     * Undo cannot remove anything from an append-only log, so it appends the operation that
-     * compensates the last one — a restore for a deletion, the previous version of a rewritten
-     * note, the previous text of a comment. Each undo appends exactly one operation, which is
-     * why walking further back skips two positions per step.
+     * Undo cannot remove anything from an append-only log, so it appends the operations that
+     * compensate the last gesture — a restore for a deletion, the previous version of a rewritten
+     * note, the previous text of a comment.
+     *
+     * <p>Un geste, et non une ligne du journal. Écrire une note de match ou une note sans joueur,
+     * c'est écrire la note puis son texte : deux lignes, et défaire le texte laissait derrière une
+     * note vide qu'il fallait annuler une seconde fois. Une note vide n'a aucun intérêt, donc les
+     * deux partent ensemble.
      */
     private void undo() {
         try {
             JSONArray ops = store.operations(false);
-            int index = ops.length() - 1 - 2 * undone;
-            if (index < 0) { toast("Plus rien à annuler"); return; }
-            JSONObject target = ops.getJSONObject(index);
-            String id = target.getString("note_id"), said;
-            JSONObject compensation;
-            switch (target.getString("kind")) {
-                case "delete":
-                    compensation = operation("restore", id); said = "Suppression annulée"; break;
-                case "restore":
-                    compensation = operation("delete", id); said = "Note supprimée de nouveau"; break;
-                case "comment": {
-                    String previous = previousComment(ops, index, id);
-                    compensation = operation("comment", id).put("text", previous);
-                    said = previous.isEmpty() ? "Commentaire retiré" : "Commentaire précédent rétabli";
-                    break;
-                }
-                case "diagram": {
-                    JSONObject previous = previousSchema(ops, index, id);
-                    // Nothing before it means the schema never existed: an empty board says so,
-                    // and the note it belongs to is left alone.
-                    compensation = operation("diagram", id).put("schema",
-                        previous == null ? new Diagram().toJson() : previous);
-                    said = previous == null ? "Schéma effacé" : "Schéma précédent rétabli";
-                    break;
-                }
-                default: {
-                    JSONObject earlier = previousVersion(ops, index, id);
-                    if (earlier == null) {
-                        compensation = operation("delete", id); said = "Note annulée";
-                    } else {
-                        compensation = operation("note", id)
-                            .put("match_id", earlier.getString("match_id"))
-                            .put("minute", earlier.getInt("minute"))
-                            .put("entries", entriesOf(earlier));
-                        said = "Version précédente rétablie";
-                    }
-                }
+            int index = ops.length() - 1 - undone;
+            // Le bouton est éteint dans ce cas : on ne vient ici que par accident.
+            if (index < 0) return;
+            int start = gestureStart(ops, index);
+            String id = ops.getJSONObject(start).getString("note_id");
+            List<JSONObject> compensations = new ArrayList<>();
+            if ("note".equals(ops.getJSONObject(start).getString("kind"))
+                    && previousVersion(ops, start, id) == null) {
+                // La note naît de ce geste : la supprimer efface d'un coup tout ce qu'il a écrit,
+                // texte et schéma compris. Leurs lignes restent intactes, donc un rétablissement
+                // plus tard rend la note telle qu'elle était et non vidée de sa moitié.
+                compensations.add(operation("delete", id));
+            } else {
+                for (int i = start; i <= index; i++) compensations.add(compensationFor(ops, i, id));
             }
-            store.add(compensation);
-            undone++;
-            toast(said);
+            List<JSONObject> replay = replayFor(ops, start, index, id, compensations);
+            for (JSONObject compensation : compensations) store.add(compensation);
+            undone += (index - start + 1) + compensations.size();
+            redoable.push(new Undone(replay, index));
+            // Pas de mot : la note disparaît ou revient sous les yeux, et un toast qui le répète
+            // cache le bas du panneau le temps de le lire.
             if (noteId.isEmpty()) renderComposer(); else closeNote();
+            // Les deux cartes de droite tiennent le journal défait : elles ne peuvent pas rester
+            // sur la version d'avant.
+            renderNotes(); renderTally();
         } catch (Exception e) { error(e); }
     }
+
+    /** Refaire le dernier geste défait : le chemin est en mémoire, il suffit de le réécrire. */
+    private void redo() {
+        Undone step = redoable.poll();
+        if (step == null) return;
+        try {
+            // Une même reprise peut être réécrite plusieurs fois au fil des allers-retours, et
+            // deux lignes du journal ne partagent pas un identifiant.
+            for (JSONObject op : step.replay) store.add(op.put("id", UUID.randomUUID().toString()));
+            // Tout ce qui a été écrit depuis le geste est derrière nous : ses compensations, et
+            // celles des allers-retours faits entre-temps.
+            undone = store.operations(false).length() - 1 - step.end;
+            if (noteId.isEmpty()) renderComposer(); else closeNote();
+            renderNotes(); renderTally();
+        } catch (Exception e) { error(e); }
+    }
+
+    /**
+     * Ce qu'il faudra réécrire pour refaire le geste des indices {@code start} à {@code index}.
+     *
+     * <p>Une note née du geste s'est défaite d'une seule suppression : la refaire, c'est la
+     * rétablir — son texte et son schéma sont restés dans le journal et reviennent avec elle.
+     * Partout ailleurs, réécrire les lignes du geste les réapplique telles quelles.
+     */
+    private List<JSONObject> replayFor(JSONArray ops, int start, int index, String id,
+                                       List<JSONObject> compensations) throws Exception {
+        List<JSONObject> replay = new ArrayList<>();
+        if ("note".equals(ops.getJSONObject(start).getString("kind"))
+                && compensations.size() == 1
+                && "delete".equals(compensations.get(0).getString("kind"))) {
+            replay.add(operation("restore", id));
+            return replay;
+        }
+        for (int i = start; i <= index; i++)
+            replay.add(new JSONObject(ops.getJSONObject(i).toString()));
+        return replay;
+    }
+
+    /**
+     * Où commence le geste dont l'opération d'indice {@code last} est la fin : les lignes de queue
+     * qui portent le même identifiant de note, jusqu'à l'écriture de la note comprise.
+     *
+     * <p>Jamais deux fois la même sorte : une même sorte reprise, ce sont deux gestes. Corriger le
+     * texte d'une note écrite plus tôt défait le texte, pas la note. Et un tableau se dessine trait
+     * par trait, chacun sa ligne — les défaire d'un bloc serait effacer le dessin entier.
+     */
+    private int gestureStart(JSONArray ops, int last) throws Exception {
+        JSONObject end = ops.getJSONObject(last);
+        if (!WRITTEN.contains(end.getString("kind"))) return last;
+        String id = end.getString("note_id");
+        Set<String> kinds = new HashSet<>();
+        kinds.add(end.getString("kind"));
+        int start = last;
+        while (start > 0 && !"note".equals(ops.getJSONObject(start).getString("kind"))) {
+            JSONObject earlier = ops.getJSONObject(start - 1);
+            if (!id.equals(earlier.optString("note_id"))) break;
+            if (!WRITTEN.contains(earlier.getString("kind"))) break;
+            if (!kinds.add(earlier.getString("kind"))) break;
+            start--;
+        }
+        return start;
+    }
+
+    /** Ce qu'il faut écrire pour défaire l'opération d'indice {@code i}. */
+    private JSONObject compensationFor(JSONArray ops, int i, String id) throws Exception {
+        JSONObject target = ops.getJSONObject(i);
+        switch (target.getString("kind")) {
+            case "delete": return operation("restore", id);
+            case "restore": return operation("delete", id);
+            case "comment": return operation("comment", id).put("text", previousComment(ops, i, id));
+            case "diagram": {
+                JSONObject previous = previousSchema(ops, i, id);
+                // Nothing before it means the schema never existed: an empty board says so,
+                // and the note it belongs to is left alone.
+                return operation("diagram", id)
+                    .put("schema", previous == null ? new Diagram().toJson() : previous);
+            }
+            default: {
+                JSONObject earlier = previousVersion(ops, i, id);
+                if (earlier == null) return operation("delete", id);
+                JSONObject version = operation("note", id)
+                    .put("match_id", earlier.getString("match_id"))
+                    .put("minute", earlier.opt("minute"))
+                    .put("entries", entriesOf(earlier));
+                // A match note's club and names go back with it, or the version is not the one before.
+                if (minuteOf(earlier) == TIMELESS)
+                    version.put("team", earlier.opt("team")).put("players", earlier.opt("players"));
+                return version;
+            }
+        }
+    }
+
     private JSONObject previousVersion(JSONArray ops, int before, String id) throws Exception {
         for (int i = before - 1; i >= 0; i--) {
             JSONObject op = ops.getJSONObject(i);
@@ -3826,75 +4302,145 @@ public class MainActivity extends Activity {
         }
         return "";
     }
-    private void history() {
-        screen = "history"; page("Mes observations", this::showMatch);
+    /**
+     * Mes notes, la carte à droite du terrain. C'était un écran demandé par un bouton ; c'est
+     * maintenant la page d'à côté, qu'un balayage ouvre et que le même geste referme.
+     */
+    private void renderNotes() {
+        if (notesPage == null) return;
+        LinearLayout previous = root;
+        root = notesPage; notesPage.removeAllViews();
         try {
+            cardTitle("Mes observations");
             List<JSONObject> notes = notes();
             int moments = notes.size(), acts = 0;
             for (JSONObject note : notes) acts += entriesOf(note).length();
-            label(moments + (moments > 1 ? " notes · " : " note · ")
+            // « 0 note · 0 action relevée » est un décompte, pas une réponse : une carte encore
+            // vide dit plutôt ce qu'il faut faire pour ne plus l'être.
+            if (notes.isEmpty()) {
+                TextView none = label("Aucune note pour l’instant. Touchez un joueur sur le "
+                    + "terrain, à gauche, et son action s’écrit ici.");
+                none.setTextColor(skin.muted);
+            } else label(moments + (moments > 1 ? " notes · " : " note · ")
                 + acts + (acts > 1 ? " actions relevées" : " action relevée")
                 + " · observation non exhaustive");
             for (JSONObject note : notes) {
                 List<JSONObject> list = ordered(entriesOf(note));
                 JSONObject schema = note.optJSONObject("schema");
-                StringBuilder text = new StringBuilder(note.optInt("minute") + "′");
-                if (list.isEmpty())
+                boolean timeless = minuteOf(note) == TIMELESS;
+                StringBuilder text = new StringBuilder(timeless ? "Note de match" : stamp(note));
+                if (timeless && !clubOf(note).isEmpty()) text.append("  ·  ").append(teamName(clubOf(note)));
+                if (list.isEmpty() && !timeless)
                     text.append(schema == null ? "  ·  Note générale" : "  ·  " + schemaSummary(schema));
                 for (JSONObject entry : list) {
                     text.append("\n").append(icon(entry.optString("action"))).append("  ")
                         .append(actionName(entry.optString("action"))).append(" — ")
                         .append(playerName(entry.optString("player_id")));
                 }
+                for (String id : mentionsOf(note)) text.append("\n•  ").append(playerName(id));
                 if (!note.optString("comment").isEmpty()) text.append("\n").append(note.optString("comment"));
-                Runnable edit = () -> dialog().setTitle("Modifier la note")
-                    .setItems(new String[]{"Commentaire", "Supprimer"}, (dialog, which) -> {
-                        if (which == 0) comment(note);
-                        else try { record(operation("delete", note.getString("note_id"))); history(); }
-                        catch (Exception e) { error(e); }
-                    }).show();
-                if (schema == null) full(text.toString(), edit);
-                else drawnNote(note, schema, text.toString(), edit);
+                noteCard(note, schema, text.toString());
+            }
+            // L'export vivait dans le menu « ••• » du terrain, où il n'avait rien à faire : il
+            // sort mes observations, il se propose donc au bas de mes observations.
+            if (!notes.isEmpty()) {
+                LinearLayout.LayoutParams exportSize = new LinearLayout.LayoutParams(-2, -2);
+                exportSize.topMargin = dp(6);
+                root.addView(link("Exporter mes observations", this::export), exportSize);
             }
         } catch (Exception e) { error(e); }
+        finally { root = previous; }
     }
+
     /**
-     * A drawn note is shown drawn. "→ passe — 6 Pogba" says nearly nothing about a moment whose
-     * whole point was the line the ball took and who it went past, so the recap carries the board
-     * itself, small, and touching it reopens the board rather than a dialog — the dialog that
-     * every other note opens on a tap is on a long press here.
+     * A note of the list, with what can be done to it written on it: a long press hid both
+     * actions from whoever had not been told about it.
+     *
+     * <p>Every note reopens where it was written — the panel on the pitch, its players, its
+     * actions, its minute, its comment, all of it again — and a drawn note reopens on its board.
+     * A drawn note is also shown drawn: "→ passe — 6 Pogba" says nearly nothing about a moment
+     * whose whole point was the line the ball took and who it went past, so the card carries the
+     * board itself, small.
      */
-    private void drawnNote(JSONObject note, JSONObject schema, String text, Runnable edit) {
-        LinearLayout card = strip();
+    private void noteCard(JSONObject note, JSONObject schema, String text) {
+        // Une note se rouvre là où elle s'écrit : le panneau est sur le terrain, donc on y
+        // retourne d'abord. Une note dessinée, elle, s'ouvre sur son tableau, qui est un écran.
+        Runnable edit = schema != null ? () -> amend(note)
+            : () -> { pager.show(cardPlace[CARD_PITCH], true); amend(note); };
+        LinearLayout card = strip(); card.setGravity(Gravity.TOP);
         card.setBackground(tappable(panel(skin.chip)));
-        card.setPadding(dp(10), dp(10), dp(10), dp(10));
-        BoardView preview = new BoardView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
-            Skin.onGrass(skin.ringEnd), false, true);
-        preview.setDiagram(Diagram.from(schema));
-        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(150), dp(190));
-        size.rightMargin = dp(12);
-        card.addView(preview, size);
+        card.setPadding(dp(14), dp(6), dp(6), dp(10));
+        // Top right, the pencil and the bin: the same two, the same size, on every note.
+        LinearLayout actions = strip();
+        actions.addView(noteAction(R.drawable.ic_edit, "Modifier cette note", edit),
+            new LinearLayout.LayoutParams(dp(36), dp(36)));
+        LinearLayout.LayoutParams dropSize = new LinearLayout.LayoutParams(dp(36), dp(36));
+        dropSize.leftMargin = dp(2);
+        actions.addView(noteAction(R.drawable.ic_delete, "Supprimer cette note",
+            () -> deleteNote(note)), dropSize);
         TextView caption = new TextView(this);
         caption.setText(text); caption.setTextSize(13); caption.setTextColor(skin.ink);
         caption.setLineSpacing(dp(4), 1);
-        card.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
+        if (schema != null) {
+            BoardView preview = new BoardView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
+                Skin.onGrass(skin.ringEnd), false, true);
+            preview.setDiagram(Diagram.from(schema));
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(150), dp(190));
+            size.topMargin = dp(4); size.rightMargin = dp(12);
+            card.addView(preview, size);
+            // Beside the board the caption is narrow already: the icons sit above it, not beside.
+            LinearLayout column = new LinearLayout(this); column.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams corner = new LinearLayout.LayoutParams(-2, -2);
+            corner.gravity = Gravity.END;
+            column.addView(actions, corner);
+            caption.setPadding(0, 0, dp(8), 0);
+            column.addView(caption, new LinearLayout.LayoutParams(-1, -2));
+            card.addView(column, new LinearLayout.LayoutParams(0, -2, 1));
+        } else {
+            // The first line lines up with the icons beside it.
+            caption.setPadding(0, dp(8), dp(4), 0);
+            card.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
+            card.addView(actions);
+        }
         card.setClickable(true); card.setFocusable(true);
-        card.setContentDescription("Note tactique, " + note.optInt("minute")
-            + "e minute. " + text.replace("\n", ". ")
-            + ". Toucher pour rouvrir le schéma, appui long pour commenter ou supprimer.");
-        card.setOnClickListener(v -> amend(note));
-        card.setOnLongClickListener(v -> { edit.run(); return true; });
+        card.setOnClickListener(v -> edit.run());
+        card.setContentDescription((schema != null ? "Note tactique. " : "")
+            + text.replace("\n", ". ") + ". Toucher pour modifier la note.");
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = gap(8);
         root.addView(card, p);
         separator();
     }
-    private void comment(JSONObject note) {
-        EditText input = new EditText(this); input.setHint("Commentaire facultatif");
-        input.setText(note.optString("comment"));
-        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
-        dialog().setTitle("Commentaire").setView(input)
-            .setNegativeButton("Annuler", null).setPositiveButton("Enregistrer", (d,w) -> {
-                try { record(operation("comment", note.getString("note_id")).put("text", input.getText().toString())); history(); }
+    /**
+     * Annuler ou refaire : toujours à sa place, éteint quand il n'a rien à faire. L'opacité est
+     * celle que Material donne à un contrôle désactivé ; désactivé, il ne répond plus au doigt et
+     * le lecteur d'écran l'annonce comme tel.
+     */
+    private ImageButton historyAction(int icon, String described, Runnable action, boolean live) {
+        ImageButton button = noteAction(icon, described, action);
+        button.setEnabled(live);
+        button.setAlpha(live ? 1f : .38f);
+        return button;
+    }
+    /** An icon action on a note: quieter than the note it serves, with no fill of its own. */
+    private ImageButton noteAction(int icon, String described, Runnable action) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(icon);
+        button.setImageTintList(ColorStateList.valueOf(skin.muted));
+        button.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        button.setBackground(tappable(rounded(Color.TRANSPARENT, skin.pill)));
+        button.setPadding(dp(8), dp(8), dp(8), dp(8));
+        button.setContentDescription(described);
+        button.setOnClickListener(v -> action.run());
+        return button;
+    }
+    /** Out of a list, one touch beside the other is too easy a way to lose a note: it asks first. */
+    private void deleteNote(JSONObject note) {
+        dialog().setTitle("Supprimer cette note ?")
+            .setNegativeButton("Annuler", null).setPositiveButton("Supprimer", (d,w) -> {
+                try {
+                    record(operation("delete", note.getString("note_id"))); toast("Note supprimée");
+                    renderNotes(); renderTally(); renderComposer();
+                }
                 catch (Exception e) { error(e); }
             }).show();
     }
@@ -4172,7 +4718,7 @@ public class MainActivity extends Activity {
         if (syncing) return;
         String base = server(), token = prefs.getString("token", "");
         if (base.isEmpty() || token.isEmpty()) { settings(); return; }
-        syncing = true; status.setText("Synchronisation en cours…");
+        syncing = true;
         worker.execute(() -> {
             String message;
             try {
@@ -4184,7 +4730,13 @@ public class MainActivity extends Activity {
                 message = remaining == 0 ? "Synchronisé ✓" : remaining + " modification(s) à synchroniser";
             } catch (Exception e) { message = "Synchronisation impossible. Notes conservées sur cet appareil."; }
             String result = message;
-            runOnUiThread(() -> { syncing = false; if (!isDestroyed()) { status.setText(result); renderComposer(); toast(result); } });
+            runOnUiThread(() -> {
+                syncing = false;
+                // Le journal vient d'être renuméroté, et des lignes d'ailleurs s'y sont glissées :
+                // les places retenues pour refaire ne désignent plus ce qu'elles désignaient.
+                undone = 0; redoable.clear();
+                if (!isDestroyed()) { renderComposer(); toast(result); }
+            });
         });
     }
     private void export() {

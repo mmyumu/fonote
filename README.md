@@ -7,7 +7,9 @@ droite ; depuis l’accueil, glisser vers la droite ouvre les matchs annotés, v
 enregistrés. Le **Calendrier** est un écran à part, ouvert par les liens
 « Calendrier › » de l’accueil : c’est une destination que l’on demande, pas une carte que l’on
 croise. Une fois dedans, glisser change de semaine — vers la gauche la suivante, vers la droite la
-précédente —, comme les deux flèches de l’en-tête, qui font exactement le même mouvement. La semaine
+précédente —, comme les deux flèches de l’en-tête, qui font exactement le même mouvement. Une semaine
+va toujours du lundi au dimanche : les dates de l’en-tête sont celles du calendrier, pas une fenêtre
+de sept jours autour du jour d’ouverture. La semaine
 voisine est déjà dessinée avant d’arriver : les trois semaines affichées sont demandées ensemble.
 Les matchs annotés regroupent les rencontres avec au moins une note non supprimée, même terminées,
 y compris les démonstrations et les notes synchronisées. La recherche filtre équipes, compétition,
@@ -156,12 +158,27 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
 
 - Accueil, calendrier, suivis et options suivent les conventions Android : titre et actions dans une barre en haut (retour à gauche, ☆ suivis et ⚙ options à droite) au lieu de gros boutons dans le contenu, retour tactile sur chaque surface cliquable, barres système à la couleur de la page. Un match se lit comme un match : heure locale (plus d'UTC) ou état en cours à gauche, les deux équipes et leur score au centre, la compétition en dessous. Le calendrier groupe ses rencontres par jour ; une liste vide propose d'aller choisir ses suivis. Son en-tête — titre, semaine et recherche — ne bouge pas : seules les semaines glissent sous lui, et la semaine arrivée reprend sa place au milieu sans que rien ne paraisse bouger. Les codes du fournisseur sont traduits (« REGULAR_SEASON » devient « Championnat · J3 »). Les icônes (roue, étoile, flèches) sont des `VectorDrawable` du projet, dans `android/app/src/main/res/drawable/` : les `android.R.drawable.ic_menu_*` de la plateforme sont des images matricielles d'avant Material qui changent d'un constructeur à l'autre, et un glyphe de police comme ⚙ tombe sur l'emoji du système.
 - Terrain avec les 22 titulaires placés à leur poste réel, chaque équipe dans sa formation (4-4-2 / 4-3-3).
-- **Faits du match**, une carte posée à droite du terrain : on l'amène en balayant le doigt vers
-  la gauche, on revient en balayant vers la droite, et le geste retour fait la même chose avant de
+- **Le match tient en cinq cartes côte à côte, le terrain au milieu**, et plus en un terrain
+  suivi d'une rangée de boutons. Vers la droite se prend ce que le fournisseur raconte — les
+  **faits**, puis les **statistiques** ; vers la gauche ce que j'ai écrit — mes **observations**,
+  puis le **bilan**. Chaque direction dit ainsi ce qu'elle rapporte, le travail reste au centre,
+  et les quatre boutons du bas ont disparu avec ce qu'ils cachaient : les notes et le bilan sont
+  devenus des cartes, synchroniser est devenu le geste que toutes les autres pages emploient
+  déjà — tirer la page vers le bas —, l'export s'est rangé au pied des observations qu'il
+  exporte, et le serveur se configure dans Accueil → Options, où se configure le reste.
+  Sous le terrain il ne reste rien : ni rangée de boutons, ni rappel des cartes voisines, ni
+  ligne d'état. Le balayage est le seul chemin, et il est le même sur les cinq cartes ; une barre
+  qui aurait nommé les voisines coûtait une rangée pleine pour dire ce qu'un doigt découvre en
+  une seconde. Toute la hauteur ainsi libérée — deux rangées — va à la pelouse.
+  **Annuler** (↶) et **refaire** (↷) se sont rangés en bout de la ligne d'invite du panneau de
+  saisie, qui a de la place de reste au repos : la correction du travail se pose près de l'endroit
+  où le travail s'écrit, sans coûter une rangée au terrain. Les deux sont toujours là, grisés
+  quand ils n'ont rien à faire : un bouton qui apparaît et disparaît déplace son voisin, et le
+  doigt qui visait « annuler » tombait sur « refaire ».
+- **Faits du match**, la carte à gauche du terrain : on l'amène en balayant le doigt vers
+  la droite, on revient en balayant vers la gauche, et le geste retour fait la même chose avant de
   toucher à la note. Elle porte le score, le fil du match (buts avec passeur, cartons,
-  remplacements, à la minute et aux couleurs de l'équipe), puis le stade et l'arbitre. Un rappel
-  « Faits › » en bout de ligne d'état l'annonce et l'ouvre aussi d'un doigt, sans coûter une
-  rangée de hauteur.
+  remplacements, à la minute et aux couleurs de l'équipe), puis le stade et l'arbitre.
   Le pager est écrit dans le projet (`Pager.java`) : le client ne porte aucune dépendance
   d'interface, et ce qu'un pager ajoute à un défilement horizontal tient en une accroche et la
   notion de page affichée. Une page tourne au cinquième de l'écran parcouru, pas à la moitié.
@@ -169,18 +186,20 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
   le geste pour elles en l'interceptant avant leurs propres boutons, sinon ceux-ci consomment
   l'appui et la carte tournerait au lieu de faire défiler la palette ; une rangée qui tient déjà
   entière dans l'écran laisse au contraire passer le geste. Le geste retour ne saute pas au terrain :
-  il défait une carte à la fois. Page séparée et annoncée comme telle — « rien ici n'entre
+  il défait une carte à la fois, et il revient vers le terrain quel que soit le côté d'où l'on
+  vient — le travail est au milieu de la pile. Page séparée et annoncée comme telle — « rien ici n'entre
   dans votre journal ni dans votre bilan » — parce que le bilan promet de ne mesurer que ce qui a
   été relevé, et qu'un but compté par le fournisseur n'est pas une observation.
   L'affluence est tue quand elle vaut zéro, ce qui veut dire « inconnue » et non « personne ».
-- **Statistiques**, une troisième carte posée à droite des faits : un balayage de plus vers la
-  gauche amène les compteurs des deux équipes en vis-à-vis, sous le nom de chacune et à sa couleur.
+- **Statistiques**, une carte de plus à gauche des faits : un balayage de plus vers la
+  droite amène les compteurs des deux équipes en vis-à-vis, sous le nom de chacune et à sa couleur.
   Page à part parce qu'une colonne de chiffres se parcourt du regard quand un fil de match se suit
   ligne à ligne, et titrée « Statistiques » — ce que la carte montre, pas qui le fournit ; la
   provenance tient dans la ligne grise dessous, avec le même rappel que rien de tout cela n'entre
   dans le journal ni dans le bilan. Sur les 28 chiffres publiés, 13 sont montrés : les pourcentages
   dérivés ne font que répéter le couple au-dessus d'eux. Un match dont le fournisseur ne raconte
-  rien mais compte quand même ouvre cette carte directement depuis le terrain.
+  rien mais compte quand même n'a pas de carte des faits, et son premier balayage vers la droite
+  mène donc droit aux chiffres.
 - Pendant un match suivi, l'application redemande la composition **une fois par minute**, et seulement
   là où c'est utile : écran du match, depuis une heure avant le coup d'envoi jusqu'à la 140ᵉ minute,
   jamais pendant qu'une note est ouverte — les joueurs ne doivent pas bouger sous le doigt. Un
@@ -191,6 +210,14 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
   le journal n'est jamais redessiné, et un joueur sorti reste retirable d'une note en cours par la croix
   du panneau. Un enchaînement de changements sur la même place se transmet ; un changement qui nomme
   quelqu'un d'absent est ignoré, pour qu'un flux qui se contredit ne puisse jamais vider une place.
+- **Les bancs sont au bord du terrain** : les remplaçants de chaque club sur sa ligne de touche — l'équipe
+  du haut à gauche depuis son but, celle du bas à droite depuis le sien, le demi-tour que le terrain fait
+  déjà faire à l'équipe adverse —, par numéro de maillot, et le **coach** au bout, côté but. Un joueur
+  remplacé retourne au banc, grisé. On les touche comme un joueur du terrain : ils entrent dans la note
+  avec leur action, et dans le bilan. La pelouse cède sa marge extérieure et un peu de largeur pour leur
+  laisser la place ; une composition publiée sans banc garde toute la largeur. ESPN ne publie pas les
+  entraîneurs en football, pas même un nom : le coach est « Coach PSV », identifié par son club
+  (`espn-coach-<id du club>`), et le serveur accepte cet identifiant dans une note comme un joueur ESPN.
 - **Huit thèmes au choix dans Accueil → Options**, le thème d'origine compris. Un thème n'est pas qu'une palette : il porte aussi ses rayons de coin (carte, contrôle, action ronde), la façon dont un bouton ordinaire est dessiné — plein, plein sous un filet, ou filet seul —, la présence d'un bord sur les cartes, et la graisse, la casse et l'interlettrage des titres ; deux thèmes qui ne différeraient que par la teinte se liraient comme la même application de mauvaise humeur. Chaque vignette du sélecteur est dessinée dans le thème qu'elle propose, avec ses propres couleurs, ses coins et son style de bouton. Le choix est conservé d'une session à l'autre ; les boîtes de dialogue suivent le thème, clair ou sombre, et les barres système passent leurs icônes en encre sur un thème clair.
   - Cinq thèmes **à cartes**, dans la famille des outils : « Terrain » (vert de pelouse, accent citron, l'origine), « Minuit » (ardoise, lavande en dégradé, coins larges et cartes bordées d'un trait fin), « Papier » (fond clair, cartes blanches, bleu franc), « Stade » (noir de régie, néon menthe, angles vifs, boutons au trait et titres en capitales espacées) et « Argile » (papier chaud, olive, tout en pastilles rondes).
   - Trois thèmes **à plat** (`Skin.flat`), dans la famille des applications sociales : « Fil », « Vert » et « Bleu ». Leur trait commun n'est pas une couleur, c'est une surface en moins — pas de cartes du tout : les lignes sont posées à même la page et un filet les sépare, les icônes de la barre perdent leur pastille, et la pelouse devient le seul bloc coloré de l'écran. « Fil » est monochrome sur un gris neutre, « Vert » un bleu-nuit qui ne sort son vert que sur trois éléments, « Bleu » un seul bleu avec des contrôles entièrement en pilule.
@@ -312,8 +339,12 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
     enterrerait le journal sous des versions qui disent la même chose.
 - Dans **« Mes observations »**, une note dessinée est montrée dessinée : « ↗ Bonne passe — 20 Ripart »
   ne dit presque rien d'un moment dont tout l'intérêt était la ligne prise par le ballon. La carte
-  porte donc le tableau lui-même, en petit, et la toucher rouvre le tableau — la boîte de dialogue
-  que toute autre note ouvre au toucher est ici sur l'appui long.
+  porte donc le tableau lui-même, en petit, et la toucher rouvre le tableau.
+- Chaque carte de **« Mes observations »** porte ses deux actions en haut à droite, deux icônes
+  du même trait : le **crayon** rouvre la note là où elle a été écrite (panneau, ou tableau pour
+  une note dessinée), comme un toucher sur la carte ; la **poubelle** demande confirmation.
+  L'appui long les cachait à qui ne le connaissait pas. Le résumé des dernières notes sous le terrain ne supprime plus rien : tout
+  se corrige ou s'efface depuis la liste.
 - Une note qui ne porte qu'un schéma se résume par **la dernière action de la séquence** —
   « 17 Vitinha passe à 29 P. Brunner », « Frappe de 9 Mbappé », « Conduite de 10 Golovin »,
   « Course de 2 Hakimi » — au lieu du mot « Schéma », qui nommait la chose sans rien en dire : on
@@ -328,10 +359,10 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
   n'appartiennent à personne, se nomment par leur forme seule (« Passe », « Tir »), et un tableau
   où l'on n'a fait que poser des joueurs annonce leur nombre.
 - Le résumé d'une note suit toujours le même ordre, quel que soit l'ordre de saisie : le plus fort d'abord, le bon avant le mauvais, départages par l'ordre de la palette. Il se déduit des poids d'actions, sans table supplémentaire, et s'applique au rendu seulement — le journal garde l'ordre réel de saisie, donc changer d'avis sur cet ordre ne réécrit aucune note.
-- Le geste retour défait l'écran courant au lieu de quitter : il ferme la note ouverte en la gardant, puis ramène de « Notes » ou « Bilan » au match, et ne sort de l'application qu'en dernier recours.
+- Le geste retour défait l'écran courant au lieu de quitter : il ramène d'abord au terrain, une carte à la fois et quel que soit le côté d'où l'on vient, puis ferme la note ouverte en la gardant, et ne sort de l'application qu'en dernier recours.
 - Retirer un joueur de la note se fait par **appui long sur le terrain**, là où on l'a mis — la croix de sa pastille fait la même chose. Un tap sur un joueur déjà dans la note vise sa ligne pour corriger son action, ce qui interdisait le double-clic. Retirer le dernier joueur d'une note l'efface.
 - Une note laissée ouverte pendant que le match avance est le seul risque de la collecte : passé deux minutes, sa pastille de minute vire à l'ambre.
-- La provenance de la composition tient dans la ligne d'état sous le bandeau (« 4-1-2-1-2 / 4-2-3-1 · ESPN, placement schématique · Ligue 1 ») au lieu d'occuper une ligne à elle seule en haut de l'écran : la place ainsi rendue va au terrain, qui en manque. Seule l'absence de composition mérite encore une phrase, et un terrain vide a toute la place pour la porter.
+- La provenance de la composition (« 4-1-2-1-2 / 4-2-3-1 · ESPN, placement schématique · Ligue 1 ») ne s'écrit plus du tout sur l'écran du match : elle se lisait une fois et occupait une rangée pour toujours. Les formations se voient sur le terrain, et la compétition est déjà dans le bandeau. Seule l'absence de composition mérite encore une phrase, et un terrain vide a toute la place pour la porter.
 - Composition dans un bandeau fixe sous le terrain, jamais en surimpression : le terrain reste visible et cliquable. Sa hauteur ne varie pas, pour qu'ouvrir une note ne déplace jamais les joueurs sous le doigt.
 - Dix-huit actions appariées geste par geste, réussi au-dessus, raté en dessous : bon/raté, but/CSC, passe décisive/perte de balle, passe/passe ratée, dribble/dribble raté, tir cadré/tir manqué, geste défensif/duel perdu, arrêt/arrêt raté, jaune, rouge. Chacune porte un poids ; polarité, couleur et bilan en découlent, au lieu d'être choisis à la main.
 - Sur chaque carte du bilan, une ligne grise porte ce que le fournisseur a compté pour ce joueur —
@@ -341,15 +372,57 @@ Premier prototype Android de prise de notes football, avec serveur personnel com
   sur la ligne de tout le monde, et « 1 encaissé » sur un attaquant se lit comme sa faute. Un
   gardien entré en cours de jeu, que le fournisseur n'appelle que « Substitute », est reconnu à ce
   qu'on lui a compté.
-- Bilan par joueur déduit des notes : solde signé sur le maillot au repos, page dédiée avec une note sur dix (base 6, une demi-note par point), le détail qui la justifie et le rappel qu'elle ne mesure que ce qui a été relevé.
+- Bilan par joueur déduit des notes : solde signé sur le maillot au repos, carte dédiée à deux balayages du terrain — après mes observations, puisqu'une note par joueur se lit après les notes qui la font — avec une note sur dix (base 6, une demi-note par point), le détail qui la justifie et le rappel qu'elle ne mesure que ce qui a été relevé.
 - Chronomètre automatique depuis le coup d'envoi **réel** lorsque le fournisseur le publie, et non l'horaire
   annoncé : un coup d'envoi retardé de dix minutes décalait sinon toutes les notes du match. La minute de
   la note est préremplie. Ajustable sur la minute de la diffusion, pause mi-temps, coup d’envoi à 0′, reprise à 45′ ; il survit à la fermeture de l'application.
 - Historique, commentaires facultatifs, suppression.
-- `↶` annule la dernière opération, quelle qu'elle soit, et remonte le journal pas à pas : une suppression est défaite, une note complétée revient à sa version précédente, un commentaire au texte qu'il portait. Rien n'est retiré du journal — l'annulation écrit l'opération qui compense, donc elle se synchronise comme le reste. Toute nouvelle action replace le curseur à la fin.
+- `↶` annule **le dernier geste**, et non la dernière ligne du journal : une suppression est
+  défaite, une note complétée revient à sa version précédente, un commentaire au texte qu'il
+  portait. Écrire une note de match ou une note sans joueur, c'est écrire la note puis son texte —
+  deux lignes pour un seul geste, et défaire le texte laissait derrière une note vide qu'il fallait
+  annuler une seconde fois. Les lignes de queue d'une même note se défont donc ensemble, jusqu'à
+  l'écriture de la note comprise ; une note qui naît du geste part d'une seule suppression, ce qui
+  laisse son texte et son schéma intacts dans le journal — la rétablir la rend telle qu'elle était,
+  et non vidée de sa moitié. Jamais deux fois la même sorte d'opération, sinon ce sont deux gestes :
+  corriger le texte d'une note écrite plus tôt défait le texte, pas la note, et un tableau dessiné
+  trait par trait se défait trait par trait. Rien n'est retiré du journal — l'annulation écrit les
+  opérations qui compensent, donc elle se synchronise comme le reste. Toute nouvelle action replace
+  le curseur à la fin.
+- `↷` refait le dernier geste annulé, sur autant de niveaux qu'on en a défaits, dans l'ordre
+  inverse. Refaire n'est pas une opération du journal mais le chemin qu'on vient de parcourir à
+  l'envers : il vit en mémoire, pour la session, et se referme dès qu'on écrit quoi que ce soit de
+  nouveau. Refaire réécrit les lignes du geste telles quelles ; une note née du geste, défaite
+  d'une seule suppression, est simplement rétablie, et son texte revient avec elle puisqu'il
+  n'avait jamais quitté le journal. Chaque geste défait retient sa **place** dans le journal, et
+  non le nombre de lignes qui le suivent : le journal ne fait que s'allonger, donc une place ne
+  bouge pas, alors que ce qui la suit grandit à chaque aller-retour. Refait, le curseur se repose
+  sur le geste, si bien qu'annuler le défait encore et qu'un second appui remonte enfin au geste
+  d'avant. Une synchronisation renumérote le journal et y glisse les lignes d'autres appareils :
+  elle vide le chemin à refaire, dont les places ne désigneraient plus ce qu'elles désignaient.
+  Ni l'un ni l'autre ne dit rien : la note disparaît ou revient sous les yeux, et un toast qui le
+  répète cache le bas du panneau le temps de le lire.
 - SQLite sur Android ; enregistrement hors connexion, conservé après fermeture de l'application.
-- Synchronisation manuelle avec un serveur SQLite, authentifié par un jeton personnel.
-- Export JSON des observations via le partage Android.
+- **Tirer n'importe quelle carte du match vers le bas actualise le match.** Le geste redemande au
+  fournisseur ce qu'il publie de cette rencontre, et passe outre ce qui retient le suivi
+  automatique — une fois par minute, et seulement dans la fenêtre où la composition bouge : qui
+  tire la page demande maintenant, et « pas encore l'heure » ne se distingue pas d'une panne pour
+  qui regarde l'écran. Ne restent que les empêchements réels, chacun dit tel quel : pas d'adresse,
+  un match qui ne vient pas du fournisseur, le mode démo, ou une note ouverte — les joueurs ne
+  doivent pas bouger sous le doigt.
+  La même ligne d'actualisation qu'à l'accueil et au calendrier le montre : elle prend exactement
+  la hauteur que le doigt a ouverte, donc la page ne bouge pas d'un pixel au relâchement, puis se
+  replie sur ses 56 points le temps de la requête et disparaît. Elle vit au-dessus du pager et non
+  dans les cartes, sinon elle ne tiendrait la place ouverte que sur celle qui la porterait ; repliée
+  elle ne coûte rien au terrain. Une réussite n'a donc rien à annoncer — la ligne l'a montré —, et
+  seul un échec mérite encore une phrase. La composition rafraîchie n'est reprise qu'une fois la
+  ligne refermée : redessiner l'écran tient l'image le temps d'une fermeture, qui y passerait
+  entière.
+- Synchronisation manuelle avec un serveur SQLite, authentifié par un jeton personnel : elle part
+  avec ce même geste, en silence et sans rien réclamer. Sans jeton elle n'a rien à faire et se
+  tait : reprocher un jeton absent à qui demandait une actualisation, c'est répondre à côté.
+- Export JSON des observations via le partage Android, proposé au pied de la carte « Mes
+  observations » et seulement lorsqu'il y a quelque chose à exporter.
 
 Le client est écrit en Java avec les widgets Android natifs, sans dépendance d'interface. Kotlin/Compose évoqué au cadrage n'est pas utilisé dans ce prototype. Aucun SDK fournisseur n'est couplé aux notes.
 

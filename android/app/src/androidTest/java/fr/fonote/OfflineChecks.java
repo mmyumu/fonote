@@ -189,7 +189,7 @@ public final class OfflineChecks extends Instrumentation {
                 host.measure(size, size); host.layout(0, 0, 400, 400);
                 int[] calls = {0};
                 boolean[] busy = {false};
-                pull.onPull(() -> calls[0]++, () -> !busy[0]);
+                pull.onPull(opened -> { calls[0]++; return false; }, () -> !busy[0]);
                 float distance = 160 * getTargetContext().getResources().getDisplayMetrics().density;
                 gesture(pull, 0, distance, false);
                 require(calls[0] == 1, "Pull on a clickable child did not refresh");
@@ -197,7 +197,8 @@ public final class OfflineChecks extends Instrumentation {
                 for (int i = 0; i < 5; i++) gesture(pull, 0, distance, false);
                 require(calls[0] == 1, "Pull during refresh queued another refresh");
                 require(content.getTranslationY() > 0, "Busy pull has no elastic return");
-                require(content.getTranslationY() <= 32 * contextDensity(), "Busy pull stretches too far");
+                // Half the reach while busy, and past it the give Pull allows: half as much again.
+                require(content.getTranslationY() <= 48 * contextDensity(), "Busy pull stretches too far");
                 busy[0] = false;
                 gesture(pull, 0, distance, false);
                 require(calls[0] == 2, "Pull stayed disabled after refresh finished");
@@ -241,7 +242,7 @@ public final class OfflineChecks extends Instrumentation {
             content.setClickable(clickable);
             content.setMinimumHeight(2000);
             pull.addView(content, new android.widget.FrameLayout.LayoutParams(-1, 2000));
-            pull.onPull(() -> refreshes[0]++, () -> !busy);
+            pull.onPull(opened -> { refreshes[0]++; return false; }, () -> !busy);
             pager.addPage(pull);
         }
         int width = 1000, height = 1400;
@@ -302,7 +303,7 @@ public final class OfflineChecks extends Instrumentation {
                 activity.setContentView(feed);
                 boolean[] busy = {true};
                 int[] requests = {0};
-                pull.onPull(() -> requests[0]++, () -> !busy[0]);
+                pull.onPull(opened -> { requests[0]++; return false; }, () -> !busy[0]);
                 feed.post(() -> {
                     try {
                         float distance = 170 * contextDensity();
@@ -310,8 +311,9 @@ public final class OfflineChecks extends Instrumentation {
                         require(requests[0] == 0, "Refresh finishing mid-pull armed another request");
                         require(content.getTranslationY() > 0, "Pull return jumped immediately");
                         refreshing.set(activity, false);
-                        java.lang.reflect.Method update = MainActivity.class.getDeclaredMethod("refreshIndicators");
-                        update.setAccessible(true); update.invoke(activity);
+                        // Zero: outside a gesture, no room opened by a finger to take over.
+                        java.lang.reflect.Method update = MainActivity.class.getDeclaredMethod("refreshIndicators", int.class);
+                        update.setAccessible(true); update.invoke(activity, 0);
                         require(indicator.getVisibility() == android.view.View.VISIBLE, "Indicator disappeared abruptly");
                         feed.postDelayed(() -> {
                             try {

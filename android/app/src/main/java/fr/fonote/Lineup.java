@@ -22,6 +22,18 @@ import java.util.Map;
 final class Lineup {
     private Lineup() {}
 
+    /** Shirt numbers upwards, and anyone without one last, by name. */
+    static final java.util.Comparator<org.json.JSONObject> SHIRT_ORDER =
+        java.util.Comparator.comparingInt((org.json.JSONObject player) -> {
+            int number = player.optInt("number", 0);
+            return number > 0 ? number : Integer.MAX_VALUE;
+        }).thenComparing(player -> player.optString("name"), String.CASE_INSENSITIVE_ORDER);
+
+    /** The one person of a side who is on the sheet without a shirt: noted, never placed. */
+    static boolean coach(org.json.JSONObject person) {
+        return "coach".equals(person.optString("role"));
+    }
+
     /** A published change: the minute it happened, who came on, who went off. */
     static final class Change {
         final int minute;
