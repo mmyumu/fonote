@@ -40,6 +40,17 @@ public final class TrackCheck {
         for (int i = 0; i < Track.LIMIT; i++) assert full.put(new Track.Key(i, 0, 0));
         assert !full.put(new Track.Key(Track.LIMIT, 0, 0));
         assert full.put(new Track.Key(0, 1, 1));
+        // Un long geste est réduit à la limite du journal sans perdre sa fin ni sa forme.
+        java.util.List<double[]> gesture = new java.util.ArrayList<>();
+        for (int i = 0; i <= 200; i++) gesture.add(new double[]{i / 200.0, Math.sin(i / 200.0 * Math.PI) * .3});
+        java.util.List<double[]> kept = Track.thinned(gesture, Diagram.POINTS);
+        assert kept.size() == Diagram.POINTS : kept.size();
+        near(kept.get(0)[0], 0); near(kept.get(kept.size()-1)[0], 1);
+        for (double[] point : kept) assert Math.abs(point[1] - Math.sin(point[0] * Math.PI) * .3) < .01 : "Forme perdue";
+        double top = 0;
+        for (double[] point : kept) top = Math.max(top, point[1]);
+        assert top > .29 : "Le sommet de la courbe est coupé";
+        assert Track.thinned(kept.subList(0, 5), Diagram.POINTS).size() == 5;
         System.out.println("TrackCheck passed");
     }
 }

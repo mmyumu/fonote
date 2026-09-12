@@ -26,8 +26,10 @@ final class Diagram {
      * What a line between two points can mean. Three of them are drawn, in the toolbar's order;
      * the fourth is never chosen but read off the ball, a run made by the player who holds it
      * being a carry. Old schemas that named one still parse, and still say the same thing.
+     * Le tacle est le seul trait d'un joueur qui porte son sens : une course qui finit au contact
+     * d'un autre joueur, ce que le ballon ne peut pas dire à sa place.
      */
-    static final String PASS = "pass", RUN = "run", CARRY = "carry", SHOT = "shot";
+    static final String PASS = "pass", RUN = "run", CARRY = "carry", SHOT = "shot", TACKLE = "tackle";
     /** Bounds the log is willing to carry, and the server to accept. */
     static final int TOKENS = 30, SHAPES = 40, POINTS = 32;
 
@@ -75,10 +77,17 @@ final class Diagram {
     /** A stroke, from where the ball or the player left to where he arrived. */
     static final class Shape {
         String kind;
+        boolean baked;
         final List<double[]> points = new ArrayList<>();
         Shape(String kind) { this.kind = kind; }
     }
 
+    static final class Step {
+        String id = java.util.UUID.randomUUID().toString(), name;
+        int time;
+        Step(String name, int time) { this.name = name; this.time = time; }
+    }
+    final List<Step> steps = new ArrayList<>();
     String board = BLANK;
     final Track ball = new Track();
     final List<Token> tokens = new ArrayList<>();
@@ -117,15 +126,20 @@ final class Diagram {
                 points.put(new JSONArray().put(round(point[0])).put(round(point[1])));
             drawn.put(new JSONObject().put("kind", shape.kind).put("points", points));
         }
-        return new JSONObject().put("version", 2).put("ball", keysJson(ball))
-            .put("board", board).put("tokens", placed).put("shapes", drawn);
+        JSONArray marks = new JSONArray();
+        for (Step step : steps) marks.put(new JSONObject().put("id", step.id)
+            .put("name", step.name).put("t", step.time));
+        return new JSONObject().put("version", 3).put("ball", keysJson(ball))
+            .put("board", board).put("tokens", placed).put("shapes", drawn).put("steps", marks);
     }
 
     static JSONArray keysJson(Track track) throws JSONException {
         JSONArray result = new JSONArray();
         for (Track.Key key : track.keys) {
-            JSONObject one = new JSONObject().put("t", key.time).put("x", round(key.x)).put("y", round(key.y));
-            // Only the ball carries a kind: what a player's stroke means is read off the ball.
+            JSONObject one = new JSONObject().put("id", key.id).put("t", key.time).put("x", round(key.x)).put("y", round(key.y));
+            if (!key.after.isEmpty()) one.put("after", key.after).put("offset", key.offset);
+            if (key.baked) one.put("baked", true);
+            // The ball carries a kind; a player's stroke is read off the ball, save a tackle.
             if (!RUN.equals(key.kind)) one.put("kind", key.kind);
             if (!key.owner.isEmpty()) one.put("owner", key.owner);
             if (key.flight) one.put("flight", true);
@@ -139,7 +153,7 @@ final class Diagram {
         return result;
     }
 
-    /** A kind is the ball's alone; one left on a player's track by an older client is dropped. */
+    /** A kind is the ball's, save a player's tackle; any other left on a player's track by an older client is dropped. */
     private static void readKeys(JSONArray source, Track track, boolean ball) {
         for (int i = 0; source != null && i < Math.min(source.length(), Track.LIMIT); i++) {
             JSONObject one = source.optJSONObject(i);
@@ -147,7 +161,11 @@ final class Diagram {
             int time = one.optInt("t", -1);
             if (time < 0 || time > Track.END) continue;
             Track.Key key = new Track.Key(time, one.optDouble("x", .5), one.optDouble("y", .5));
+            key.id = one.optString("id", key.id);
+            key.after = one.optString("after"); key.offset = one.optInt("offset");
+            key.baked = one.optBoolean("baked");
             if (ball) key.kind = one.optString("kind", RUN);
+            else if (TACKLE.equals(one.optString("kind"))) key.kind = TACKLE;
             key.owner = one.optString("owner"); key.flight = one.optBoolean("flight");
             JSONArray path = one.optJSONArray("path");
             for (int j = 0; path != null && j < Math.min(path.length(), POINTS); j++) {
@@ -158,21 +176,21 @@ final class Diagram {
         }
     }
 
-    double[] position(Token token, int time) { return token.track.position(time, token.x, token.y); }
+    double[] position(Token token, double time) { return token.track.position(time, token.x, token.y); }
 
-    double[] ballKey(Track.Key key, int time) {
+    double[] ballKey(Track.Key key, double time) {
         for (Token token : tokens) if (token.id.equals(key.owner)) return position(token, time);
         return new double[]{key.x, key.y};
     }
 
-    double[] ballPosition(int time) {
+    double[] ballPosition(double time) {
         if (ball.keys.isEmpty() || time < ball.keys.get(0).time) return new double[]{.5, .5};
         Track.Key previous = ball.keys.get(0);
         for (Track.Key next : ball.keys) {
             if (next.time > time) {
                 if (!previous.flight) return ballKey(previous, time);
                 double[] a = ballKey(previous, previous.time), b = ballKey(next, next.time);
-                return Track.route(a[0], a[1], b[0], b[1], next.path,
+                return Track.route(a[0], a[1], b[0], b[1], next.path, next.baked,
                     (time - previous.time) / (double)(next.time - previous.time));
             }
             previous = next;
@@ -186,7 +204,7 @@ final class Diagram {
      * simply the next one: a pass is written as a departure and an arrival, and the departure is
      * still the passer's.
      */
-    double[] ballNext(int time) {
+    double[] ballNext(double time) {
         int held = -1;
         for (int i = 0; i < ball.keys.size(); i++) if (ball.keys.get(i).time <= time) held = i;
         if (held < 0) return null;
@@ -203,10 +221,26 @@ final class Diagram {
         return null;
     }
 
-    boolean ballHeld(int time) {
+    boolean ballHeld(double time) {
         Track.Key previous = null;
         for (Track.Key key : ball.keys) if (key.time <= time) previous = key;
         return previous != null && !previous.flight && !previous.owner.isEmpty();
+    }
+
+    /** Qui a le ballon dans les pieds à cet instant, ou rien s'il est libre ou en l'air. */
+    String holder(double time) {
+        Track.Key previous = null;
+        for (Track.Key key : ball.keys) if (key.time <= time) previous = key;
+        return previous == null || previous.flight ? "" : previous.owner;
+    }
+
+    /** Le départ et l'arrivée du vol en cours, ou null quand le ballon ne vole pas. */
+    Track.Key[] ballLeg(double time) {
+        for (int i = 1; i < ball.keys.size(); i++) {
+            Track.Key a = ball.keys.get(i-1), b = ball.keys.get(i);
+            if (a.flight && a.time <= time && time < b.time) return new Track.Key[]{a, b};
+        }
+        return null;
     }
 
     /**
@@ -230,7 +264,8 @@ final class Diagram {
     }
 
     int duration() {
-        int end = 50;
+        int end = 0;
+        for (Step step : steps) end = Math.max(end, step.time);
         for (Token token : tokens) for (Track.Key key : token.track.keys) end = Math.max(end, key.time);
         for (Track.Key key : ball.keys) end = Math.max(end, key.time);
         return end;
@@ -249,6 +284,8 @@ final class Diagram {
     static Diagram from(JSONObject source) {
         Diagram diagram = new Diagram();
         if (source == null) return diagram;
+        int version = source.optInt("version", 1);
+        if (version < 1 || version > 3) throw new IllegalArgumentException("Version de séquence non prise en charge");
         diagram.board = FULL.equals(source.optString("board")) ? FULL : BLANK;
         JSONArray placed = source.optJSONArray("tokens");
         for (int i = 0; placed != null && i < placed.length(); i++) {
@@ -274,6 +311,21 @@ final class Diagram {
             if (shape.points.size() >= 2) diagram.shapes.add(shape);
         }
         readKeys(source.optJSONArray("ball"), diagram.ball, true);
+        JSONArray marks = source.optJSONArray("steps");
+        for (int i = 0; marks != null && i < marks.length(); i++) {
+            JSONObject mark = marks.optJSONObject(i);
+            if (mark == null) continue;
+            Step step = new Step(mark.optString("name"), mark.optInt("t"));
+            step.id = mark.optString("id", step.id); diagram.steps.add(step);
+        }
+        if (version == 3) {
+            Sequence sequence = new Sequence(diagram);
+            java.util.Map<String, Integer> times = new java.util.HashMap<>();
+            for (Track track : sequence.tracks()) for (Track.Key key : track.keys) times.put(key.id, key.time);
+            sequence.resolve();
+            for (Track track : sequence.tracks()) for (Track.Key key : track.keys)
+                if (times.get(key.id) != key.time) throw new IllegalArgumentException("Temps liés incohérents");
+        }
         return diagram;
     }
 }

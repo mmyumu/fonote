@@ -179,21 +179,11 @@ public class MainActivity extends Activity {
      * « Abandonner » puts back.
      */
     private JSONObject tacticBase;
-    /**
-     * The board as it stood before each change, while a note is open. A drawn stroke is a gesture,
-     * and a gesture goes wrong: the finger slips, the pass lands on the wrong shirt, the eraser
-     * takes the player instead of the line. The journal already records every state — it is what
-     * ↶ walks back on the match screen — but not while a note is still being drawn, and reaching
-     * for it would mean leaving the note to undo a stroke in it.
-     *
-     * <p>Whole schemas rather than reverse operations: a schema is bounded by design — thirty
-     * tokens, forty strokes, a hundred and twenty keys — so a step costs a few kilobytes, and
-     * nothing can drift out of step with the board the way a hand-written inverse would.
-     */
-    private final List<String> undoable = new ArrayList<>();
-    private String drawnBefore = "";
-    private static final int UNDOABLE = 40;
-    private Button tacticUndo;
+    private final TacticalHistory editHistory = new TacticalHistory();
+    private Button tacticUndo, tacticRedo;
+    private boolean expandedTimeline;
+    private SequenceTimeline tacticTrackView;
+    private Button keyPrevious, keyToggle, keyNext;
     /** What already reached the log, so a stroke never rewrites what has not changed. */
     private String entriesWritten = "", diagramWritten = "";
     private BoardView board;
@@ -202,8 +192,14 @@ public class MainActivity extends Activity {
     private int tacticTime;
     private Runnable tacticTick;
     private void stopTactic() {
+        boolean playing = tacticPlaying;
         tacticPlaying = false;
-        if (tacticTick != null) tacticClock.removeCallbacks(tacticTick);
+        if (tacticTick != null) {
+            tacticClock.removeCallbacks(tacticTick);
+            if (board != null) board.removeCallbacks(tacticTick);
+        }
+        // Une pause tombe entre deux dixièmes : l'édition reprend sur le dixième affiché.
+        if (playing && board != null) board.setTime(board.time());
     }
     private LinearLayout tacticPanel;
     private Button tacticMinute;
@@ -642,7 +638,48 @@ public class MainActivity extends Activity {
     private AlertDialog.Builder dialog() {
         return new AlertDialog.Builder(this, skin.light
             ? android.R.style.Theme_Material_Light_Dialog_Alert
-            : android.R.style.Theme_Material_Dialog_Alert);
+            : android.R.style.Theme_Material_Dialog_Alert) {
+            @Override public AlertDialog create() {
+                AlertDialog made = super.create();
+                made.setOnShowListener(shown -> dress(made));
+                return made;
+            }
+        };
+    }
+    /**
+     * A dialog in the skin's colours: its sheet on the skin's surface, its buttons in the accent
+     * and its fields in the ink. Left to the platform it kept Material's green buttons and — on a
+     * light sheet — the pale text of a field made under the dark theme the activity runs in,
+     * grey on white. A dialog that sets its own listener on showing calls this itself.
+     */
+    private void dress(AlertDialog dialog) {
+        if (dialog.getWindow() == null) return;
+        // The platform's sheet is inset by 16 dp on every side; the skin's keeps that margin.
+        dialog.getWindow().setBackgroundDrawable(
+            new android.graphics.drawable.InsetDrawable(rounded(skin.surface, skin.card), dp(16)));
+        for (int which : new int[]{AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_NEUTRAL}) {
+            Button button = dialog.getButton(which);
+            if (button != null) button.setTextColor(skin.accent);
+        }
+        inkFields(dialog.getWindow().getDecorView());
+    }
+    private void inkFields(View view) {
+        if (view instanceof EditText) {
+            EditText field = (EditText) view;
+            field.setTextColor(skin.ink); field.setHintTextColor(skin.muted);
+            // The selection, the caret and its handles too: the platform paints them in its own
+            // accent, the green of the buttons.
+            field.setHighlightColor(Color.argb(70, Color.red(skin.accent), Color.green(skin.accent), Color.blue(skin.accent)));
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                GradientDrawable caret = new GradientDrawable(); caret.setColor(skin.accent); caret.setSize(dp(2), dp(20));
+                field.setTextCursorDrawable(caret);
+                for (Drawable handle : new Drawable[]{field.getTextSelectHandle(), field.getTextSelectHandleLeft(), field.getTextSelectHandleRight()})
+                    if (handle != null) handle.mutate().setTint(skin.accent);
+            }
+        } else if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) inkFields(group.getChildAt(i));
+        }
     }
     /**
      * An ordinary control, drawn the way this skin draws them: a flat fill, a fill under a
@@ -1000,9 +1037,24 @@ public class MainActivity extends Activity {
     /** The same field in a dialog: three lines to write in, set in from the edges like its title. */
     private View dialogField(EditText field) {
         field.setMinLines(3);
-        FrameLayout frame = new FrameLayout(this);
+        return dialogFrame(field);
+    }
+    /** One line to type in a dialog — a time, a name, an address — drawn like a note's field. */
+    private EditText lineField(String hint, String value, int type) {
+        EditText field = noteField(hint, value);
+        field.setSingleLine(true); field.setInputType(type);
+        field.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        return field;
+    }
+    /** Fields set in from the dialog's edges like its title, one under the other. */
+    private View dialogFrame(View... fields) {
+        LinearLayout frame = new LinearLayout(this); frame.setOrientation(LinearLayout.VERTICAL);
         frame.setPadding(dp(20), dp(8), dp(20), 0);
-        frame.addView(field, new FrameLayout.LayoutParams(-1, -2));
+        for (View field : fields) {
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, -2);
+            if (frame.getChildCount() > 0) size.topMargin = dp(10);
+            frame.addView(field, size);
+        }
         return frame;
     }
 
@@ -2644,27 +2696,22 @@ public class MainActivity extends Activity {
      */
     private boolean writeNote() {
         try {
-            String people = peopleKey();
+            String people = peopleKey(), comment = draft.trim(), schema = diagram == null ? "" : drawnJson();
+            JSONArray batch = new JSONArray();
             if (!written || !people.equals(entriesWritten)) {
                 JSONObject note = operation("note", noteId).put("match_id", match.getString("id"));
-                if (naming)
-                    note.put("minute", noteMinute == TIMELESS ? JSONObject.NULL : noteMinute)
-                        .put("entries", new JSONArray())
-                        .put("team", noteTeam.isEmpty() ? JSONObject.NULL : noteTeam)
-                        .put("players", new JSONArray(entries.keySet()));
+                if (naming) note.put("minute", noteMinute == TIMELESS ? JSONObject.NULL : noteMinute)
+                    .put("entries", new JSONArray()).put("team", noteTeam.isEmpty() ? JSONObject.NULL : noteTeam)
+                    .put("players", new JSONArray(entries.keySet()));
                 else note.put("minute", noteMinute).put("entries", draftEntries());
-                record(note);
-                entriesWritten = people;
+                batch.put(note);
             }
-            if (!draft.trim().equals(draftWritten)) {
-                draftWritten = draft.trim();
-                record(operation("comment", noteId).put("text", draftWritten));
-            }
-            if (diagram != null && !drawnJson().equals(diagramWritten)) {
-                diagramWritten = drawnJson();
-                record(operation("diagram", noteId).put("schema", new JSONObject(diagramWritten)));
-            }
-            written = true;
+            if (!comment.equals(draftWritten)) batch.put(operation("comment", noteId).put("text", comment));
+            if (diagram != null && !schema.equals(diagramWritten))
+                batch.put(operation("diagram", noteId).put("schema", new JSONObject(schema)));
+            store.addBatch(batch);
+            if (batch.length() > 0) { undone = 0; redoable.clear(); }
+            entriesWritten = people; draftWritten = comment; diagramWritten = schema; written = true;
             return true;
         } catch (Exception e) { error(e); return false; }
     }
@@ -3145,9 +3192,12 @@ public class MainActivity extends Activity {
         heading.setPadding(dp(10), dp(8), 0, dp(8));
         bar.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         tacticUndo = button("↶", this::undoTactic);
-        tacticUndo.setTextSize(17);
+        tacticRedo = button("↷", this::redoTactic);
+        tacticRedo.setContentDescription("Rétablir le dernier geste sur le tableau");
+        tacticUndo.setTextSize(17); tacticRedo.setTextSize(17);
         tacticUndo.setContentDescription("Annuler le dernier geste sur le tableau");
-        bar.addView(tacticUndo, new LinearLayout.LayoutParams(dp(48), dp(44)));
+        bar.addView(tacticUndo, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        bar.addView(tacticRedo, new LinearLayout.LayoutParams(dp(48), dp(48)));
         tacticMinute = button(noteMinute + "′", this::editNoteMinute);
         tacticMinute.setTextSize(15); tacticMinute.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
         tacticMinute.setContentDescription("Minute de la note, toucher pour corriger");
@@ -3161,13 +3211,15 @@ public class MainActivity extends Activity {
         board.setTravel(prefs.getInt("travel", BoardView.AUTO));
         // Selecting is only ever a change of what the panel offers; the note itself is untouched.
         board.watch(index -> renderTactic(), this::boardChanged);
+        board.editing(this::restoreTactic, id -> { board.selectMotion(id); });
+        board.dialogs(this::dialog);
         LinearLayout.LayoutParams boardSize = new LinearLayout.LayoutParams(-1, 0, 1);
         boardSize.topMargin = dp(8); boardSize.bottomMargin = dp(8);
         page.addView(board, boardSize);
         tacticPanel = new LinearLayout(this); tacticPanel.setOrientation(LinearLayout.VERTICAL);
         page.addView(tacticPanel, new LinearLayout.LayoutParams(-1, -2));
         // A note opens on its own history: the board as it arrives is the floor ↶ stops at.
-        undoable.clear(); drawnBefore = drawnJson();
+        editHistory.reset(tacticSnapshot());
         renderTactic();
     }
 
@@ -3202,6 +3254,8 @@ public class MainActivity extends Activity {
             + "dans les pieds"),
         new Tool(R.drawable.ic_tool_shot, BoardView.DRAW, Diagram.SHOT, "Tir",
             "Tracer un tir : trait double"),
+        new Tool(R.drawable.ic_tool_tackle, BoardView.DRAW, Diagram.TACKLE, "Tacle",
+            "Tracer un tacle : du joueur qui tacle jusqu’au joueur visé, qui perd le ballon s’il l’avait"),
         new Tool("⚽", BoardView.BALL, "", "Ballon",
             "Placer le ballon ou le donner à un joueur à cet instant"),
         new Tool(R.drawable.ic_eraser, BoardView.ERASE, "", "Gomme",
@@ -3210,11 +3264,15 @@ public class MainActivity extends Activity {
     private void renderTactic() {
         stopTactic();
         if (tacticUndo != null) {
-            tacticUndo.setEnabled(!undoable.isEmpty());
-            tacticUndo.setAlpha(undoable.isEmpty() ? .35f : 1f);
+            tacticUndo.setEnabled(editHistory.canUndo());
+            tacticUndo.setAlpha(!editHistory.canUndo() ? .35f : 1f);
         }
+        if (tacticRedo != null) { tacticRedo.setEnabled(editHistory.canRedo()); tacticRedo.setAlpha(!editHistory.canRedo() ? .35f : 1f); }
         tacticPanel.removeAllViews();
+        tacticTrackView = null;
         tacticTimeline();
+        tacticKeyControls();
+        if (expandedTimeline) tacticTracks();
         tacticMinute.setText(noteMinute + "′");
         HorizontalScrollView tools = sideways();
         LinearLayout toolRow = strip(); tools.addView(toolRow);
@@ -3227,8 +3285,9 @@ public class MainActivity extends Activity {
                 else board.setTool(entry.mode);
                 renderTactic();
             };
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(62), dp(48));
-            p.rightMargin = dp(5);
+            // Six outils tiennent sur la largeur d'un téléphone sans faire défiler la rangée.
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(58), dp(48));
+            p.rightMargin = dp(4);
             toolRow.addView(tool(entry, chosen, pick), p);
         }
         tacticPanel.addView(tools, new LinearLayout.LayoutParams(-1, dp(48)));
@@ -3252,7 +3311,7 @@ public class MainActivity extends Activity {
             wearCrest(add, team == null ? "" : team.optString("logo"));
             second.addView(add);
         }
-        second.addView(wide("◆ Positions", "Voir, ajouter ou supprimer les positions clés de la piste sélectionnée", this::tacticKeys));
+        second.addView(wide("Éditer…", "Keyframes, mouvements et repères", this::tacticEditMenu));
         LinearLayout.LayoutParams secondSize = new LinearLayout.LayoutParams(-1, dp(42));
         secondSize.topMargin = dp(6); tacticPanel.addView(second, secondSize);
 
@@ -3326,14 +3385,13 @@ public class MainActivity extends Activity {
             private final android.graphics.Paint marks = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
             private Track heldTrack;
             private Track.Key heldKey;
+            private Diagram.Step heldStep;
             private float touchX, touchY;
             private boolean markerGesture, moved, deleted;
             private Runnable deleteKey;
 
             private Track selectedTrack() {
-                int selected = board.selected();
-                return board.tool() == BoardView.BALL ? diagram.ball
-                    : selected >= 0 ? diagram.tokens.get(selected).track : null;
+                List<Track> tracks = tacticSelectedTracks(); return tracks.size() == 1 ? tracks.get(0) : null;
             }
             /**
              * The bar is drawn rather than dressed: a rectangle the width of the row, filled up
@@ -3350,7 +3408,7 @@ public class MainActivity extends Activity {
             private float trackLeft() { return getPaddingLeft(); }
             private float trackRight() { return getWidth() - getPaddingRight(); }
             /** Where an instant stands on the bar, never so near the end that its mark is cut. */
-            private float mark(int time) {
+            private float mark(float time) {
                 float left = trackLeft(), right = trackRight();
                 float at = left + (right - left) * time / (float)getMax();
                 return Math.max(left + dp(3), Math.min(right - dp(3), at));
@@ -3376,14 +3434,30 @@ public class MainActivity extends Activity {
             @Override public boolean onTouchEvent(MotionEvent event) {
                 int action = event.getActionMasked();
                 if (action == MotionEvent.ACTION_DOWN) {
-                    cancelDelete(); heldTrack = selectedTrack(); heldKey = null;
+                    cancelDelete(); heldTrack = null; heldKey = null; heldStep = null;
+                    // Les repères flottent au-dessus de la barre, les keyframes sont dedans : un
+                    // doigt posé au-dessus vise d'abord un repère.
+                    if (event.getY() < middle() - span() && event.getY() > middle() - dp(28)) {
+                        float nearest = dp(14);
+                        for (Diagram.Step step : diagram.steps) {
+                            float distance = Math.abs(event.getX() - mark(step.time));
+                            if (distance < nearest) { nearest = distance; heldStep = step; }
+                        }
+                    }
+                    if (heldStep != null) {
+                        markerGesture = true; moved = false; deleted = false;
+                        stopTactic(); play.setText("▶");
+                        touchX = event.getX(); touchY = event.getY();
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                        return true;
+                    }
                     // Tighter than when the markers stood in a strip of their own: they share
                     // the bar with the scrub now, and everything not on one of them is a seek.
                     float nearest = dp(9);
-                    if (heldTrack != null && Math.abs(event.getY() - middle()) <= dp(14)) {
-                        for (Track.Key key : heldTrack.keys) {
+                    if (Math.abs(event.getY() - middle()) <= dp(14)) {
+                        for (Track candidate : tacticSelectedTracks()) for (Track.Key key : candidate.keys) {
                             float distance = Math.abs(event.getX() - keyX(key));
-                            if (distance < nearest) { nearest = distance; heldKey = key; }
+                            if (distance < nearest) { nearest = distance; heldKey = key; heldTrack = candidate; }
                         }
                     }
                     markerGesture = heldKey != null; moved = false; deleted = false;
@@ -3393,7 +3467,8 @@ public class MainActivity extends Activity {
                         getParent().requestDisallowInterceptTouchEvent(true);
                         deleteKey = () -> {
                             deleteKey = null;
-                            if (heldTrack != selectedTrack() || !heldTrack.keys.remove(heldKey)) return;
+                            if (!tacticSelectedTracks().contains(heldTrack) || !heldTrack.keys.contains(heldKey)) return;
+                            new Sequence(diagram).remove(heldTrack, heldKey);
                             deleted = true;
                             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
                             toast("Position à " + seconds(heldKey.time) + " supprimée");
@@ -3416,23 +3491,35 @@ public class MainActivity extends Activity {
                     moved = true; cancelDelete();
                 } else if (action == MotionEvent.ACTION_UP) {
                     cancelDelete(); markerGesture = false;
-                    if (!deleted && !moved) { setProgress(heldKey.time); performClick(); }
+                    if (!deleted && !moved) {
+                        if (heldStep != null) toast("Repère « " + heldStep.name + " »");
+                        setProgress(heldStep != null ? heldStep.time : heldKey.time); performClick();
+                    }
                     if (!deleted) renderTactic();
                 }
                 return true;
             }
             @Override protected void onDraw(android.graphics.Canvas canvas) {
                 float middle = middle(), span = span();
-                float left = trackLeft(), right = trackRight(), head = mark(getProgress());
+                // La tête suit le terrain, entre deux dixièmes pendant la lecture.
+                float left = trackLeft(), right = trackRight(), head = mark((float)board.moment());
                 marks.setColor(GROOVE);
                 canvas.drawRect(left, middle - span, right, middle + span, marks);
                 marks.setColor(PLAYED);
                 canvas.drawRect(left, middle - span, head, middle + span, marks);
-                Track track = selectedTrack();
-                if (track != null) {
+                for (Track track : tacticSelectedTracks()) {
                     marks.setColor(skin.accent);
                     for (Track.Key key : track.keys)
                         canvas.drawRect(keyX(key) - dp(2), middle - span, keyX(key) + dp(2), middle + span, marks);
+                }
+                // Les repères nommés : un fanion au-dessus de la barre, pour ne jamais les prendre
+                // pour une keyframe, qui est un rectangle dans la barre.
+                marks.setColor(skin.ink);
+                for (Diagram.Step step : diagram.steps) {
+                    float at = mark(step.time), top = middle - span - dp(13), foot = middle - span - dp(3);
+                    android.graphics.Path flag = new android.graphics.Path();
+                    flag.moveTo(at - dp(5), top); flag.lineTo(at + dp(5), top); flag.lineTo(at, foot); flag.close();
+                    canvas.drawPath(flag, marks);
                 }
                 // Taller than the bar and paler than a key: the playhead crosses what it passes.
                 marks.setColor(skin.ink);
@@ -3447,14 +3534,21 @@ public class MainActivity extends Activity {
         seek.setSplitTrack(false);
         seek.setPadding(dp(4), 0, dp(4), 0);
         seek.setMax(Math.min(Track.END, Math.max(diagram.duration() + 50, board.time())));
-        seek.setProgress(board.time()); seek.setContentDescription("Temps dans la séquence. Touchez un repère pour rejoindre sa position ; appui long pour la supprimer");
+        seek.setProgress(board.time()); seek.setContentDescription("Temps dans la séquence. Touchez une keyframe pour la rejoindre ; appui long pour la supprimer. "
+            + "Les fanions au-dessus de la barre sont les repères nommés : les toucher y amène.");
         row.addView(seek, new LinearLayout.LayoutParams(0, dp(56), 1));
         boolean automatic = board.travel() == BoardView.AUTO;
         Button duration = button("↝ " + (automatic ? "auto" : seconds(board.travel())), () -> {
-            String[] values = {"Auto — d’après la longueur", "0,5 s", "1 s", "2 s", "3 s", "5 s", "10 s"};
+            String[] values = {"Auto — d’après la longueur", "0,5 s", "1 s", "2 s", "3 s", "5 s", "10 s", "Durée précise…"};
             int[] times = {BoardView.AUTO, 5, 10, 20, 30, 50, 100};
             dialog().setTitle("Durée du prochain trajet")
                 .setItems(values, (d, which) -> {
+                    if (which == times.length) {
+                        tacticTimeInput("Durée du prochain trajet", Math.max(1, board.travel()), at -> {
+                            if (at < 1) { toast("La durée doit être positive"); return; }
+                            board.setTravel(at); prefs.edit().putInt("travel", at).apply(); renderTactic();
+                        }); return;
+                    }
                     board.setTravel(times[which]);
                     prefs.edit().putInt("travel", times[which]).apply();
                     renderTactic();
@@ -3466,25 +3560,37 @@ public class MainActivity extends Activity {
         row.addView(duration, new LinearLayout.LayoutParams(dp(84), dp(40)));
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar view, int value, boolean user) {
-                board.setTime(value); label.setText(seconds(value));
+                // Pendant la lecture, le terrain mène : il est déjà entre deux dixièmes.
+                if (!tacticPlaying) {
+                    board.setTime(value);
+                    if (tacticTrackView != null) tacticTrackView.setTime(value);
+                }
+                label.setText(seconds(value)); updateKeyControls();
+                // La barre est peinte à la main : sa valeur changée ne la redessine pas seule.
+                view.invalidate();
             }
             public void onStartTrackingTouch(SeekBar view) { stopTactic(); play.setText("▶"); }
             public void onStopTrackingTouch(SeekBar view) { renderTactic(); }
         });
         play.setOnClickListener(v -> {
-            if (tacticPlaying) { stopTactic(); play.setText("▶"); return; }
-            if (board.time() >= diagram.duration()) seek.setProgress(0);
+            if (tacticPlaying) { stopTactic(); play.setText("▶"); seek.invalidate(); return; }
+            int end = diagram.duration();
+            if (board.time() >= end) seek.setProgress(0);
             tacticPlaying = true; play.setText("Ⅱ");
             long started = android.os.SystemClock.uptimeMillis();
             int from = board.time();
+            // À chaque image de l'écran, pas à chaque dixième : dix positions par seconde
+            // faisaient avancer les joueurs par bonds.
             tacticTick = () -> {
                 if (!tacticPlaying || !board.isAttachedToWindow()) { stopTactic(); return; }
-                int at = Math.min(diagram.duration(), from + (int)((android.os.SystemClock.uptimeMillis()-started)/100));
-                seek.setProgress(at);
-                if (at >= diagram.duration()) { stopTactic(); play.setText("▶"); }
-                else tacticClock.postDelayed(tacticTick, 40);
+                double at = Math.min(end, from + (android.os.SystemClock.uptimeMillis() - started) / 100.0);
+                board.setMoment(at);
+                if (tacticTrackView != null) tacticTrackView.setTime(at);
+                seek.setProgress(board.time()); seek.invalidate();
+                if (at >= end) { stopTactic(); play.setText("▶"); }
+                else board.postOnAnimation(tacticTick);
             };
-            tacticClock.post(tacticTick);
+            board.postOnAnimation(tacticTick);
         });
         // Editing during playback freezes the playhead before the gesture changes the model.
         board.setOnTouchListener((v, event) -> { stopTactic(); play.setText("▶"); return false; });
@@ -3493,25 +3599,247 @@ public class MainActivity extends Activity {
 
     private void tacticTimeInput(String title, int time, java.util.function.IntConsumer accept) {
         stopTactic();
-        EditText field = new EditText(this);
-        field.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        field.setText(String.format(Locale.US, "%.1f", time / 10.0)); field.selectAll();
+        EditText field = lineField("", String.format(Locale.US, "%.1f", time / 10.0),
+            InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        field.selectAll();
         AlertDialog dialog = dialog().setTitle(title + " (secondes)")
-            .setView(field).setNegativeButton("Annuler", null).setPositiveButton("Valider", null).create();
-        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            .setView(dialogFrame(field)).setNegativeButton("Annuler", null).setPositiveButton("Valider", null).create();
+        dialog.setOnShowListener(ignored -> { dress(dialog); dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             try {
                 double value = Double.parseDouble(field.getText().toString().replace(',', '.'));
                 if (!Double.isFinite(value) || value < 0 || value > Track.END / 10.0) throw new NumberFormatException();
                 accept.accept((int)Math.round(value * 10)); dialog.dismiss();
             } catch (NumberFormatException e) { field.setError("Saisissez un temps entre 0 et 120 secondes"); }
-        }));
+        }); });
         dialog.show();
+    }
+
+    private List<Track> tacticSelectedTracks() {
+        List<Track> tracks = new ArrayList<>();
+        if (diagram == null || board == null) return tracks;
+        Sequence.Motion motion = new Sequence(diagram).motion(board.selectedMotion());
+        if (board.tool() == BoardView.BALL || (motion != null && motion.actor.equals("ball") && board.chosen().isEmpty())) tracks.add(diagram.ball);
+        else for (int index : board.chosen()) tracks.add(diagram.tokens.get(index).track);
+        return tracks;
+    }
+    private void tacticKeyControls() {
+        LinearLayout row = strip();
+        keyPrevious = button("‹", () -> navigateKey(false));
+        keyToggle = button("◇", this::toggleKey);
+        keyNext = button("›", () -> navigateKey(true));
+        keyPrevious.setContentDescription("Aller à la keyframe précédente");
+        keyNext.setContentDescription("Aller à la keyframe suivante");
+        for (Button control : new Button[]{keyPrevious, keyToggle, keyNext}) {
+            control.setTextSize(22); row.addView(control, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        }
+        Button movement = button(new Sequence(diagram).motion(board.selectedMotion()) == null ? "Mouvements" : "Trajet…", () -> {
+            Sequence.Motion selected = new Sequence(diagram).motion(board.selectedMotion());
+            if (selected == null) tacticMotions(); else tacticMotion(selected.id());
+        });
+        movement.setTextSize(12); row.addView(movement, new LinearLayout.LayoutParams(0, dp(48), 1));
+        Button expand = button(expandedTimeline ? "▴" : "▾", () -> { expandedTimeline = !expandedTimeline; renderTactic(); });
+        expand.setContentDescription(expandedTimeline ? "Replier la chronologie" : "Déplier la chronologie collective");
+        row.addView(expand, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        tacticPanel.addView(row); updateKeyControls();
+    }
+    private void updateKeyControls() {
+        if (keyToggle == null) return;
+        List<Track> tracks = tacticSelectedTracks(); int count = 0; boolean previous = false, next = false;
+        for (Track track : tracks) for (Track.Key key : track.keys) {
+            if (key.time == board.time()) count++;
+            previous |= key.time < board.time(); next |= key.time > board.time();
+        }
+        keyPrevious.setEnabled(previous); keyNext.setEnabled(next); keyToggle.setEnabled(!tracks.isEmpty());
+        boolean full = !tracks.isEmpty() && count == tracks.size();
+        keyToggle.setText(full ? "◆" : count > 0 ? "◈" : "◇");
+        keyToggle.setTextColor(count > 0 ? 0xffff9800 : skin.ink);
+        keyToggle.setContentDescription(full ? "Supprimer les keyframes à cet instant" : "Ajouter les keyframes à cet instant");
+        for (Button control : new Button[]{keyPrevious, keyToggle, keyNext}) control.setAlpha(control.isEnabled() ? 1 : .35f);
+    }
+    private void navigateKey(boolean forward) {
+        int target = forward ? Track.END+1 : -1;
+        for (Track track : tacticSelectedTracks()) for (Track.Key key : track.keys)
+            if (forward && key.time > board.time()) target = Math.min(target, key.time);
+            else if (!forward && key.time < board.time()) target = Math.max(target, key.time);
+        if (target >= 0 && target <= Track.END) { stopTactic(); board.setTime(target); renderTactic(); }
+    }
+    private void toggleKey() {
+        tacticCommand(() -> {
+            Sequence sequence = new Sequence(diagram); List<Track> tracks = tacticSelectedTracks();
+            boolean all = !tracks.isEmpty();
+            for (Track track : tracks) all &= track.at(board.time()) != null;
+            if (all) for (Track track : tracks) sequence.remove(track, track.at(board.time()));
+            else if (tracks.size() == 1 && tracks.get(0) == diagram.ball) sequence.fixBall(board.time());
+            else for (int index : board.chosen()) sequence.fix(diagram.tokens.get(index), board.time());
+        });
+    }
+    private void tacticCommand(Runnable command) {
+        stopTactic();
+        try { command.run(); boardChanged(); }
+        catch (IllegalArgumentException failure) { toast(failure.getMessage()); restoreTactic(); }
+    }
+    private String actorName(String id) {
+        if (id.equals("ball")) return "Ballon";
+        Diagram.Token token = new Sequence(diagram).token(id);
+        return token == null ? "Joueur" : Diagram.named(token) ? shortName(token.playerId) : "Pion " + token.label;
+    }
+    private String motionName(Sequence.Motion motion) {
+        String kind = motion.track != diagram.ball && Diagram.TACKLE.equals(motion.end.kind) ? " · tacle" : "";
+        return actorName(motion.actor) + kind + " · " + seconds(motion.start.time) + " → " + seconds(motion.end.time);
+    }
+    private void tacticEditMenu() {
+        dialog().setTitle("Éditer la séquence").setItems(new String[]{"Keyframes…", "Mouvements…", "Repères…",
+            "Maintenir ici jusqu’à…", board.translatesAll() ? "Modifier la position à cet instant" : "Déplacer toute la trajectoire"}, (d, which) -> {
+                if (which == 0) tacticKeys();
+                else if (which == 1) tacticMotions();
+                else if (which == 2) tacticSteps();
+                else if (which == 3) {
+                    List<Integer> chosen = board.chosen(); int from = board.time();
+                    if (chosen.isEmpty()) { toast("Sélectionnez les joueurs à faire attendre"); return; }
+                    tacticTimeInput("Maintenir ici jusqu’à", from+10, at -> {
+                        if (at <= from) { toast("Choisissez un instant après le départ"); return; }
+                        tacticCommand(() -> {
+                            Sequence sequence = new Sequence(diagram);
+                            for (int index : chosen) {
+                                Diagram.Token token = diagram.tokens.get(index); double[] p = diagram.position(token, from);
+                                for (Track.Key key : token.track.keys) if (key.time > from && key.time <= at)
+                                    throw new IllegalArgumentException("Des positions existent pendant cette attente");
+                                sequence.fix(token, from); sequence.place(token, at, p[0], p[1]);
+                            }
+                            board.setTime(at);
+                        });
+                    });
+                } else {
+                    board.translateAll(!board.translatesAll()); board.setTool(BoardView.MOVE);
+                    toast(board.translatesAll() ? "Le prochain déplacement décale toute la trajectoire" : "Édition à l’instant courant"); renderTactic();
+                }
+            }).show();
+    }
+    private void tacticMotions() {
+        List<Sequence.Motion> motions = new Sequence(diagram).motions();
+        if (motions.isEmpty()) { toast("Tracez une course ou placez un joueur à deux instants"); return; }
+        String[] names = new String[motions.size()];
+        for (int i = 0; i < names.length; i++) names[i] = motionName(motions.get(i));
+        dialog().setTitle("Mouvements").setItems(names, (d, which) -> tacticMotion(motions.get(which).id())).show();
+    }
+    private void tacticMotion(String id) {
+        Sequence.Motion motion = new Sequence(diagram).motion(id); if (motion == null) return;
+        board.select(-1);
+        if (!motion.actor.equals("ball")) for (int i = 0; i < diagram.tokens.size(); i++)
+            if (diagram.tokens.get(i).id.equals(motion.actor)) board.select(i);
+        board.selectMotion(id); board.setTool(BoardView.MOVE); board.invalidate();
+        List<String> options = new ArrayList<>();
+        java.util.Collections.addAll(options, "Aller au départ", "Aller à l’arrivée", "Changer le début…", "Changer la durée…",
+            "Modifier les extrémités sur le terrain", "Redessiner le parcours", "Lier le départ…", "Délier le départ", "Supprimer le mouvement");
+        if (motion.track == diagram.ball && !Diagram.SHOT.equals(motion.end.kind)) options.add("Receveur dans cet espace…");
+        dialog().setTitle(motionName(motion)).setItems(options.toArray(new String[0]), (d, which) -> {
+            if (which == 0 || which == 1) { board.setTime(which == 0 ? motion.start.time : motion.end.time); renderTactic(); }
+            else if (which == 2 || which == 3) tacticTimeInput(which == 2 ? "Début du mouvement" : "Durée du mouvement",
+                which == 2 ? motion.start.time : motion.duration(), at -> tacticCommand(() ->
+                    new Sequence(diagram).retime(motion, which == 2 ? at : motion.start.time, which == 3 ? at : motion.duration())));
+            else if (which == 4) { toast("Glissez les cercles orange pour corriger les extrémités"); renderTactic(); }
+            else if (which == 5) { board.redrawMotion(); toast("Tracez le nouveau parcours entre les extrémités"); renderTactic(); }
+            else if (which == 6) tacticLink(id);
+            else if (which == 7) tacticCommand(() -> new Sequence(diagram).unlink(motion));
+            else if (which == 8) tacticCommand(() -> new Sequence(diagram).remove(motion));
+            else tacticReceiver(id);
+        }).show();
+    }
+    private void tacticLink(String id) {
+        Sequence sequence = new Sequence(diagram); Sequence.Motion target = sequence.motion(id);
+        if (target == null) return;
+        List<String> names = new ArrayList<>(); List<Track.Key> keys = new ArrayList<>();
+        for (Sequence.Motion motion : sequence.motions()) if (!motion.id().equals(id)) {
+            names.add("Départ · " + motionName(motion)); keys.add(motion.start);
+            names.add("Arrivée · " + motionName(motion)); keys.add(motion.end);
+        }
+        if (keys.isEmpty()) { toast("Créez d’abord un autre mouvement"); return; }
+        dialog().setTitle("Démarrer au même instant que…").setItems(names.toArray(new String[0]), (d, which) ->
+            tacticCommand(() -> sequence.link(target, keys.get(which), 0))).show();
+    }
+    private void tacticReceiver(String id) {
+        Sequence sequence = new Sequence(diagram); Sequence.Motion pass = sequence.motion(id); if (pass == null) return;
+        List<Diagram.Token> tokens = new ArrayList<>(diagram.tokens); String[] names = new String[tokens.size()];
+        for (int i = 0; i < names.length; i++) names[i] = actorName(tokens.get(i).id);
+        dialog().setTitle("Qui reçoit dans cet espace ?").setItems(names, (d, which) -> {
+            Diagram.Token receiver = tokens.get(which); double[] destination = sequence.point(pass, true);
+            Runnable apply = () -> tacticCommand(() -> {
+                Track.Key start = sequence.fix(receiver, pass.start.time), end = sequence.fix(receiver, pass.end.time);
+                for (Track.Key key : new ArrayList<>(receiver.track.keys))
+                    if (key.time > start.time && key.time < end.time) sequence.remove(receiver.track, key);
+                end.x = destination[0]; end.y = destination[1]; end.path.clear(); end.baked = false;
+                start.after = pass.start.id; start.offset = 0;
+                end.after = pass.end.id; end.offset = 0; pass.end.owner = receiver.id;
+            });
+            boolean overlap = false;
+            for (Sequence.Motion motion : sequence.motions()) if (motion.track == receiver.track
+                && motion.start.time < pass.end.time && motion.end.time > pass.start.time) overlap = true;
+            if (overlap) dialog().setTitle("Remplacer la course du receveur ?")
+                .setMessage(actorName(receiver.id) + " rejoindra l’espace visé de " + seconds(pass.start.time) + " à " + seconds(pass.end.time) + ".")
+                .setNegativeButton("Annuler", null).setPositiveButton("Remplacer", (a, b) -> apply.run()).show();
+            else apply.run();
+        }).show();
+    }
+    private void tacticSteps() {
+        LinearLayout list = new LinearLayout(this); list.setOrientation(LinearLayout.VERTICAL);
+        Button add = button("Ajouter un repère ici", () -> {
+            EditText name = lineField("Nom du repère, par exemple Réception", "",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+            name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(80)});
+            dialog().setTitle("Repère à " + seconds(board.time())).setView(dialogFrame(name)).setNegativeButton("Annuler", null)
+                .setPositiveButton("Ajouter", (d, w) -> tacticCommand(() -> {
+                    if (diagram.steps.size() >= 120) throw new IllegalArgumentException("Limite de 120 repères atteinte");
+                    diagram.steps.add(new Diagram.Step(name.getText().toString().trim().isEmpty() ? "Repère" : name.getText().toString().trim(), board.time()));
+                    diagram.steps.sort((a, b) -> Integer.compare(a.time, b.time));
+                })).show();
+        }); list.addView(add);
+        android.app.AlertDialog[] dialogRef = new android.app.AlertDialog[1];
+        for (Diagram.Step step : diagram.steps) {
+            LinearLayout row = strip();
+            BoardView preview = new BoardView(this, match, glassMarkers(), Skin.onGrass(skin.ring), Skin.onGrass(skin.ringEnd), skin.lawn, skin.lawnEnd, false, true);
+            preview.setDiagram(diagram); preview.setTime(step.time);
+            row.addView(preview, new LinearLayout.LayoutParams(dp(70), dp(60)));
+            Button go = button(step.name + " · " + seconds(step.time), () -> {
+                board.setTime(step.time); dialogRef[0].dismiss(); renderTactic();
+            }); row.addView(go, new LinearLayout.LayoutParams(0, dp(60), 1));
+            Button remove = button("×", () -> { dialogRef[0].dismiss(); tacticCommand(() -> diagram.steps.remove(step)); });
+            remove.setContentDescription("Supprimer le repère " + step.name); row.addView(remove, new LinearLayout.LayoutParams(dp(48), dp(60)));
+            list.addView(row);
+        }
+        ScrollView scroll = new ScrollView(this); scroll.addView(list);
+        dialogRef[0] = dialog().setTitle("Repères de la séquence").setView(scroll).setNegativeButton("Fermer", null).create(); dialogRef[0].show();
+    }
+    private void tacticTracks() {
+        ScrollView scroll = new ScrollView(this);
+        SequenceTimeline[] timeline = new SequenceTimeline[1]; String before = tacticSnapshot();
+        String[] problem = {""};
+        timeline[0] = new SequenceTimeline(this, diagram, skin.ink, skin.accent, this::actorName, new SequenceTimeline.Listener() {
+            public void select(String id) { tacticMotion(id); }
+            public void preview(String id, int start, int duration) {
+                try {
+                    Diagram candidate = Diagram.from(new JSONObject(before).getJSONObject("diagram"));
+                    Sequence sequence = new Sequence(candidate); Sequence.Motion motion = sequence.motion(id);
+                    if (motion == null) return;
+                    sequence.retime(motion, start, duration);
+                    diagram = candidate; board.setDiagram(diagram); board.selectMotion(id);
+                    timeline[0].setDiagram(diagram); problem[0] = "";
+                } catch (Exception failure) { problem[0] = failure.getMessage(); }
+            }
+            public void finish(boolean commit) {
+                if (commit && problem[0].isEmpty()) boardChanged();
+                else { if (!problem[0].isEmpty()) toast(problem[0]); restoreTactic(); }
+            }
+        });
+        tacticTrackView = timeline[0]; tacticTrackView.setTime(board.time());
+        scroll.addView(timeline[0]); tacticPanel.addView(scroll, new LinearLayout.LayoutParams(-1, dp(112)));
+        String warning = new Sequence(diagram).warning();
+        if (!warning.isEmpty()) { TextView text = new TextView(this); text.setText(warning); text.setTextColor(skin.ink); tacticPanel.addView(text); }
     }
 
     private void tacticKeys() {
         stopTactic();
         int selected = board.selected();
-        boolean ball = board.tool() == BoardView.BALL;
+        boolean ball = tacticSelectedTracks().size() == 1 && tacticSelectedTracks().get(0) == diagram.ball;
         if (!ball && selected < 0) {
             if (!diagram.shapes.isEmpty()) {
                 dialog().setItems(new String[]{"Effacer le dernier ancien tracé"},
@@ -3536,19 +3864,16 @@ public class MainActivity extends Activity {
                 if (which == 2) {
                     tacticTimeInput("Déplacer la position vers", current.time, at -> {
                         if (track.at(at) != null && track.at(at) != current) { toast("Une position existe déjà à cet instant"); return; }
-                        track.keys.remove(current); current.time = at; track.put(current);
+                        new Sequence(diagram).time(current, at);
                         board.setTime(at); boardChanged();
                     }); return;
                 }
-                if (which == 1) track.keys.remove(current);
+                if (which == 1) new Sequence(diagram).remove(track, current);
                 else if (current == null) {
-                    double[] p = ball ? diagram.ballPosition(board.time()) : diagram.position(token, board.time());
-                    if (p == null) p = new double[]{.5, .5};
-                    Track.Key key = new Track.Key(board.time(), p[0], p[1]);
-                    if (ball && diagram.ballHeld(board.time())) {
-                        for (Track.Key k : track.keys) if (k.time <= board.time()) key.owner = k.owner;
-                    }
-                    if (!track.put(key)) { toast("Piste pleine"); return; }
+                    try {
+                        if (ball) new Sequence(diagram).fixBall(board.time());
+                        else new Sequence(diagram).fix(token, board.time());
+                    } catch (IllegalArgumentException failure) { toast(failure.getMessage()); restoreTactic(); return; }
                 }
                 boardChanged();
             }).show();
@@ -3559,12 +3884,15 @@ public class MainActivity extends Activity {
         TextView hint = new TextView(this);
         hint.setText(board.tool() == BoardView.ERASE
             ? "Touchez un joueur ou un tracé pour l’effacer"
+            : board.tool() == BoardView.DRAW && Diagram.TACKLE.equals(board.stroke())
+            ? "Tracez le tacle : du joueur qui tacle jusqu’au joueur visé"
             : board.tool() == BoardView.DRAW
             ? (board.travel() == BoardView.AUTO
                 ? "Tracez le trajet : départ au curseur, durée d’après sa longueur"
                 : "Tracez le trajet : départ au curseur, arrivée après la durée choisie")
             : board.tool() == BoardView.BALL ? "Touchez un joueur pour lui donner le ballon, ou le terrain"
-            : "Placez les joueurs ; utilisez Course pour les faire avancer");
+            : board.translatesAll() ? "Déplacez le joueur : toute sa trajectoire suivra"
+            : "Déplacez à cet instant : une keyframe est créée ou corrigée");
         hint.setTextSize(12); hint.setTextColor(skin.muted); hint.setGravity(Gravity.CENTER_VERTICAL);
         hint.setMaxLines(1); hint.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(SELECTION));
@@ -3719,7 +4047,7 @@ public class MainActivity extends Activity {
             items[i + 1] = icon(keys.get(i)) + "   " + actionName(keys.get(i));
         dialog().setTitle(shortName(playerId)).setItems(items, (d, which) -> {
             if (which == 0) entries.remove(playerId); else entries.put(playerId, keys.get(which - 1));
-            if (writeNote()) renderTactic();
+            boardChanged();
         }).show();
     }
 
@@ -3800,42 +4128,33 @@ public class MainActivity extends Activity {
      * mode: there is no save button here either. What is on the board is the note, so a player
      * rubbed out takes the action he was given with him.
      */
+    private String tacticSnapshot() { return TacticalHistory.snapshot(diagram, entries); }
+    private void applyTacticSnapshot(String snapshot) {
+        List<Integer> chosen = board.chosen(); String motion = board.selectedMotion();
+        diagram = TacticalHistory.restore(snapshot, entries);
+        board.setDiagram(diagram); board.selectIndices(chosen); board.selectMotion(motion);
+    }
+    private void restoreTactic() { applyTacticSnapshot(editHistory.current()); board.invalidate(); renderTactic(); }
     private void boardChanged() {
-        remember();
-        entries.keySet().retainAll(playersOnBoard());
-        board.invalidate();
-        if (writeNote()) renderTactic();
+        try {
+            Sequence sequence = new Sequence(diagram); sequence.detachMissing(); sequence.resolve();
+            entries.keySet().retainAll(playersOnBoard());
+            String now = tacticSnapshot();
+            if (!now.equals(editHistory.current())) {
+                if (!writeNote()) { restoreTactic(); return; }
+                editHistory.record(now);
+            }
+            board.invalidate(); renderTactic();
+        } catch (IllegalArgumentException failure) { toast(failure.getMessage()); restoreTactic(); }
     }
-
-    /**
-     * One step back, taken after the change rather than before it: every change comes through
-     * here, so what the board looked like a moment ago is simply what it looked like the last
-     * time we passed. A change that leaves the schema identical — a selection, a replay — is not
-     * a step, or ↶ would need pressing twice to undo one stroke.
-     */
-    private void remember() {
-        String now = drawnJson();
-        if (now.equals(drawnBefore)) return;
-        if (undoable.size() >= UNDOABLE) undoable.remove(0);
-        undoable.add(drawnBefore);
-        drawnBefore = now;
-    }
-
-    /** Puts the board back as it was one change ago, and writes that as any other change. */
-    private void undoTactic() {
-        if (undoable.isEmpty()) { toast("Plus rien à annuler"); return; }
-        String previous = undoable.remove(undoable.size() - 1);
-        Diagram restored;
-        try { restored = Diagram.from(new JSONObject(previous)); }
-        catch (Exception failure) { error(failure); return; }
-        stopTactic();
-        diagram = restored;
-        // Not a step of its own: what it puts back is where the next change starts from.
-        drawnBefore = previous;
-        board.setDiagram(diagram);
-        entries.keySet().retainAll(playersOnBoard());
-        board.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-        if (writeNote()) renderTactic();
+    private void undoTactic() { tacticHistory(false); }
+    private void redoTactic() { tacticHistory(true); }
+    private void tacticHistory(boolean redo) {
+        if (redo ? !editHistory.canRedo() : !editHistory.canUndo()) return;
+        stopTactic(); String before = editHistory.current();
+        applyTacticSnapshot(editHistory.target(redo));
+        if (!writeNote()) { applyTacticSnapshot(before); renderTactic(); return; }
+        editHistory.accept(redo); renderTactic();
     }
 
     private void leaveTactic() { stopTactic(); closeNote(); showMatch(); }
@@ -3988,7 +4307,8 @@ public class MainActivity extends Activity {
             for (Track.Key key : token.track.keys) {
                 if (key.time > since && key.time > last) {
                     last = key.time;
-                    said = (drawn.carrying(token, since, key.time) ? "Conduite de " : "Course de ")
+                    said = (Diagram.TACKLE.equals(key.kind) ? "Tacle de "
+                        : drawn.carrying(token, since, key.time) ? "Conduite de " : "Course de ")
                         + who(token);
                 }
                 since = key.time;
@@ -4782,12 +5102,14 @@ public class MainActivity extends Activity {
 
     private void settings() {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
-        EditText url = new EditText(this); url.setHint("https://mon-serveur");
-        url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        url.setText(server()); box.addView(url);
-        EditText token = new EditText(this); token.setHint("Jeton de synchronisation (facultatif)");
-        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        token.setText(prefs.getString("token", "")); box.addView(token);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        EditText url = lineField("https://mon-serveur", server(),
+            InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        box.addView(url, new LinearLayout.LayoutParams(-1, -2));
+        EditText token = lineField("Jeton de synchronisation (facultatif)", prefs.getString("token", ""),
+            InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        LinearLayout.LayoutParams below = new LinearLayout.LayoutParams(-1, -2); below.topMargin = dp(10);
+        box.addView(token, below);
         connectionTest(box, () -> url.getText().toString().trim().replaceAll("/+$", ""));
         dialog().setTitle("Serveur personnel").setView(box)
             .setPositiveButton("Enregistrer", (d,w) -> prefs.edit()

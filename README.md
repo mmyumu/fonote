@@ -659,89 +659,94 @@ python3 -c "import sqlite3; source=sqlite3.connect('fonote.sqlite3'); target=sql
 
 Validation sur téléphone et matchs personnels. Les suivis et les statistiques du fournisseur sont en place ; l’interface Quest ne l’est pas encore. Aucune donnée de fournisseur n'est collectée ni archivée à ce stade ; les notes originales restent indépendantes de leurs éventuelles conditions de conservation.
 
-## Séquences tactiques et positions clés
+## Séquences tactiques et keyframes
 
-Dans une note tactique, la barre indique le temps écoulé **dans l’action**, indépendamment de
-la minute du match. Toucher le temps permet de saisir un instant précis. Chaque joueur possède
-ses propres positions clés ; les repères dans la barre indiquent celles du joueur sélectionné
-(ou du ballon avec l’outil Ballon). Un toucher sur un repère rejoint sa position ; un appui long
-le supprime. Déplacer le doigt annule la suppression — et reprend le déplacement du temps, plutôt
-que d’immobiliser le doigt jusqu’à ce qu’il se lève.
+Le temps du tableau décrit l’action (0 à 120 secondes, par dixièmes), indépendamment de la
+minute du match. Touchez le temps pour saisir un instant précis, ou déplacez le curseur.
 
-La barre est peinte par le client, pas habillée : un rectangle de la largeur de la rangée, rempli
-jusqu’au temps courant, les positions clés dressées dedans, et le temps courant en un rectangle
-plus haut que la barre et plus clair qu’un repère. Le curseur de la plateforme n’en garde que
-l’arithmétique. Il apportait deux choses dont la rangée ne voulait pas : la pastille ronde d’un
-écran de réglages, et une piste posée là où le remplissage de son dessin la mettait — dix dp
-au-dessus des boutons qui l’encadrent, sans moyen de l’aligner sur eux.
+### Placer et animer
 
-- Chaque équipe a son bouton **+**, qui propose uniquement ses joueurs présents à la minute de
-  la note et pas encore placés, par numéro croissant, puis un pion générique de cette équipe.
-  Le pion sans équipe n’est plus proposé.
-- **Sans outil sélectionné**, le terrain sert à sélectionner et repositionner les joueurs, sans
-  créer de clé ni de flèche. Retoucher l’outil actif le désélectionne.
-  Si un joueur possède déjà une trajectoire, son placement et toute sa trajectoire sont décalés
-  ensemble, en conservant les temps. Cela fonctionne aussi pour une sélection de plusieurs joueurs.
-  Pour le faire attendre avant un appel, fixer une position au début de l’appel avec **◆ Positions**,
-  puis tracer sa **Course**.
-- **↝** donne la durée du prochain trajet, et vaut **auto** par défaut : la durée se déduit alors
-  de la longueur du trait, à l’allure de ce qu’il représente — une passe à 15 m/s, un tir à 25,
-  un joueur qui court à 6,5. Un terrain fait 105 mètres sur 68, donc une fraction du tableau vaut
-  plus dans la longueur que dans la largeur, et les deux axes sont pesés séparément avant que la
-  distance ne devienne un temps. La longueur mesurée est celle qui sera parcourue — la polyligne
-  lissée, pas la corde entre les deux bouts — si bien qu’une course qui contourne un adversaire
-  prend le temps qu’elle fait. Rien n’est chronométré dans une action qu’on note de mémoire, mais
-  un ballon long est plus lent qu’un une-deux et une course de trente mètres n’est pas celle de
-  deux : le trait le dit déjà. Les durées fixes (0,5 à 10 s) restent là pour la séquence qui doit
-  être exacte, et le choix est retenu d’une note à l’autre.
-- **Course** enregistre un trajet depuis un joueur, entre le curseur et la fin de la durée choisie
-  avec **↝**. Le curseur avance à l’arrivée. Revenir en arrière permet de tracer l’appel simultané
-  d’un autre joueur. Un trajet contenant déjà des clés intermédiaires est refusé pour éviter de les
-  écraser.
-- Il n’y a pas d’outil **Conduite** : une course est dessinée pointillée, et ondulée si le joueur a
-  le ballon dans les pieds pendant tout le trajet. Le ballon suit déjà son porteur, donc c’est lui
-  qui décide, pas l’outil choisi. Un ballon frappé au départ du trajet est déjà parti — c’est une
-  course ; frappé à l’arrivée, il a été conduit jusque-là.
-- **Ballon** permet de donner le ballon à un joueur, ou de le placer librement sur le terrain :
-  c’est ainsi qu’on met le ballon dans les pieds d’un joueur avant de lui tracer une conduite.
-  Un ballon tenu se dessine du côté où son porteur va le jouer, pas toujours à sa droite : un
-  décalage fixe ne dit rien, et il le dit même quand le jeu part à gauche. Jamais sous lui, en
-  revanche — c’est là qu’est écrit son nom, et un nom à moitié couvert par un ballon est pire
-  qu’un ballon du mauvais côté : une passe vers le bas pose donc le ballon à côté du joueur, du
-  côté où elle part. Le ballon d’un joueur qui le conduit, ou qui le garde jusqu’à la fin, se
-  pose au-dessus de lui — le seul côté que la plaque du nom laisse libre. Un ballon que personne
-  ne tient reste où il est.
-  Une **Passe** vers un joueur vise sa position à la réception et lui donne ensuite le ballon.
-  Un **Tir** termine sur un point libre.
-- **▶** lit la séquence, et le temps se lit à côté — toucher ce temps permet de saisir un instant
-  précis. Il est écrit dans la lettre des boutons de la rangée, demi-grasse en 13, et non dans
-  celle qu’un `TextView` nu prend par défaut : la romaine du système en 14 mettait deux polices
-  dans la même rangée. Comme il répond au doigt, il répond aussi à l’appui, la règle de toutes
-  les surfaces cliquables ici. **◆ Positions** permet de retrouver, ajouter, supprimer ou changer le
-  temps d’une clé. La gomme retire un joueur, une passe ou la position d’arrivée du trajet touché.
+- Sans outil, glisser un joueur modifie sa position **à cet instant**. Entre deux keyframes,
+  le geste en ajoute une ; les positions précédentes et suivantes restent fixes.
+- Le placement initial est conservé à 0 s lors du premier déplacement ultérieur. Exemple :
+  placer en A, aller à 1,2 s, déplacer en B, lire avec **▶**. À la dernière clé,
+  la lecture repart du début ; elle s’arrête à la dernière clé ou au dernier repère.
+- La lecture suit l’écran image par image : les joueurs et le ballon glissent entre deux
+  dixièmes au lieu de sauter, et le curseur de la barre avance avec eux. Le ballon quitte les
+  pieds du passeur et rejoint ceux du receveur progressivement. Une pause revient au dixième
+  affiché, sur lequel l’édition reprend.
+- **‹ ◇ ›** concerne le joueur sélectionné, la sélection de plusieurs joueurs ou le ballon.
+  Les flèches rejoignent la keyframe précédente/suivante. Le losange neutre ajoute une clé
+  sans changer l’animation ; le losange orange plein supprime la clé courante. Un losange
+  partiel signifie que certains joueurs du groupe ont une clé ici : toucher complète le groupe.
+- **Éditer… → Keyframes** permet aussi de changer l’instant d’une clé.
+- **Éditer… → Maintenir ici jusqu’à…** fait attendre les joueurs sélectionnés avant leur appel.
+- **Éditer… → Déplacer toute la trajectoire** arme un déplacement global pour le prochain geste.
+- **Course** trace un déplacement depuis le joueur. **↝** propose une durée automatique,
+  des durées prédéfinies et une saisie précise. Après un tracé, le curseur passe à l’arrivée
+  pour enchaîner la suite de l’action. Pour un appel simultané, revenir au départ avec **‹**
+  ou **Trajet… → Aller au départ**.
+- **Tacle** se trace du joueur qui tacle jusqu’au joueur visé. Le tacleur court à l’allure
+  d’une course et s’arrête au contact, là où le visé sera à cet instant, sans le recouvrir. Si
+  le visé a le ballon, le tacleur le récupère au contact. Le trait est pointillé et finit sur
+  une croix au lieu d’une flèche.
 
-Les temps sont enregistrés en dixièmes de seconde, jusqu’à 120 secondes, avec au plus 120 clés
-par piste. Ils décrivent la séquence saisie ; les durées proposées pour dessiner ne sont pas des
-mesures automatiques du match. Ces trajectoires préparent une future heatmap des actions notées ;
-la heatmap elle-même n’est pas encore calculée.
+### Corriger et synchroniser
 
-Le schéma `version: 2` conserve `board`, `tokens`, `shapes` (anciens tracés statiques), et ajoute
-`ball`. Chaque pion reçoit un `id` stable dans le schéma et une liste `keys`. Chaque clé contient
-`t` (dixièmes de seconde), `x`, `y`, et éventuellement `path` (trajet arrivant à cette clé). Seules
-les clés du ballon portent `kind`, ainsi que `owner` (identifiant du pion) et `flight` (trajet vers
-la clé suivante, sinon position libre ou suivi du porteur) ; un `kind` laissé par un ancien client
-sur la piste d’un joueur est ignoré à la lecture. Les pistes sont triées et leurs temps
-uniques. Les anciens schémas sans version restent acceptés et sont convertis lors de l’édition.
-Le serveur mis à jour accepte ces schémas et des opérations jusqu’à 4 Mio ; il doit être mis à jour
-avant de synchroniser les nouvelles séquences. Un ancien client ne sait pas conserver ces pistes
-lors d’une réédition : mettre les clients à jour ensemble.
+Touchez une trajectoire puis **Trajet…**, ou ouvrez **Mouvements**, pour choisir son départ,
+sa durée, corriger ses extrémités avec les cercles orange ou redessiner son parcours.
+Le remplacement d’une portion déjà animée est annoncé avant validation.
 
-Vérification des pistes et de leur sérialisation (avec une bibliothèque `org.json` disponible) :
+**▾** ouvre la chronologie collective. Glisser un bloc change son début ; glisser son bord
+droit change sa durée. Les réglages restent accessibles dans le menu Mouvements.
+**Lier le départ…** attache un mouvement au départ ou à l’arrivée d’un autre. Modifier ensuite
+son début règle le décalage par rapport à cette référence. **Délier** conserve son temps actuel.
+Seuls les mouvements liés suivent une modification ; les cycles, croisements de positions et
+sorties des 120 secondes sont refusés. Supprimer une référence détache ses dépendantes en
+conservant leurs temps.
+
+Le ballon suit son porteur. Une passe vers un joueur suit sa position de réception ; un tir
+termine sur un point libre. Dans le menu d’une passe, **Receveur dans cet espace…** crée une
+course vers l’arrivée du ballon, synchronisée sur la passe ; remplacer une course existante
+nécessite une validation. Les incohérences de possession sont signalées dans la chronologie.
+
+**Éditer… → Repères** ajoute des signets nommés sur le temps, avec miniature, par exemple
+« Réception » à 2,4 s. Ils sont dessinés en fanions au-dessus de la barre du temps ; toucher un
+fanion y amène. Ils servent uniquement à naviguer : ils ne créent ni ne modifient aucune
+keyframe, qui restent les rectangles dans la barre.
+
+**↶ / ↷** annulent et rétablissent un geste complet, y compris ses conséquences temporelles et
+les annotations des joueurs retirés. L’historique conserve 40 gestes pendant l’édition ouverte.
+Chaque geste terminé est sauvegardé hors connexion dans une transaction SQLite ; une erreur
+restaure l’état précédent. Une sélection ou une lecture ne crée pas d’opération.
+
+### Format et vérifications
+
+Le diagramme `version: 3` conserve les pistes des joueurs et du ballon. Chaque clé a un `id`
+stable ; `after` et `offset` expriment une relation temporelle vers une autre clé. Les mouvements
+sont les portions entre positions successives, identifiées par leur arrivée : une position
+commune n’est jamais dupliquée. `baked` indique un parcours déjà lissé, découpé sans changer
+l’animation. `steps` contient les repères `{id, name, t}`. Seul le tacle donne un `kind` à la clé d’un
+joueur (`tackle`) ; les autres traits d’un joueur se lisent sur le ballon. Un tracé peut être aussi long
+que le geste : il est gardé en entier pendant qu’il se dessine, puis enregistré sur 32 points
+répartis à intervalles égaux le long du trait, ses deux bouts inchangés. Le serveur valide les références,
+les temps résolus et l’absence de cycles. Limites : 30 pions, 120 clés par piste, 120 étapes.
+
+Déployer le serveur compatible avant de synchroniser les nouveaux diagrammes. Les anciens
+formats restent lisibles avec le lecteur existant ; aucune migration des données de test n’est
+nécessaire. Ne pas rééditer une séquence v3 avec une ancienne application. Une éventuelle remise
+à zéro des tests doit concerner les journaux des deux appareils et du serveur ensemble.
 
 ```bash
 source scripts/android-env.sh
 FONOTE_JSON_JAR="$FONOTE_ROOT/.tooling/android-studio/plugins/grazie/lib/org.json-json.jar"
-javac -cp "$FONOTE_JSON_JAR" -d /tmp/fonote-checks android/app/src/main/java/fr/fonote/{Track,Diagram}.java android/checks/fr/fonote/{Track,Diagram}Check.java
+javac -cp "$FONOTE_JSON_JAR" -d /tmp/fonote-checks android/app/src/main/java/fr/fonote/{Track,Diagram,Sequence,TacticalHistory}.java android/checks/fr/fonote/{Track,Diagram,Sequence}Check.java
 java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.TrackCheck
 java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.DiagramCheck json
+java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.SequenceCheck
+python3 -m unittest discover -s backend -q
+bash scripts/check-offline-android.sh
 ```
+
+L’instrumentation vérifie les gestes réels, les états du losange, la navigation, l’annulation,
+les annotations et l’atomicité SQLite dans un journal de test séparé.

@@ -54,11 +54,20 @@ final class BoardView extends View {
     /** Under three tenths nothing is legible, whatever the drawing says. */
     private static final int BRIEF = 3;
     private int time, travel = AUTO, actor = -1;
+    /**
+     * L'instant dessiné. Il vaut {@link #time} pendant l'édition ; la lecture le fait avancer
+     * entre deux dixièmes, à chaque image, pour que les joueurs glissent au lieu de sauter.
+     */
+    private double moment;
     int time() { return time; }
-    void setTime(int value) { time = Math.max(0, Math.min(Track.END, value)); invalidate(); }
+    double moment() { return moment; }
+    void setTime(int value) { time = Math.max(0, Math.min(Track.END, value)); moment = time; invalidate(); }
+    void setMoment(double value) {
+        moment = Math.max(0, Math.min(Track.END, value)); time = (int)Math.floor(moment); invalidate();
+    }
     int travel() { return travel; }
     void setTravel(int value) { travel = value; }
-    private double[] spot(Diagram.Token token) { return diagram.position(token, time); }
+    private double[] spot(Diagram.Token token) { return diagram.position(token, moment); }
     private void message(String text) { android.widget.Toast.makeText(getContext(), text, android.widget.Toast.LENGTH_SHORT).show(); }
     /**
      * A shirt on this board is a mark, not a mannequin. Two and twenty dp is still three times a
@@ -75,6 +84,8 @@ final class BoardView extends View {
     private static final int TAP = 8, STROKE = 14;
     /** A sampled point every few pixels: enough to keep a curve, few enough to write down. */
     private static final int SAMPLE = 6;
+    /** Ce qu'un doigt peut tracer d'un seul geste avant d'être réduit : plusieurs fois le terrain. */
+    private static final int GESTURE = 600;
 
     private final Pitch grass;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -117,6 +128,34 @@ final class BoardView extends View {
     private boolean toggled;
     private IntConsumer onSelect;
     private Runnable onChange;
+    private Runnable onCancel;
+    private java.util.function.Consumer<String> onMotion;
+    private String selectedMotion = "";
+    private boolean translateAll, replacing, redraw;
+    private Track.Key handle;
+    void editing(Runnable cancel, java.util.function.Consumer<String> motion) { onCancel = cancel; onMotion = motion; }
+    /** Les dialogues du terrain prennent les couleurs du thème, comme ceux de l'activité. */
+    private java.util.function.Supplier<android.app.AlertDialog.Builder> dialogs;
+    void dialogs(java.util.function.Supplier<android.app.AlertDialog.Builder> made) { dialogs = made; }
+    void selectMotion(String id) { selectedMotion = id; invalidate(); }
+    String selectedMotion() { return selectedMotion; }
+    void translateAll(boolean value) { translateAll = value; }
+    boolean translatesAll() { return translateAll; }
+    void redrawMotion() { redraw = true; tool = DRAW; }
+    private Sequence sequence() { return new Sequence(diagram); }
+    private void cancelGesture() {
+        forget(); drawing = null; handle = null; redraw = false; banding = false;
+        if (onCancel != null) onCancel.run();
+    }
+    private Sequence.Motion motionAt(float px, float py) {
+        java.util.List<Sequence.Motion> motions = sequence().motions();
+        for (int i = motions.size()-1; i >= 0; i--) {
+            Sequence.Motion motion = motions.get(i);
+            double[] a = sequence().point(motion, false), b = sequence().point(motion, true);
+            if (nearRoute(px, py, a, b, motion.end.path)) return motion;
+        }
+        return null;
+    }
 
     BoardView(Context context, JSONObject match, boolean glass, int held, int heldEnd, int lawn,
               int lawnEnd, boolean editable, boolean compact) {
@@ -159,17 +198,23 @@ final class BoardView extends View {
     int tool() { return tool; }
     String stroke() { return stroke; }
     /** The eraser and the two drags are one setting: only one of them can hold the next finger. */
-    void setTool(int tool) { this.tool = tool; invalidate(); }
+    void setTool(int tool) { this.tool = tool; redraw = false; handle = null; invalidate(); }
     void setStroke(String kind) { this.stroke = kind; this.tool = DRAW; invalidate(); }
     /** The one player being written about, or -1 when nobody or a whole group is held. */
-    int selected() { return chosen.size() == 1 ? chosen.iterator().next() : -1; }
+    int selected() { chosen(); return chosen.size() == 1 ? chosen.iterator().next() : -1; }
     /** Everyone held, in the order they stand on the board. */
     java.util.List<Integer> chosen() {
+        chosen.removeIf(index -> index < 0 || index >= diagram.tokens.size());
         java.util.List<Integer> result = new java.util.ArrayList<>(chosen);
         java.util.Collections.sort(result);
         return result;
     }
+    void selectIndices(java.util.List<Integer> indices) {
+        chosen.clear(); for (int index : indices) if (index >= 0 && index < diagram.tokens.size()) chosen.add(index);
+        invalidate();
+    }
     void select(int index) {
+        selectedMotion = "";
         chosen.clear();
         if (index >= 0) chosen.add(index);
         describe(); invalidate();
@@ -203,11 +248,12 @@ final class BoardView extends View {
             for (Track.Key key : token.track.keys) {
                 if (key.time == 0) { previous = new double[]{key.x, key.y}; continue; }
                 // Course or conduite is not a choice made at the toolbar: the ball decides.
-                Diagram.Shape route = new Diagram.Shape(
-                    diagram.carrying(token, since, key.time) ? Diagram.CARRY : Diagram.RUN);
+                Diagram.Shape route = new Diagram.Shape(Diagram.TACKLE.equals(key.kind) ? Diagram.TACKLE
+                    : diagram.carrying(token, since, key.time) ? Diagram.CARRY : Diagram.RUN);
                 route.points.add(previous);
                 for (int j = 1; j < key.path.size()-1; j++) route.points.add(key.path.get(j));
                 route.points.add(new double[]{key.x, key.y});
+                route.baked = key.baked;
                 paintShape(canvas, route);
                 previous = new double[]{key.x, key.y}; since = key.time;
             }
@@ -219,30 +265,54 @@ final class BoardView extends View {
             route.points.add(diagram.ballKey(a, a.time));
             for (int j = 1; j < b.path.size()-1; j++) route.points.add(b.path.get(j));
             route.points.add(diagram.ballKey(b, b.time));
+            route.baked = b.baked;
             paintShape(canvas, route);
         }
         if (drawing != null) paintShape(canvas, drawing);
+        Sequence.Motion selected = sequence().motion(selectedMotion);
+        if (selected != null && !compact) {
+            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(3));
+            paint.setPathEffect(null); paint.setColor(0xffff9800);
+            for (boolean end : new boolean[]{false, true}) {
+                double[] p = sequence().point(selected, end);
+                canvas.drawCircle(x(p[0]), y(p[1]), dp(12), paint);
+            }
+            paint.setStyle(Paint.Style.FILL);
+        }
         for (int i = 0; i < diagram.tokens.size(); i++) paintToken(canvas, diagram.tokens.get(i), i);
         // Names last and all together, so no shirt is ever painted over one — the rule the pitch
         // itself follows, kept here because a schema is read the same way.
         if (!compact) for (Diagram.Token token : diagram.tokens) paintName(canvas, token);
-        double[] ball = diagram.ballPosition(time);
+        double[] ball = diagram.ballPosition(moment);
         if (ball != null) {
             // At the feet of whoever holds it, on the side he is about to play it: a ball set
             // always to the right says nothing, and says it even where the play goes left. Never
             // below him, though — that is where his name is written, and a name half covered by
             // a ball is worse than a ball on the wrong side. A ball nobody holds sits where it is.
-            float reach = diagram.ballHeld(time) ? dp(compact ? 9 : 14) : 0;
-            float dx = 0, dy = -1;
-            double[] next = reach == 0 ? null : diagram.ballNext(time);
-            if (next != null) {
-                dx = x(next[0]) - x(ball[0]);
-                dy = Math.min(0, y(next[1]) - y(ball[1]));
-                if (dx == 0 && dy == 0) dy = -1;
+            float reach = dp(compact ? 9 : 14), ox = 0, oy = 0;
+            if (diagram.ballHeld(moment)) {
+                float[] side = feet(moment); ox = side[0] * reach; oy = side[1] * reach;
+            } else {
+                // En vol, le ballon quitte les pieds du passeur et rejoint ceux du receveur
+                // progressivement : le décalage s'efface au départ et revient à l'arrivée, au
+                // lieu de sauter d'un coup de quatorze dp.
+                Track.Key[] leg = diagram.ballLeg(moment);
+                if (leg != null) {
+                    double fade = Math.min(3, (leg[1].time - leg[0].time) / 3.0);
+                    double leaving = 1 - (moment - leg[0].time) / fade;
+                    double landing = 1 - (leg[1].time - moment) / fade;
+                    if (!leg[0].owner.isEmpty() && leaving > 0) {
+                        float[] side = feet(leg[0].time); float w = (float)(reach * leaving);
+                        ox += side[0] * w; oy += side[1] * w;
+                    }
+                    if (!leg[1].owner.isEmpty() && landing > 0) {
+                        float[] side = feet(leg[1].time); float w = (float)(reach * landing);
+                        ox += side[0] * w; oy += side[1] * w;
+                    }
+                }
             }
-            float away = (float)Math.hypot(dx, dy);
-            float bx = Math.max(dp(6), Math.min(getWidth()-dp(6), x(ball[0]) + dx / away * reach));
-            float by = Math.max(dp(6), Math.min(getHeight()-dp(6), y(ball[1]) + dy / away * reach));
+            float bx = Math.max(dp(6), Math.min(getWidth()-dp(6), x(ball[0]) + ox));
+            float by = Math.max(dp(6), Math.min(getHeight()-dp(6), y(ball[1]) + oy));
             paint.setStyle(Paint.Style.FILL); paint.setPathEffect(null);
             paint.setColor(Color.BLACK); canvas.drawCircle(bx, by, dp(6), paint);
             paint.setColor(Color.WHITE); canvas.drawCircle(bx, by, dp(4.6f), paint);
@@ -281,11 +351,11 @@ final class BoardView extends View {
         java.util.List<double[]> points = shape.points;
         // Kept clear of the players it joins: an arrowhead hidden under the disc it points at
         // turns a pass into a line, and the ball would leave from under the passer.
-        Path line = trim(smooth(points),
+        Path line = trim(smooth(points, shape.baked),
             clearance(points.get(0)), clearance(points.get(points.size() - 1)));
         measure.setPath(line, false);
         measure.getPosTan(0, position, tangent);
-                boolean run = Diagram.RUN.equals(shape.kind);
+        boolean tackle = Diagram.TACKLE.equals(shape.kind), run = tackle || Diagram.RUN.equals(shape.kind);
         Path[] rails = Diagram.SHOT.equals(shape.kind)
             // Two rails rather than one thick line: a shot must not read as a firmer pass.
             ? new Path[]{offset(line, -dp(2.2f)), offset(line, dp(2.2f))}
@@ -303,8 +373,22 @@ final class BoardView extends View {
             for (Path rail : rails) canvas.drawPath(rail, paint);
         }
         paint.setPathEffect(null);
-        head(canvas, line, width);
+        if (tackle) cross(canvas, line, width); else head(canvas, line, width);
+    }
 
+    /** Le bout d'un tacle : une croix au contact, là où une course finirait sur une flèche. */
+    private void cross(Canvas canvas, Path line, float width) {
+        measure.setPath(line, false);
+        float length = measure.getLength();
+        if (length <= 0 || !measure.getPosTan(length, position, tangent)) return;
+        float size = dp(compact ? 4 : 6);
+        path.reset();
+        path.moveTo(position[0] - size, position[1] - size); path.lineTo(position[0] + size, position[1] + size);
+        path.moveTo(position[0] + size, position[1] - size); path.lineTo(position[0] - size, position[1] + size);
+        paint.setStyle(Paint.Style.STROKE); paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeWidth(width + dp(3.4f)); paint.setColor(HALO); canvas.drawPath(path, paint);
+        paint.setStrokeWidth(width + dp(1)); paint.setColor(STROKE_COLOUR); canvas.drawPath(path, paint);
+        paint.setStyle(Paint.Style.FILL);
     }
 
     /** How far a stroke stands off a player it was snapped to, or nothing when it stands alone. */
@@ -356,22 +440,10 @@ final class BoardView extends View {
      * drag stays straight, a curved one keeps its curve, and neither shows the corners of the
      * sampling.
      */
-    private Path smooth(java.util.List<double[]> source) {
-        java.util.List<double[]> points = Track.eased(source);
-        Path line = new Path();
-        float px = x(points.get(0)[0]), py = y(points.get(0)[1]);
-        line.moveTo(px, py);
-        if (points.size() == 2) {
-            line.lineTo(x(points.get(1)[0]), y(points.get(1)[1]));
-            return line;
-        }
-        for (int i = 1; i < points.size() - 1; i++) {
-            float cx = x(points.get(i)[0]), cy = y(points.get(i)[1]);
-            float nx = x(points.get(i+1)[0]), ny = y(points.get(i+1)[1]);
-            line.quadTo(cx, cy, (cx + nx) / 2, (cy + ny) / 2);
-        }
-        int last = points.size() - 1;
-        line.lineTo(x(points.get(last)[0]), y(points.get(last)[1]));
+    private Path smooth(java.util.List<double[]> source, boolean baked) {
+        java.util.List<double[]> points = baked ? source : Track.eased(source);
+        Path line = new Path(); line.moveTo(x(points.get(0)[0]), y(points.get(0)[1]));
+        for (int i = 1; i < points.size(); i++) line.lineTo(x(points.get(i)[0]), y(points.get(i)[1]));
         return line;
     }
 
@@ -404,13 +476,27 @@ final class BoardView extends View {
         return result;
     }
 
+    /** Le côté des pieds où le ballon se pose à cet instant : vers où il sera joué, jamais dessous. */
+    private float[] feet(double at) {
+        double[] here = diagram.ballPosition(at), next = diagram.ballNext(at);
+        float dx = 0, dy = -1;
+        if (next != null) {
+            dx = x(next[0]) - x(here[0]);
+            dy = Math.min(0, y(next[1]) - y(here[1]));
+            if (dx == 0 && dy == 0) dy = -1;
+        }
+        float away = (float)Math.hypot(dx, dy);
+        return new float[]{dx / away, dy / away};
+    }
+
     private void paintToken(Canvas canvas, Diagram.Token token, int index) {
         int radius = Math.round(dp(compact ? SHIRT * .68f : SHIRT) / 2);
-        int cx = Math.round(x(spot(token)[0])), cy = Math.round(y(spot(token)[1]));
+        // Au sous-pixel : arrondi à l'entier, un joueur lent avance par saccades pendant la lecture.
+        float cx = x(spot(token)[0]), cy = y(spot(token)[1]);
         boolean active = chosen.contains(index);
         Drawable shirt = PitchView.shirt(getContext(), glass, colour(token), active, false, held, heldEnd);
-        shirt.setBounds(cx - radius, cy - radius, cx + radius, cy + radius);
-        shirt.draw(canvas);
+        shirt.setBounds(-radius, -radius, radius, radius);
+        canvas.save(); canvas.translate(cx, cy); shirt.draw(canvas); canvas.restore();
         String number = number(token);
         if (number.isEmpty()) return;
         ink.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
@@ -472,6 +558,7 @@ final class BoardView extends View {
     @Override public boolean onTouchEvent(MotionEvent event) {
         if (!editable || getWidth() == 0) return false;
         float px = event.getX(), py = event.getY();
+        if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) { cancelGesture(); return true; }
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
@@ -480,21 +567,42 @@ final class BoardView extends View {
                 if (tool == BALL) {
                     int near = tokenAt(px, py, GRAB);
                     double[] p = anchor(px, py);
-                    Track.Key key = new Track.Key(time, p[0], p[1]);
+                    Track.Key key;
+                    try { key = sequence().fixBall(time); }
+                    catch (IllegalArgumentException failure) { message(failure.getMessage()); cancelGesture(); return true; }
+                    key.x = p[0]; key.y = p[1]; key.owner = "";
                     if (near >= 0) key.owner = diagram.tokens.get(near).id;
                     Track.Key old = diagram.ball.at(time);
-                    if (old != null) { key.path.addAll(old.path); key.kind = old.kind; }
+                    if (old != null && old != key) { key.path.addAll(old.path); key.baked = old.baked; key.kind = old.kind; }
                     if (!diagram.ball.put(key)) message("Limite de positions du ballon atteinte");
                     if (onChange != null) onChange.run();
                     invalidate(); return true;
                 }
                 if (tool == MOVE) {
+                    handle = null;
+                    Sequence.Motion selected = sequence().motion(selectedMotion);
+                    if (selected != null) {
+                        for (boolean end : new boolean[]{false, true}) {
+                            double[] p = sequence().point(selected, end);
+                            if (Math.hypot(x(p[0])-px, y(p[1])-py) <= dp(20)) {
+                                handle = end ? selected.end : selected.start; return true;
+                            }
+                        }
+                    }
                     holding = tokenAt(px, py, GRAB);
                     toggled = false;
                     // The group is left alone until the finger says what it wants: replacing it
                     // here would make a long press meant to drop one player drop all the others.
                     if (holding >= 0) await(holding); else { banding = true; invalidate(); }
                     return true;
+                }
+                if (redraw) {
+                    Sequence.Motion selected = sequence().motion(selectedMotion);
+                    if (selected != null) {
+                        drawing = new Diagram.Shape(selected.actor.equals("ball") ? selected.end.kind : Diagram.RUN);
+                        drawing.points.add(sequence().point(selected, false)); return true;
+                    }
+                    redraw = false;
                 }
                 begin(px, py);
                 return true;
@@ -506,17 +614,36 @@ final class BoardView extends View {
                     lastX = px; lastY = py;
                 }
                 if (tool == MOVE) {
+                    if (handle != null) {
+                        if (wandered) {
+                            double[] p = point(px, py); handle.x = p[0]; handle.y = p[1];
+                            Sequence.Motion selected = sequence().motion(selectedMotion);
+                            if (selected != null) {
+                                if (selected.track == diagram.ball) handle.owner = "";
+                                if (!selected.track.keys.contains(handle) && !selected.track.put(handle)) {
+                                    message("Limite de positions atteinte"); cancelGesture(); return true;
+                                }
+                                if (handle.time == 0 && !selected.actor.equals("ball")) {
+                                    Diagram.Token token = sequence().token(selected.actor); token.x = handle.x; token.y = handle.y;
+                                }
+                            }
+                            invalidate();
+                        }
+                        return true;
+                    }
                     if (banding) { lastX = px; lastY = py; invalidate(); return true; }
                     if (!wandered || holding < 0 || toggled) return true;
                     // Dragging somebody from outside the group means the group was not the point.
                     if (!chosen.contains(holding)) select(holding);
-                    shift(px - lastX, py - lastY);
+                    try { shift(px - lastX, py - lastY); }
+                    catch (IllegalArgumentException failure) { message(failure.getMessage()); cancelGesture(); holding = -1; return true; }
                     lastX = px; lastY = py;
                     invalidate();
                 } else if (drawing != null && Math.hypot(px - lastX, py - lastY) >= dp(SAMPLE)) {
                     lastX = px; lastY = py;
-                    if (drawing.points.size() < Diagram.POINTS)
-                        drawing.points.add(new double[]{px / getWidth(), py / getHeight()});
+                    // Tout le geste, pas seulement ses trente-deux premiers échantillons : il est
+                    // ramené à la limite du journal au lâcher, sans rien couper de sa fin.
+                    if (drawing.points.size() < GESTURE) drawing.points.add(point(px, py));
                     invalidate();
                 }
                 return true;
@@ -525,10 +652,22 @@ final class BoardView extends View {
                 if (event.getActionMasked() == MotionEvent.ACTION_CANCEL && drawing != null) { drawing = null; invalidate(); return true; }
                 if (tool == MOVE) {
                     forget();
+                    if (handle != null) {
+                        handle = null;
+                        if (wandered && onChange != null) onChange.run();
+                        return true;
+                    }
                     if (banding) {
                         banding = false;
                         // A rectangle nobody drew is a tap on bare grass: it lets everyone go.
-                        if (wandered) gather(px, py); else chosen.clear();
+                        if (wandered) gather(px, py);
+                        else {
+                            Sequence.Motion motion = motionAt(px, py);
+                            if (motion != null) {
+                                selectedMotion = motion.id();
+                                if (onMotion != null) onMotion.accept(selectedMotion);
+                            } else { chosen.clear(); selectedMotion = ""; }
+                        }
                         describe(); performClick();
                     } else if (toggled) {
                         // The long press already said what this touch meant.
@@ -536,11 +675,21 @@ final class BoardView extends View {
                         // A tap took hold of nobody and moved nobody: one player, or none at all.
                         select(holding); performClick();
                     } else if (holding >= 0 && onChange != null) {
-                        onChange.run();
+                        translateAll = false; onChange.run();
                     }
                     holding = -1; invalidate();
                 } else {
-                    finish(px, py);
+                    if (redraw && drawing != null) {
+                        Sequence.Motion selected = sequence().motion(selectedMotion);
+                        if (selected != null) {
+                            drawing.points.add(sequence().point(selected, true));
+                            selected.end.path.clear();
+                            selected.end.path.addAll(Track.thinned(drawing.points, Diagram.POINTS));
+                            selected.end.baked = false;
+                        }
+                        drawing = null; redraw = false; tool = MOVE;
+                        if (onChange != null) onChange.run();
+                    } else finishSafely(px, py);
                 }
                 return true;
         }
@@ -584,51 +733,98 @@ final class BoardView extends View {
         if (actor < 0 && Diagram.RUN.equals(stroke)) {
             message("Commencez le déplacement sur un joueur"); return;
         }
+        if (actor < 0 && Diagram.TACKLE.equals(stroke)) {
+            message("Commencez le tacle sur le joueur qui tacle"); return;
+        }
         drawing = new Diagram.Shape(stroke);
         drawing.points.add(anchor(px, py));
     }
 
+    private void finishSafely(float px, float py) {
+        try { finish(px, py); }
+        catch (IllegalArgumentException failure) { message(failure.getMessage()); cancelGesture(); }
+    }
     private void finish(float px, float py) {
         Diagram.Shape shape = drawing;
         drawing = null;
         if (shape == null) return;
+        // Le tracé tel que le doigt l'a laissé : une validation le reprend d'ici, sans l'arrivée
+        // déjà ajoutée pour l'aperçu.
+        java.util.List<double[]> drawn = new java.util.ArrayList<>(shape.points);
         int receiver = tokenAt(px, py, SNAP);
-        boolean moving = Diagram.RUN.equals(shape.kind);
+        boolean tackle = Diagram.TACKLE.equals(shape.kind);
+        boolean moving = tackle || Diagram.RUN.equals(shape.kind);
+        if (tackle && (receiver < 0 || receiver == actor)) {
+            message("Terminez le tacle sur le joueur visé"); invalidate(); return;
+        }
         // A run ends where the finger let go, and nowhere else. Only the ball is aimed at
         // somebody: « vers Yassine » is a pass to Yassine, and it must leave from his feet at the
         // instant he receives it. A player running past a team-mate did not run into him, and
         // dropping him on the very spot puts two shirts on one blade of grass.
-        double[] end = moving ? point(px, py) : anchor(px, py);
+        double[] end = moving || Diagram.SHOT.equals(shape.kind) ? point(px, py) : anchor(px, py);
         double[] start = shape.points.get(0);
         if (Math.hypot((end[0] - start[0]) * getWidth(), (end[1] - start[1]) * getHeight()) < dp(STROKE)) {
             invalidate(); return;
         }
         // The finger's last sample is not where it let go: the end is written from the release.
-        if (shape.points.size() >= Diagram.POINTS) shape.points.remove(shape.points.size() - 1);
         shape.points.add(end);
         // How long the trip lasts: what the toolbar was told, or what the stroke itself says.
         // Read before the end is snapped to a shirt, the snap being worth a dozen dp and the
         // arrival's whereabouts depending on the duration we are working out.
         int travel = this.travel == AUTO ? pace(shape) : this.travel;
+        java.util.List<double[]> kept = Track.thinned(shape.points, Diagram.POINTS);
+        shape.points.clear(); shape.points.addAll(kept);
         if (time + travel > Track.END) {
             message("La séquence est limitée à 120 secondes"); invalidate(); return;
         }
-        if (receiver >= 0 && (Diagram.PASS.equals(shape.kind) || Diagram.SHOT.equals(shape.kind))) {
+        if (receiver >= 0 && Diagram.PASS.equals(shape.kind)) {
             end = diagram.position(diagram.tokens.get(receiver), time + travel);
             shape.points.set(shape.points.size() - 1, end);
         }
-        Track track = moving ? diagram.tokens.get(actor).track : diagram.ball;
-        if (!room(track, time, time + travel)) {
-            message("Des positions existent déjà sur cet intervalle, ou la piste est pleine"); invalidate(); return;
+        if (tackle) {
+            // Au contact du joueur visé là où il sera, pas sur lui : deux maillots se touchent,
+            // ils ne se superposent pas.
+            double[] target = diagram.position(diagram.tokens.get(receiver), time + travel);
+            double gx = (start[0] - target[0]) * getWidth(), gy = (start[1] - target[1]) * getHeight();
+            double gap = Math.hypot(gx, gy), reach = Math.min(dp(SHIRT) * .8, gap / 2);
+            end = gap == 0 ? target : new double[]{target[0] + gx / gap * reach / getWidth(),
+                                                    target[1] + gy / gap * reach / getHeight()};
+            shape.points.set(shape.points.size() - 1, end);
         }
+        Track track = moving ? diagram.tokens.get(actor).track : diagram.ball;
+        boolean overlaps = false;
+        for (Sequence.Motion motion : sequence().motions())
+            if (motion.track == track && motion.start.time < time+travel && motion.end.time > time) overlaps = true;
+        if ((!room(track, time, time+travel) || overlaps) && !replacing) {
+            drawing = shape; invalidate();
+            (dialogs != null ? dialogs.get() : new android.app.AlertDialog.Builder(getContext())).setTitle("Remplacer ce mouvement ?")
+                .setMessage("Le tracé affiché remplacera la portion de " + (time/10.0) + " à " + ((time+travel)/10.0) + " s.")
+                .setNegativeButton("Annuler", (d, w) -> { drawing = null; invalidate(); })
+                .setOnCancelListener(d -> { drawing = null; invalidate(); })
+                .setPositiveButton("Remplacer", (d, w) -> {
+                    shape.points.clear(); shape.points.addAll(drawn);
+                    replacing = true; finishSafely(px, py); replacing = false;
+                }).show();
+            return;
+        }
+        if (moving) { sequence().fix(diagram.tokens.get(actor), time); sequence().fix(diagram.tokens.get(actor), time+travel); }
+        else { sequence().fixBall(time); sequence().fixBall(time+travel); }
+        for (Track.Key key : new java.util.ArrayList<>(track.keys))
+            if (key.time > time && key.time < time+travel) sequence().remove(track, key);
         Track.Key from = new Track.Key(time, start[0], start[1]);
         Track.Key to = new Track.Key(time + travel, end[0], end[1]);
         to.path.addAll(shape.points);
         Track.Key existing = track.at(time);
-        if (existing != null) { from.path.addAll(existing.path); from.kind = existing.kind; }
+        if (existing != null) { from.path.addAll(existing.path); from.baked = existing.baked; from.kind = existing.kind; }
         if (moving) {
             // Nothing is said about the ball: whoever held it holds it still, and follows.
+            if (tackle) to.kind = Diagram.TACKLE;
             track.put(from); track.put(to);
+            // Un tacle sur le porteur lui prend le ballon : il suit le tacleur dès le contact.
+            if (tackle && diagram.tokens.get(receiver).id.equals(diagram.holder(time + travel))) {
+                Track.Key won = sequence().fixBall(time + travel);
+                won.owner = diagram.tokens.get(actor).id; won.flight = false; won.x = end[0]; won.y = end[1];
+            }
         } else {
             to.kind = shape.kind;
             if (actor >= 0) from.owner = diagram.tokens.get(actor).id;
@@ -636,8 +832,13 @@ final class BoardView extends View {
             if (receiver >= 0 && Diagram.PASS.equals(shape.kind)) to.owner = diagram.tokens.get(receiver).id;
             track.put(from); track.put(to);
         }
+        selectedMotion = to.id;
+        // Le curseur passe à l'arrivée : la suite de l'action part de là. Un appel simultané
+        // se trace en revenant au départ, par ‹ ou par Trajet… → Aller au départ.
         setTime(time + travel);
+        if (onMotion != null) onMotion.accept(selectedMotion);
         if (actor >= 0) select(actor);
+        selectedMotion = to.id;
         performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
         describe(); invalidate();
         if (onChange != null) onChange.run();
@@ -663,8 +864,9 @@ final class BoardView extends View {
             double along = (points.get(i)[1] - points.get(i-1)[1]) * LENGTH;
             metres += Math.hypot(across, along);
         }
+        // Un tacle est une course : le joueur y va à son allure, pas à celle d'un ballon.
         double speed = Diagram.SHOT.equals(shape.kind) ? STRUCK
-            : Diagram.RUN.equals(shape.kind) ? RUNNING : PASSED;
+            : Diagram.RUN.equals(shape.kind) || Diagram.TACKLE.equals(shape.kind) ? RUNNING : PASSED;
         return (int)Math.max(BRIEF, Math.min(Track.END, Math.round(metres / speed * 10)));
     }
 
@@ -701,7 +903,7 @@ final class BoardView extends View {
         for (int i = diagram.ball.keys.size()-1; i > 0; i--) {
             Track.Key a = diagram.ball.keys.get(i-1), b = diagram.ball.keys.get(i);
             if (a.flight && nearRoute(px, py, diagram.ballKey(a, a.time), diagram.ballKey(b, b.time), b.path)) {
-                a.flight = false; diagram.ball.keys.remove(i); return true;
+                a.flight = false; sequence().remove(diagram.ball, b); return true;
             }
         }
         for (Diagram.Token token : diagram.tokens) {
@@ -711,7 +913,7 @@ final class BoardView extends View {
                 double[] a = i == 0 ? new double[]{token.x, token.y}
                     : new double[]{token.track.keys.get(i-1).x, token.track.keys.get(i-1).y};
                 if (nearRoute(px, py, a, new double[]{b.x, b.y}, b.path)) {
-                    token.track.keys.remove(i); return true;
+                    sequence().remove(token.track, b); return true;
                 }
             }
         }
@@ -737,11 +939,16 @@ final class BoardView extends View {
         double mx = dx / getWidth(), my = dy / getHeight();
         for (int index : moving) {
             Diagram.Token token = diagram.tokens.get(index);
-            double[] bounds = token.bounds();
+            double[] p = spot(token);
+            double[] bounds = translateAll ? token.bounds() : new double[]{p[0], p[1], p[0], p[1]};
             mx = Math.max(-bounds[0], Math.min(1 - bounds[2], mx));
             my = Math.max(-bounds[1], Math.min(1 - bounds[3], my));
         }
-        for (int index : moving) diagram.tokens.get(index).reposition(mx, my);
+        for (int index : moving) {
+            Diagram.Token token = diagram.tokens.get(index);
+            if (translateAll) token.reposition(mx, my);
+            else { double[] p = spot(token); sequence().place(token, time, p[0]+mx, p[1]+my); }
+        }
     }
 
     /** Everyone the rectangle closed on, by the spot he stands on rather than by his shirt. */

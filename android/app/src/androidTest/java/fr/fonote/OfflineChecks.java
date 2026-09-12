@@ -69,7 +69,8 @@ public final class OfflineChecks extends Instrumentation {
             checkPull();
             checkNestedGestures();
             checkRefreshAnimations();
-            result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, next club fixtures, pull gestures.\n");
+            checkTacticalEditor();
+            result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, next club fixtures, pull gestures, tactical keyframes, timeline, undo/redo, atomic notes.\n");
             sendStatus(0, progress);
             finish(Activity.RESULT_OK, result);
         } catch (Throwable failure) {
@@ -124,6 +125,214 @@ public final class OfflineChecks extends Instrumentation {
         waitForIdleSync();
         if (failure.get() != null) throw new AssertionError("Search navigation regression", failure.get());
     }
+    /** Les gestes passent par le vrai terrain et les commandes de l'activité, avec un journal isolé. */
+    private void checkTacticalEditor() throws Exception {
+        Activity activity = startActivitySync(new android.content.Intent(getTargetContext(), MainActivity.class)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        waitForIdleSync();
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        Store isolated = new Store(getTargetContext(), "tactical-checks.sqlite3");
+        Store original = (Store)held(activity, "store");
+        runOnMainSync(() -> {
+            try {
+                setHeld(activity, "store", isolated); setHeld(activity, "noteId", "");
+                setHeld(activity, "diagram", new Diagram());
+                invokeTactic(activity, "openTactic");
+                Diagram diagram = (Diagram)held(activity, "diagram");
+                diagram.tokens.add(new Diagram.Token("", "home", "A", .2,.3));
+                invokeTactic(activity, "boardChanged");
+            } catch (Throwable error) { failure.set(error); }
+        });
+        waitForIdleSync();
+        runOnMainSync(() -> {
+            try {
+                if (failure.get() != null) return;
+                BoardView board = (BoardView)held(activity, "board");
+                require(board.getWidth()>0 && board.getHeight()>0, "Terrain sans place à l'écran");
+                board.select(0); board.setTime(12); invokeTactic(activity, "renderTactic");
+                dragBoard(board, .2f,.3f, .6f,.3f, false);
+                Diagram diagram = (Diagram)held(activity, "diagram"); Diagram.Token token = diagram.tokens.get(0);
+                require(token.track.at(0) != null && token.track.at(12) != null, "Glisser n'a pas créé les clés");
+                require(Math.abs(token.track.at(0).x-.2)<.001, "Glisser a déplacé la clé précédente");
+                require(token.track.at(12).x>.5, "Le joueur n'a pas bougé");
+                board.setTime(6); invokeTactic(activity, "renderTactic");
+                android.widget.Button diamond = (android.widget.Button)held(activity, "keyToggle");
+                require(diamond.getText().toString().equals("◇"), "Losange actif hors clé");
+                double before = diagram.position(token,6)[0]; diamond.performClick();
+                require(token.track.at(6) != null && Math.abs(token.track.at(6).x-before)<.001, "Ajout neutre incorrect");
+                require(((android.widget.Button)held(activity,"keyToggle")).getText().toString().equals("◆"), "Losange inactif sur clé");
+                ((android.widget.Button)held(activity,"keyPrevious")).performClick(); require(board.time()==0, "Clé précédente incorrecte");
+                ((android.widget.Button)held(activity,"keyNext")).performClick(); require(board.time()==6, "Clé suivante incorrecte");
+                ((android.widget.Button)held(activity,"keyToggle")).performClick(); require(token.track.at(6)==null, "Suppression impossible");
+                invokeTactic(activity,"undoTactic");
+                diagram = (Diagram)held(activity,"diagram"); require(diagram.tokens.get(0).track.at(6)!=null,"Annulation incorrecte");
+                invokeTactic(activity,"redoTactic");
+                diagram = (Diagram)held(activity,"diagram"); token = diagram.tokens.get(0);
+                require(token.track.at(6)==null,"Rétablissement incorrect");
+                String saved = diagram.toJson().toString();
+                double[] p = diagram.position(token,6);
+                dragBoard(board,(float)p[0],(float)p[1],.8f,.5f,true);
+                require(saved.equals(((Diagram)held(activity,"diagram")).toJson().toString()), "Geste annulé enregistré");
+                setHeld(activity,"expandedTimeline",true); invokeTactic(activity,"renderTactic");
+                require(isolated.operations(true).length()>0,"Séquence non sauvegardée hors connexion");
+                // Les annotations disparaissent avec le joueur et reviennent à l'annulation.
+                diagram = (Diagram)held(activity,"diagram"); token = diagram.tokens.get(0); token.playerId = "test-player";
+                @SuppressWarnings("unchecked") java.util.Map<String,String> entries = (java.util.Map<String,String>)held(activity,"entries");
+                entries.put(token.playerId,"test-action"); invokeTactic(activity,"boardChanged");
+                diagram.removeToken(0); invokeTactic(activity,"boardChanged"); require(entries.isEmpty(),"Annotation orpheline");
+                invokeTactic(activity,"undoTactic"); require(entries.containsKey("test-player"),"Annotation perdue à l'annulation");
+                org.json.JSONArray pending = isolated.operations(true);
+                int size = pending.length();
+                try {
+                    isolated.addBatch(new org.json.JSONArray().put(new JSONObject().put("id","atomic-new"))
+                        .put(pending.getJSONObject(0)));
+                    throw new AssertionError("Lot en conflit accepté");
+                } catch (android.database.sqlite.SQLiteConstraintException expected) { }
+                require(isolated.operations(true).length()==size,"Lot partiellement sauvegardé");
+            } catch (Throwable error) { failure.set(error); }
+        });
+        waitForIdleSync();
+        runOnMainSync(() -> {
+            try {
+                if (failure.get() != null) return;
+                Diagram diagram = (Diagram)held(activity,"diagram");
+                Sequence.Motion motion = new Sequence(diagram).motions().get(0);
+                String id = motion.id(); int start = motion.start.time, end = motion.end.time;
+                SequenceTimeline timeline = findTimeline((android.view.View)held(activity,"tacticPanel"));
+                require(timeline != null && timeline.getWidth()>0,"Chronologie invisible");
+                float density = getTargetContext().getResources().getDisplayMetrics().density;
+                int extent = Math.min(Track.END, Math.max(50,diagram.duration()+20));
+                float width = timeline.getWidth()-95*density;
+                float x = 85*density + width*start/extent + 6*density;
+                float target = x+width*5/extent;
+                gesture(timeline,x,48*density,target,48*density);
+                diagram = (Diagram)held(activity,"diagram"); motion = new Sequence(diagram).motion(id);
+                require(motion.start.time==start+5 && motion.end.time==end+5,"Le bloc n'a pas déplacé le mouvement entier");
+                invokeTactic(activity,"undoTactic");
+                BoardView board = (BoardView)held(activity,"board"); board.select(0); board.setTime(12);
+                invokeTactic(activity,"renderTactic");
+            } catch (Throwable error) { failure.set(error); }
+        });
+        waitForIdleSync();
+        // Un tacle tracé du doigt sur le porteur : le tacleur s'arrête à son contact et repart avec le ballon.
+        runOnMainSync(() -> {
+            try {
+                if (failure.get() != null) return;
+                Diagram diagram = (Diagram)held(activity,"diagram");
+                diagram.tokens.add(new Diagram.Token("", "home", "T", .2, .7));
+                diagram.tokens.add(new Diagram.Token("", "away", "V", .7, .7));
+                new Sequence(diagram).fixBall(0).owner = diagram.tokens.get(diagram.tokens.size()-1).id;
+                invokeTactic(activity, "boardChanged");
+                BoardView board = (BoardView)held(activity,"board");
+                board.setTime(0); board.setStroke(Diagram.TACKLE);
+                dragBoard(board, .2f,.7f, .7f,.7f, false);
+                diagram = (Diagram)held(activity,"diagram");
+                Diagram.Token tackler = diagram.tokens.get(diagram.tokens.size()-2);
+                Track.Key hit = tackler.track.keys.get(tackler.track.keys.size()-1);
+                require(Diagram.TACKLE.equals(hit.kind), "Tacle non enregistré");
+                require(tackler.id.equals(diagram.holder(hit.time)), "Le tacleur n'a pas récupéré le ballon");
+                require(hit.x < .69, "Le tacleur recouvre le joueur visé");
+                require(hit.time >= 40, "Le tacle va à l'allure d'un ballon");
+                require(board.time() == hit.time, "Le curseur n'est pas passé à l'arrivée du tracé");
+                // Un long tracé garde sa fin : avant, il était coupé au bout de 32 échantillons.
+                board.setStroke(Diagram.RUN);
+                float sx = (float)hit.x;
+                trace(board, new float[][]{{sx, .7f}, {sx, .9f}, {.1f, .9f}, {.1f, .5f}});
+                diagram = (Diagram)held(activity,"diagram");
+                tackler = diagram.tokens.get(diagram.tokens.size()-2);
+                java.util.List<double[]> drawn = tackler.track.keys.get(tackler.track.keys.size()-1).path;
+                require(drawn.size() <= Diagram.POINTS, "Tracé trop long pour le journal");
+                boolean corner = false;
+                for (double[] point : drawn) corner |= point[0] < .15 && point[1] > .85;
+                require(corner, "Le long tracé a perdu son coin");
+                require(drawn.get(drawn.size()-2)[1] < .6, "La fin du long tracé est tirée droite");
+                board.setTool(BoardView.MOVE); invokeTactic(activity, "renderTactic");
+                android.view.ViewGroup row = (android.view.ViewGroup)((android.view.ViewGroup)held(activity,"tacticPanel")).getChildAt(0);
+                row.getChildAt(0).performClick();
+            } catch (Throwable error) { failure.set(error); }
+        });
+        Thread.sleep(400);
+        runOnMainSync(() -> {
+            try {
+                if (failure.get() != null) return;
+                BoardView board = (BoardView)held(activity,"board");
+                android.view.ViewGroup row = (android.view.ViewGroup)((android.view.ViewGroup)held(activity,"tacticPanel")).getChildAt(0);
+                android.widget.SeekBar seek = (android.widget.SeekBar)row.getChildAt(2);
+                require(board.moment() > 1, "La lecture n'avance pas");
+                require(seek.getProgress() == board.time(), "Le curseur ne suit pas la lecture");
+                row.getChildAt(0).performClick();
+                require("▶".contentEquals(((android.widget.Button)row.getChildAt(0)).getText()), "La lecture ne s'est pas mise en pause");
+                require(board.moment() == board.time(), "La pause reste entre deux dixièmes");
+            } catch (Throwable error) { failure.set(error); }
+        });
+        waitForIdleSync();
+        if (failure.get() == null) {
+            android.graphics.Bitmap screenshot = getUiAutomation().takeScreenshot();
+            if (screenshot != null) try (java.io.FileOutputStream output = new java.io.FileOutputStream(
+                    new java.io.File(getTargetContext().getCacheDir(),"tactical-check.png"))) {
+                screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output); screenshot.recycle();
+            }
+        }
+        runOnMainSync(() -> {
+            try { setHeld(activity,"store",original); activity.finish(); }
+            catch (Exception error) { failure.set(error); }
+        });
+        isolated.close(); getTargetContext().deleteDatabase("tactical-checks.sqlite3");
+        if (failure.get()!=null) throw new AssertionError("Éditeur tactique",failure.get());
+    }
+    private static SequenceTimeline findTimeline(android.view.View view) {
+        if (view instanceof SequenceTimeline) return (SequenceTimeline)view;
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup)view;
+            for (int i=0;i<group.getChildCount();i++) { SequenceTimeline found = findTimeline(group.getChildAt(i)); if (found!=null) return found; }
+        }
+        return null;
+    }
+    private static void gesture(android.view.View view,float x,float y,float endX,float endY) {
+        long now = android.os.SystemClock.uptimeMillis();
+        int[] actions = {android.view.MotionEvent.ACTION_DOWN,android.view.MotionEvent.ACTION_MOVE,android.view.MotionEvent.ACTION_UP};
+        for (int i=0;i<actions.length;i++) {
+            android.view.MotionEvent event = android.view.MotionEvent.obtain(now,now+i*40,actions[i],i==0?x:endX,i==0?y:endY,0);
+            view.dispatchTouchEvent(event); event.recycle();
+        }
+    }
+    /** Un geste qui passe par ces points, échantillonné finement comme un vrai doigt. */
+    private static void trace(BoardView board, float[][] corners) {
+        long now = android.os.SystemClock.uptimeMillis();
+        java.util.List<float[]> points = new java.util.ArrayList<>();
+        for (int i = 1; i < corners.length; i++)
+            for (int step = 0; step < 50; step++) {
+                float f = step / 50f;
+                points.add(new float[]{corners[i-1][0] + (corners[i][0]-corners[i-1][0])*f,
+                                       corners[i-1][1] + (corners[i][1]-corners[i-1][1])*f});
+            }
+        points.add(corners[corners.length-1]);
+        for (int i = 0; i <= points.size(); i++) {
+            float[] p = points.get(Math.min(i, points.size()-1));
+            int action = i == 0 ? android.view.MotionEvent.ACTION_DOWN
+                : i == points.size() ? android.view.MotionEvent.ACTION_UP : android.view.MotionEvent.ACTION_MOVE;
+            android.view.MotionEvent event = android.view.MotionEvent.obtain(now, now+i*8, action,
+                p[0]*board.getWidth(), p[1]*board.getHeight(), 0);
+            board.dispatchTouchEvent(event); event.recycle();
+        }
+    }
+    private static void setHeld(Activity activity, String name, Object value) throws Exception {
+        java.lang.reflect.Field field = MainActivity.class.getDeclaredField(name); field.setAccessible(true); field.set(activity,value);
+    }
+    private static void invokeTactic(Activity activity, String name) throws Exception {
+        java.lang.reflect.Method method = MainActivity.class.getDeclaredMethod(name); method.setAccessible(true); method.invoke(activity);
+    }
+    private static void dragBoard(BoardView board, float x, float y, float endX, float endY, boolean cancel) {
+        long now = android.os.SystemClock.uptimeMillis();
+        int[] actions = {android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_MOVE,
+            android.view.MotionEvent.ACTION_MOVE, cancel ? android.view.MotionEvent.ACTION_CANCEL : android.view.MotionEvent.ACTION_UP};
+        float[] xs = {x, x+(endX-x)*.15f, endX, endX}, ys = {y,y+(endY-y)*.15f,endY,endY};
+        for (int i=0;i<actions.length;i++) {
+            android.view.MotionEvent event = android.view.MotionEvent.obtain(now,now+i*40,actions[i],xs[i]*board.getWidth(),ys[i]*board.getHeight(),0);
+            board.dispatchTouchEvent(event); event.recycle();
+        }
+    }
+
     private static Object held(Activity activity, String name) throws Exception {
         java.lang.reflect.Field field = MainActivity.class.getDeclaredField(name);
         field.setAccessible(true);

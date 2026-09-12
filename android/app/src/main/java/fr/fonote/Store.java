@@ -96,6 +96,13 @@ final class Store extends SQLiteOpenHelper {
         values.put("payload", op.toString());
         getWritableDatabase().insertOrThrow("operations", null, values);
     }
+    synchronized void addBatch(JSONArray operations) throws Exception {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            for (int i = 0; i < operations.length(); i++) add(operations.getJSONObject(i));
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
     synchronized void accept(JSONObject item) throws Exception {
         JSONObject op = item.getJSONObject("operation");
         ContentValues values = new ContentValues();
