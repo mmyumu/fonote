@@ -616,7 +616,16 @@ public data and never the key, and the APK, which holds no secret.
 The server hands out the APK found in `apk/`, next to `compose.yml`, which compose mounts
 read-only on `/apk` (Docker creates the folder, empty, if it is missing). Build the signed
 release, then copy the APK first and its metadata last: the version is read off the metadata,
-so an APK still being copied is not announced yet.
+so an APK still being copied is not announced yet. The script does all of it:
+
+```bash
+bash scripts/publish-apk.sh
+```
+
+It refuses uncommitted changes and an unsigned or debug-signed APK, builds the release, copies
+it to `mmyumu.fr:docker/fonote/apk/` under temporary names renamed in order, deletes the APKs
+the metadata no longer points to, then checks that `https://fonote.mmyumu.fr/v1/health` offers
+the new hash. `FONOTE_VPS`, `FONOTE_VPS_APK_DIR` and `FONOTE_URL` point it elsewhere. By hand:
 
 ```bash
 cd android && ./gradlew :app:assembleRelease
