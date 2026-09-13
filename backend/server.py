@@ -28,9 +28,10 @@ else:
 DEMO = Path(__file__).resolve().parents[1] / 'android/app/src/main/assets/match.json'
 # Each action carries its own polarity; the client derives colour and balance from it,
 # so 'positive' and 'negative' are the catch-all members of each side, not the axis itself.
-ACTIONS = {'positive', 'goal', 'assist', 'pass', 'dribble', 'shot_on', 'defense', 'save',
-           'negative', 'own_goal', 'lost_ball', 'pass_missed', 'dribble_lost', 'shot_off',
-           'duel_lost', 'save_missed', 'yellow', 'red'}
+ACTIONS = {'positive', 'goal', 'assist', 'pass', 'dribble', 'shot_on', 'defense', 'tackle',
+           'interception', 'save', 'keeper_exit', 'negative', 'own_goal', 'lost_ball',
+           'pass_missed', 'dribble_lost', 'shot_off', 'duel_lost', 'save_missed',
+           'keeper_exit_missed', 'yellow', 'red'}
 # What a stroke on a tactical schema can mean. Meaning is carried by the shape of the line the
 # client draws — solid, dashed, waved, doubled — never by a colour, which already names a team.
 # 'carry' is no longer written: a run made by the player holding the ball is drawn waved, read

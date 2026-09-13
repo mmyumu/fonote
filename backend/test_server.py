@@ -191,6 +191,14 @@ class ServerTest(unittest.TestCase):
         self.request(op)
         self.assertEqual(self.request()[0]['operation'], op)
 
+    def test_note_accepts_the_members_of_a_palette_family(self):
+        op = self.note(entries=[dict(player_id=PLAYERS[0], action='tackle'),
+                                dict(player_id=PLAYERS[1], action='interception'),
+                                dict(player_id=PLAYERS[2], action='keeper_exit'),
+                                dict(player_id=PLAYERS[3], action='keeper_exit_missed')])
+        self.request(op)
+        self.assertEqual(self.request()[0]['operation'], op)
+
     def test_football_routes_are_narrowly_mapped(self):
         """Only the contract's own routes reach the feed, and each with only its own arguments."""
         asked = []

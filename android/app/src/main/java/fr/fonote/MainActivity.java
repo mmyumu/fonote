@@ -120,10 +120,20 @@ public class MainActivity extends Activity {
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     /** key → {symbole, nom, nom court, poids}. */
     private final LinkedHashMap<String,String[]> actions = new LinkedHashMap<>();
-    /** The palette pairs each gesture with its failure: top row succeeded, bottom row did not. */
-    private static final String[] SUCCEEDED = {"positive","goal","assist","pass","dribble","shot_on","defense","save"};
-    private static final String[] FAILED = {"negative","own_goal","lost_ball","pass_missed",
-        "dribble_lost","shot_off","duel_lost","save_missed","yellow","red"};
+    /**
+     * The palette pairs each gesture with its failure: top row succeeded, bottom row did not. A
+     * cell may hold a family: its first action is what a tap gives, the others wait under a long
+     * press — the common gesture costs one tap, and the palette stays about one screen wide.
+     */
+    private static final String[][] SUCCEEDED = {{"positive"}, {"goal"}, {"pass", "assist"},
+        {"dribble"}, {"shot_on"}, {"defense", "tackle", "interception"}};
+    private static final String[][] FAILED = {{"negative"}, {"own_goal"}, {"pass_missed"},
+        {"dribble_lost"}, {"shot_off"}, {"duel_lost"}, {"lost_ball"}, {"yellow"}, {"red"}};
+    /**
+     * The goalkeeper's own column, success above failure, in no one else's palette. The catch-all
+     * pair keeps the head of the row whoever the player is; his column comes right after it.
+     */
+    private static final String[][] KEEPING = {{"save", "keeper_exit"}, {"save_missed", "keeper_exit_missed"}};
 
     /** The note being composed: every player involved, each with its own action. */
     private final LinkedHashMap<String,String> entries = new LinkedHashMap<>();
@@ -131,6 +141,14 @@ public class MainActivity extends Activity {
     private String noteId = "";
     /** Player the palette qualifies; "" while the note waits for one. */
     private String focus = "";
+    /** The family a long press opened above its cell; null while none is. */
+    private PopupWindow family;
+    private final List<Button> familyCells = new ArrayList<>();
+    private String[] familyKeys = {};
+    private String familyCurrent = "";
+    /** The member the finger is over, -1 for none; and whether that finger is still the one that opened it. */
+    private int familyAimed = -1;
+    private boolean sliding;
     private String draft = "", draftWritten = "";
     /** True once the open note exists in the log, so later edits must rewrite it. */
     private boolean written;
@@ -276,7 +294,10 @@ public class MainActivity extends Activity {
         action("dribble", "↝", "Dribble réussi", "Dribble", 1);
         action("shot_on", "◎", "Tir cadré", "Tir", 1);
         action("defense", "◇", "Geste défensif", "Défense", 1);
+        action("tackle", "◆", "Tacle", "Tacle", 1);
+        action("interception", "◈", "Interception", "Intercept.", 1);
         action("save", "⛊", "Arrêt", "Arrêt", 2);
+        action("keeper_exit", "⇡", "Sortie", "Sortie", 1);
         action("negative", "−", "Mauvaise action", "Raté", -1);
         action("own_goal", "↩", "CSC", "CSC", -4);
         action("lost_ball", "×", "Perte de balle", "Perte", -1);
@@ -285,6 +306,7 @@ public class MainActivity extends Activity {
         action("shot_off", "○", "Tir manqué", "Tir M", -1);
         action("duel_lost", "✕", "Duel perdu", "Duel", -1);
         action("save_missed", "⚑", "Arrêt raté", "Arrêt R", -2);
+        action("keeper_exit_missed", "⇣", "Sortie ratée", "Sortie R", -1);
         action("yellow", "▨", "Jaune", "Jaune", -1);
         action("red", "▣", "Rouge", "Rouge", -3);
         try {
@@ -343,6 +365,7 @@ public class MainActivity extends Activity {
         super.onSaveInstanceState(state);
     }
     @Override protected void onDestroy() {
+        closeFamily();
         searchGeneration++; followTeamRequest++; fixturesRequests[0]++; fixturesRequests[1]++;
         footballUi.removeCallbacksAndMessages(null);
         if (Updater.changed == releaseChanged) Updater.changed = () -> {};
@@ -3244,19 +3267,23 @@ public class MainActivity extends Activity {
         // With nobody left and nothing written or drawn, there is no note left either; a comment
         // or a schema keeps it alive, as a note without a player.
         if (written && entries.isEmpty() && draft.trim().isEmpty() && diagram == null) {
-            try { record(operation("delete", noteId)); toast("Note supprimée"); }
+            try { record(operation("delete", noteId)); }
             catch (Exception e) { error(e); }
             closeNote(); return;
         }
         if (written) writeNote();
         renderComposer();
     }
+    /**
+     * The quick note says nothing out loud: the chip, the mark on the pitch and the filled cell
+     * already show what was noted, and a toast over the palette only hid the next cell to touch.
+     * A palette waiting for a player is dimmed, which is answer enough to a tap.
+     */
     private void qualify(String key) {
-        if (focus.isEmpty()) { toast("Touche d’abord un joueur"); return; }
+        if (focus.isEmpty()) return;
         entries.put(focus, key);
         if (!writeNote()) return;
         composer.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-        toast("Noté · " + noteMinute + "′  " + shortName(focus) + " · " + actionName(key));
         renderComposer();
     }
     /**
@@ -3335,8 +3362,11 @@ public class MainActivity extends Activity {
     }
     /** The note is already in the log, so dropping it is a deletion, not an abandon. */
     private void discardNote() {
-        try { record(operation("delete", noteId)); toast("Note supprimée"); }
-        catch (Exception e) { error(e); return; }
+        try {
+            record(operation("delete", noteId));
+            // The written note says so; the quick note stays silent, as for the rest of it.
+            if (naming) toast("Note supprimée");
+        } catch (Exception e) { error(e); return; }
         closeNote();
     }
     private void closeNote() {
@@ -3489,6 +3519,8 @@ public class MainActivity extends Activity {
         choice.setTextColor(chosen ? skin.onAccent : skin.ink);
     }
     private void renderComposer() {
+        // A family left open would outlive the cell it was opened from.
+        closeFamily();
         // The panel belongs to the match screen; a note closed from anywhere else has none to dress.
         if (composer == null || !"match".equals(screen)) return;
         composer.removeAllViews();
@@ -3606,14 +3638,18 @@ public class MainActivity extends Activity {
         LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
         palette.addView(rows);
         String current = entries.containsKey(focus) ? entries.get(focus) : "";
-        int columns = Math.max(SUCCEEDED.length, FAILED.length);
-        for (String[] side : new String[][]{SUCCEEDED, FAILED}) {
+        List<String[]> succeeded = new ArrayList<>(Arrays.asList(SUCCEEDED));
+        List<String[]> failed = new ArrayList<>(Arrays.asList(FAILED));
+        if (keeper(focus)) { succeeded.add(1, KEEPING[0]); failed.add(1, KEEPING[1]); }
+        int columns = Math.max(succeeded.size(), failed.size());
+        for (List<String[]> side : Arrays.asList(succeeded, failed)) {
             LinearLayout row = strip();
             for (int i = 0; i < columns; i++) {
                 LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(56), dp(46));
-                p.rightMargin = dp(5); p.bottomMargin = side == SUCCEEDED ? dp(4) : 0;
-                if (i >= side.length) { row.addView(new View(this), p); continue; }
-                Button cell = cell(side[i], side[i].equals(current));
+                p.rightMargin = dp(5); p.bottomMargin = side == succeeded ? dp(4) : 0;
+                if (i >= side.size()) { row.addView(new View(this), p); continue; }
+                String[] keys = side.get(i);
+                Button cell = keys.length == 1 ? cell(keys[0], keys[0].equals(current)) : familyCell(keys, current);
                 // Nothing to qualify yet: dimmed reads as "not yet", where live-but-inert reads as broken.
                 cell.setAlpha(entries.containsKey(focus) ? 1f : .35f);
                 row.addView(cell, p);
@@ -3660,17 +3696,146 @@ public class MainActivity extends Activity {
         button.setBackground(outline);
         return button;
     }
-    /** Polarity is the colour; being chosen is the fill. The two never say the same thing. */
     private Button cell(String key, boolean chosen) {
         Button cell = button("", () -> qualify(key));
+        paintCell(cell, key, chosen, false);
+        return cell;
+    }
+    /** Polarity is the colour; being chosen is the fill. The two never say the same thing. */
+    private void paintCell(Button cell, String key, boolean chosen, boolean family) {
         SpannableString text = new SpannableString(icon(key) + "\n" + shortAction(key));
         text.setSpan(new RelativeSizeSpan(1.6f), 0, icon(key).length(), 0);
         cell.setText(text); cell.setTextSize(10); cell.setPadding(0, dp(2), 0, dp(2));
         cell.setMinHeight(0); cell.setContentDescription(actionName(key));
-        cell.setOnLongClickListener(v -> { toast(actionName(key)); return true; });
-        cell.setBackground(rounded(chosen ? solid(key) : fill(key), skin.control));
+        GradientDrawable ground = rounded(chosen ? solid(key) : fill(key), skin.control);
+        cell.setBackground(family ? folded(ground, chosen ? onSolid(key) : tint(key)) : ground);
         cell.setTextColor(chosen ? onSolid(key) : tint(key));
+    }
+    /**
+     * A cell holding a family. It shows the member the player was given, the first one otherwise,
+     * and a tap gives what it shows; to go back from « Passe D » to a plain pass, the long press.
+     */
+    private Button familyCell(String[] keys, String current) {
+        boolean given = Arrays.asList(keys).contains(current);
+        String shown = given ? current : keys[0];
+        Button cell = button("", () -> qualify(shown));
+        paintCell(cell, shown, given, true);
+        List<String> others = new ArrayList<>();
+        for (String key : keys) if (!key.equals(shown)) others.add(actionName(key));
+        cell.setContentDescription(actionName(shown) + ", maintenir pour " + String.join(", ", others));
+        cell.setOnLongClickListener(v -> { openFamily(cell, keys, current); return true; });
+        // Only watches: the button keeps its own touch handling, and after a long press it
+        // clicks nothing by itself.
+        cell.setOnTouchListener((v, event) -> { slideFamily(event); return false; });
         return cell;
+    }
+    /**
+     * The mark of a family: a small corner, in the ink of the cell. Set in from the edge by as
+     * much as the rounding takes away, so that a skin with round controls keeps it inside.
+     */
+    private Drawable folded(GradientDrawable ground, int ink) {
+        Paint pen = new Paint(Paint.ANTI_ALIAS_FLAG); pen.setColor(ink); pen.setAlpha(160);
+        Path corner = new Path();
+        return new Drawable() {
+            @Override protected void onBoundsChange(Rect box) {
+                ground.setBounds(box);
+                float radius = Math.min(dp(skin.control), Math.min(box.width(), box.height()) / 2f);
+                float inset = dp(3) + radius * .3f, side = dp(6);
+                corner.reset();
+                corner.moveTo(box.right - inset - side, box.top + inset);
+                corner.lineTo(box.right - inset, box.top + inset);
+                corner.lineTo(box.right - inset, box.top + inset + side);
+                corner.close();
+            }
+            @Override public void draw(Canvas canvas) { ground.draw(canvas); canvas.drawPath(corner, pen); }
+            @Override public void getOutline(Outline outline) { ground.getOutline(outline); }
+            @Override public void setAlpha(int alpha) { ground.setAlpha(alpha); pen.setAlpha(alpha * 160 / 255); }
+            @Override public void setColorFilter(ColorFilter filter) {
+                ground.setColorFilter(filter); pen.setColorFilter(filter);
+            }
+            @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+        };
+    }
+    /**
+     * A long press lays the family out above its cell, the way a keyboard offers its accents: the
+     * finger slides onto one member and lifts there, or lifts first and taps. A touch anywhere
+     * else closes the row and does what it would have done anyway.
+     */
+    private void openFamily(Button cell, String[] keys, String current) {
+        closeFamily();
+        LinearLayout row = strip();
+        row.setPadding(dp(5), dp(5), 0, dp(5));
+        GradientDrawable ground = rounded(skin.surface, skin.control);
+        ground.setStroke(dp(1), skin.hairline);
+        row.setBackground(ground);
+        familyKeys = keys; familyCurrent = current; familyAimed = -1;
+        for (String key : keys) {
+            Button member = cell(key, key.equals(current));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(56), dp(46));
+            p.rightMargin = dp(5); row.addView(member, p); familyCells.add(member);
+        }
+        int width = dp(5) + keys.length * dp(61), height = dp(56);
+        family = new PopupWindow(row, width, height, false);
+        family.setOutsideTouchable(true); family.setElevation(dp(6));
+        int[] at = new int[2]; cell.getLocationInWindow(at);
+        int screen = cell.getRootView().getWidth();
+        int x = Math.max(dp(8), Math.min(at[0] + (cell.getWidth() - width) / 2, screen - width - dp(8)));
+        family.showAtLocation(cell, Gravity.NO_GRAVITY, x, at[1] - height - dp(6));
+        // The finger is still down and about to travel: neither the palette nor the page may
+        // take it for a scroll.
+        cell.getParent().requestDisallowInterceptTouchEvent(true);
+        cell.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        sliding = true;
+    }
+    /** Follows the finger that opened the family: over a member it aims, lifted there it gives it. */
+    private void slideFamily(MotionEvent event) {
+        if (!sliding || family == null || !family.isShowing()) return;
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_MOVE) aimFamily(memberUnder(event.getRawX(), event.getRawY()));
+        else if (action == MotionEvent.ACTION_UP) {
+            sliding = false;
+            int chosen = memberUnder(event.getRawX(), event.getRawY());
+            if (chosen >= 0) { String key = familyKeys[chosen]; closeFamily(); qualify(key); }
+        } else if (action == MotionEvent.ACTION_CANCEL) { sliding = false; aimFamily(-1); }
+    }
+    /** The member under the finger, -1 for none. The finger hides what it touches, so the row answers a little below itself too. */
+    private int memberUnder(float x, float y) {
+        int[] at = new int[2];
+        View row = family.getContentView(); row.getLocationOnScreen(at);
+        if (y < at[1] - dp(24) || y > at[1] + row.getHeight() + dp(16)) return -1;
+        for (int i = 0; i < familyCells.size(); i++) {
+            Button member = familyCells.get(i); member.getLocationOnScreen(at);
+            if (x >= at[0] - dp(3) && x < at[0] + member.getWidth() + dp(3)) return i;
+        }
+        return -1;
+    }
+    private void aimFamily(int index) {
+        if (index == familyAimed) return;
+        familyAimed = index;
+        for (int i = 0; i < familyCells.size(); i++)
+            paintCell(familyCells.get(i), familyKeys[i],
+                index < 0 ? familyKeys[i].equals(familyCurrent) : i == index, false);
+        if (index >= 0) family.getContentView().performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+    }
+    private void closeFamily() {
+        if (family != null) family.dismiss();
+        family = null; familyCells.clear(); sliding = false;
+    }
+    /**
+     * Whether this player keeps goal: his published position, or — for a substitute the provider
+     * only calls "Substitute" — the saves ESPN counts for goalkeepers alone.
+     */
+    private boolean keeper(String id) {
+        JSONArray players = match.optJSONArray("players");
+        for (int i = 0; players != null && i < players.length(); i++) {
+            JSONObject player = players.optJSONObject(i);
+            if (player.optString("id").equals(id)) return keeper(player);
+        }
+        return false;
+    }
+    private static boolean keeper(JSONObject player) {
+        JSONObject stats = player.optJSONObject("stats");
+        return Formation.band(player.optString("position")) == 0 || stats != null && stats.has("saves");
     }
     private void addChip(LinearLayout row, String id, String action) {
         boolean waiting = action.isEmpty(), aimed = id.equals(focus);
@@ -4613,6 +4778,8 @@ public class MainActivity extends Activity {
 
     private void chooseAction(String playerId) {
         List<String> keys = new ArrayList<>(actions.keySet());
+        // The goalkeeper's actions are his alone, here as on the palette.
+        if (!keeper(playerId)) for (String[] column : KEEPING) keys.removeAll(Arrays.asList(column));
         String[] items = new String[keys.size() + 1];
         items[0] = "Aucune action";
         for (int i = 0; i < keys.size(); i++)
@@ -5077,12 +5244,11 @@ public class MainActivity extends Activity {
         for (int i = 0; players != null && i < players.length(); i++)
             if (players.optJSONObject(i).optString("id").equals(id)) {
                 stats = players.optJSONObject(i).optJSONObject("stats");
-                // The same reading of a position the pitch uses to place him — and, for a
-                // substitute the provider only calls "Substitute", what he was counted doing.
-                keeps = Formation.band(players.optJSONObject(i).optString("position")) == 0;
+                // The same reading the palette makes of him: his position, or what he was counted doing.
+                keeps = keeper(players.optJSONObject(i));
             }
         if (stats == null) return "";
-        keeps = keeps || stats.optInt("saves", 0) > 0 || stats.optInt("shotsFaced", 0) > 0;
+        keeps = keeps || stats.optInt("shotsFaced", 0) > 0;
         StringBuilder line = new StringBuilder();
         for (String[] tally : TALLY) {
             int value = stats.optInt(tally[0], 0);
