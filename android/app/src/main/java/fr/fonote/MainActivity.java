@@ -1169,8 +1169,7 @@ public class MainActivity extends Activity {
                         .put("homeTeam", new JSONObject().put("name", "Match " + id))
                         .put("awayTeam", new JSONObject().put("name", "Détails non téléchargés"))
                         .put("competition", new JSONObject());
-                    else fixture = new JSONObject().put("id", id).put("title", "Match " + id)
-                        .put("teams", new JSONArray()).put("players", new JSONArray());
+                    else fixture = goneMatch(id);
                 }
                 boolean found = FixtureSelection.matches(fixture, annotatedSearch);
                 for (JSONObject note : item.getValue())
@@ -1182,6 +1181,21 @@ public class MainActivity extends Activity {
             if (shown == 0) label(byMatch.isEmpty() ? "Les matchs où vous prenez des notes apparaîtront ici, même une fois terminés."
                 : "Aucun match annoté ne correspond à cette recherche.");
         } catch (Exception error) { error(error); }
+    }
+
+    /**
+     * A match the notes name but nothing on this device describes: in practice one numbered
+     * 'fd-', whose details left with the feed that served them. Its notes did not, so it keeps
+     * a card that says what it is and opens on them without fetching anything. Built like any
+     * match without a composition, so that the sheet finds two sides to name, not question
+     * marks for clubs under a demo label.
+     */
+    private JSONObject goneMatch(String id) throws Exception {
+        JSONObject gone = convertMatch(new JSONObject().put("id", 0)
+            .put("homeTeam", new JSONObject().put("name", "Domicile"))
+            .put("awayTeam", new JSONObject().put("name", "Extérieur"))
+            .put("competition", new JSONObject().put("name", "détails perdus")));
+        return gone.put("id", id).put("stage", "Match d’avant ESPN").put("demo_status", "ARCHIVE");
     }
 
     private void profile() { profile(this::showHome); }
