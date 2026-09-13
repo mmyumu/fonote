@@ -443,6 +443,22 @@ First Android prototype for taking football notes, with a personal server shared
   Neither one says anything: the note disappears or comes back in plain sight, and a toast
   repeating it would hide the bottom of the panel for as long as it takes to read.
 - SQLite on Android; offline saving, kept after the app is closed.
+- **The app keeps level with its server** (`Updater`). At launch — at most every five minutes —
+  and before each sync, it reads `app` in `/v1/health`: the oldest version the server still
+  syncs with, and the APK it hands out. A newer APK shows « Nouvelle version 1.2.0 disponible »
+  at the top of home, with « Mettre à jour »; « Plus tard » hides it until the next launch.
+  Below the minimum, the row reads « Synchronisation suspendue · mise à jour requise » and stays:
+  sync sends nothing, and the notes wait on the device as they do offline. The answer is kept,
+  so a phone that goes offline still knows. **Options** shows the version, and « Installer la
+  version … » when one is waiting; « Tester la connexion » names an incompatibility.
+  - The download goes straight into Android's installer, and is committed only if its size and
+    SHA-256 are the ones announced.
+  - The first time, Fonote asks to be allowed to install apps and opens Android's settings
+    itself, then starts again when the reader comes back. Android's own dialog also offers
+    those settings, but drops the install on the way there.
+  - From Android 12, an app updating itself with that permission installs without a
+    confirmation. Fonote then closes, and the reader opens the new version: Android starts no
+    activity from the background.
 - **Pulling any match card down refreshes the match.** The gesture asks the
   provider again for what it publishes about this fixture, and overrides what holds back the automatic
   tracking — once a minute: whoever
@@ -530,6 +546,14 @@ raw response.
 
 Then use `http://127.0.0.1:8080` in the **debug** app. For the Android emulator: `http://10.0.2.2:8080`.
 
+To try an update on the emulator, hand out the debug APK Gradle has just built, with the
+`output-metadata.json` it writes beside it. The app offers it only if its version code is above
+the installed one:
+
+```bash
+python3 backend/server.py --db fonote.sqlite3 --apk-dir android/app/build/outputs/apk/debug
+```
+
 The token is a secret: do not commit it. The release version refuses cleartext HTTP. A remote deployment must go through HTTPS: the server remains this `http.server`, but behind the VPS's Nginx, as the next section describes. One personal space per server, no account management.
 
 ## Deploying the server on a VPS
@@ -583,9 +607,34 @@ docker compose exec backend python3 -c "import sqlite3; s=sqlite3.connect('/data
 The container only listens on the VPS's `127.0.0.1:8080`, never on the outside, and runs as an
 unprivileged user. It is up to the machine's Nginx, outside this repository, to terminate TLS
 and relay to this port: the release version of the app refuses cleartext HTTP, and the
-token must not cross a network unencrypted. `/v1/health` is the only route open
-without a token — Docker uses it for the `HEALTHCHECK` —, along with the football proxy, which only exposes
-the provider's public data and never the key.
+token must not cross a network unencrypted. `/v1/health` is open without a token — Docker uses
+it for the `HEALTHCHECK` —, along with the football proxy, which only exposes the provider's
+public data and never the key, and the APK, which holds no secret.
+
+### Publishing an Android update
+
+The server hands out the APK found in `apk/`, next to `compose.yml`, which compose mounts
+read-only on `/apk` (Docker creates the folder, empty, if it is missing). Build the signed
+release, then copy the APK first and its metadata last: the version is read off the metadata,
+so an APK still being copied is not announced yet.
+
+```bash
+cd android && ./gradlew :app:assembleRelease
+scp app/build/outputs/apk/release/fonote-1.2.0.apk <vps>:<compose folder>/apk/
+scp app/build/outputs/apk/release/output-metadata.json <vps>:<compose folder>/apk/
+```
+
+Nothing to restart: `/v1/health` reads the folder on every request, and the previous APK can be
+deleted. The apps notice it at their next launch, or within five minutes, and before any sync.
+Fonote 1.1.0 predates this check: 1.2.0 has to be installed by hand once.
+
+Android only installs an update signed with the key of the installed app — the release key of
+`~/.android/fonote-signing.properties`. A debug build never goes over a release.
+
+`MIN_APP`, in `backend/server.py`, is the oldest version code the server still syncs with.
+Raise it along with a change to the operations an older app would get wrong, after publishing
+the APK that follows the change: older apps then pause their sync, and their notes wait on the
+device until they are updated.
 
 ## Building Android
 
@@ -646,11 +695,13 @@ Android flows to check on a device: write a note with several players without le
 
 ## Server contract and persistence
 
-Football GET routes and health are public. Annotation routes, follow declarations and explicit
-archive refreshes require `Authorization: Bearer <token>`:
+Football GET routes, health and the APK are public. Annotation routes, follow declarations and
+explicit archive refreshes require `Authorization: Bearer <token>`:
 
 | Route | Response / effect |
 |---|---|
+| `GET /v1/health` | `service`, and under `app` the `minimum` version code synced with and the `latest` APK (`code`, `name`, `size`, `sha256`), or `null` |
+| `GET /v1/app/fonote.apk` | The APK `latest` describes; 404 when none is published |
 | `GET /v1/matches` | The bundled match, its 22 players and its source |
 | `GET /v1/football/competitions` | The 23 classified competitions and catalogue version |
 | `GET /v1/football/matches?lineups=1` | Compatibility flag; lists use only already-known lineup information |

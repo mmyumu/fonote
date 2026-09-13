@@ -1,6 +1,6 @@
 # Allowlist: the context is limited to the server, its competition catalogue and the lineup it
 # reads. The rest of the repository — including `.tooling/` and its sixteen gigabytes of Android
-# tools, and the build machine's `.env` — has no business in an image.
+# tools, the build machine's `.env` and the APKs it publishes — has no business in an image.
 *
 !backend/*.py
 backend/test_*.py

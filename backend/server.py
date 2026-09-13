@@ -19,9 +19,11 @@ from uuid import UUID
 if __package__:
     from .espn import Espn
     from .football_data import FootballData
+    from .release import Release, described
 else:
     from espn import Espn
     from football_data import FootballData
+    from release import Release, described
 
 DEMO = Path(__file__).resolve().parents[1] / 'android/app/src/main/assets/match.json'
 # Each action carries its own polarity; the client derives colour and balance from it,
@@ -38,6 +40,10 @@ STROKES = {'pass', 'run', 'carry', 'shot', 'tackle'}
 # Bounds a hand-drawn schema stays well inside; anything past them is a client gone wrong,
 # not a moment of football. Twenty-two players is the whole pitch.
 MAX_TOKENS, MAX_SHAPES, MAX_POINTS = 30, 40, 32
+# The oldest Android version code this server still syncs with. Raise it along with a change to
+# the operations an older app would get wrong: that app pauses its sync and asks for the update,
+# its notes waiting on the device. Apps before 1.2.0 do not read it. 2 is Fonote 1.1.0.
+MIN_APP = 2
 # Silent until someone configures it: tests print nothing, while the server started from the
 # command line says what it serves.
 log = logging.getLogger('fonote')
@@ -387,10 +393,11 @@ def append(db, op):
                           (op['id'], payload)).lastrowid
 
 
-def make_server(host, port, path, token):
+def make_server(host, port, path, token, apk=None):
     with connect(path):
         pass
     espn = FootballData(path)
+    release = Release(apk)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -415,6 +422,25 @@ def make_server(host, port, path, token):
             self.end_headers()
             self.wfile.write(raw)
 
+        def send_apk(self, latest):
+            # Public like the football routes: an APK carries no secret, and a phone that only
+            # follows matches, with no token, needs its updates too. Android installs it only
+            # over an app signed with the same key.
+            try:
+                source = latest['file'].open('rb') if latest else None
+            except OSError:
+                source = None
+            if source is None:
+                return self.reply(404, {'error': 'Aucune version publiée'})
+            with source:
+                size = os.fstat(source.fileno()).st_size
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/vnd.android.package-archive')
+                self.send_header('Content-Length', str(size))
+                self.end_headers()
+                while chunk := source.read(1 << 16):
+                    self.wfile.write(chunk)
+
         def authorized(self):
             if not token or not hmac.compare_digest(self.headers.get('Authorization', '').encode(), ('Bearer ' + token).encode()):
                 self.reply(401, {'error': 'Authentification requise'})
@@ -427,7 +453,11 @@ def make_server(host, port, path, token):
             if parsed.path == '/v1/health':
                 # The feed behind the football routes is public: there is no key to leave out,
                 # and the field stays so that an older client keeps recognising this server.
-                return self.reply(200, {'service': 'fonote', 'football_configured': True})
+                return self.reply(200, {'service': 'fonote', 'football_configured': True,
+                                        'app': {'minimum': MIN_APP,
+                                                'latest': described(release.latest())}})
+            if parsed.path == '/v1/app/fonote.apk':
+                return self.send_apk(release.latest())
             try:
                 data = football(espn, parsed.path, urllib.parse.parse_qs(parsed.query))
                 if data is not None:
@@ -558,6 +588,8 @@ if __name__ == '__main__':
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--db', default='fonote.sqlite3')
+    parser.add_argument('--apk-dir',
+                        help='dossier de la version Android à distribuer (APK et output-metadata.json)')
     parser.add_argument('--reload', action='store_true',
                         help='redémarrer le serveur à chaque modification de backend/*.py')
     args = parser.parse_args()
@@ -573,7 +605,7 @@ if __name__ == '__main__':
         parser.error('Définir FONOTE_TOKEN avec au moins 24 caractères ASCII aléatoires')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
-    server = make_server(args.host, args.port, args.db, token)
+    server = make_server(args.host, args.port, args.db, token, args.apk_dir)
     print(f'Fonote : http://{args.host}:{args.port} (usage personnel, arrêter avec Ctrl+C)')
     try:
         server.serve_forever()

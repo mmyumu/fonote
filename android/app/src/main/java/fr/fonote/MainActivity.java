@@ -104,6 +104,15 @@ public class MainActivity extends Activity {
     /** Regulation half, and the break the referee is expected to give, in seconds. */
     private static final int HALF = 45, BREAK = 15 * 60;
     private boolean syncing;
+    /** When the server was last asked about versions; "Plus tard" holds until the next launch. */
+    private long releaseChecked;
+    private boolean releaseDismissed;
+    /** Sent to Android's settings to allow installs: back here, the update goes on by itself. */
+    private boolean installOnReturn;
+    /** The home row that tells of an update, filled again whenever the update moves. */
+    private LinearLayout releaseSlot;
+    private final Runnable releaseChanged = this::renderRelease;
+    private static final long RELEASE_CHECK = 5 * 60_000L;
     private boolean refreshing;
     /** The time a height takes to settle: the refresh row's. */
     private static final int SETTLE = 240;
@@ -255,6 +264,7 @@ public class MainActivity extends Activity {
         forgetTheFormerProvider();
         skin = Skin.of(prefs.getString("skin", null));
         kickoff = new Kickoff(saved == null && android.animation.ValueAnimator.areAnimatorsEnabled());
+        Updater.changed = releaseChanged;
         // The window shows for an instant before the first page is built; in its own colour.
         getWindow().setBackgroundDrawable(wallpaper());
         // Weight carries the polarity: colour, palette side and the balance all derive from it,
@@ -335,6 +345,7 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         searchGeneration++; followTeamRequest++; fixturesRequests[0]++; fixturesRequests[1]++;
         footballUi.removeCallbacksAndMessages(null);
+        if (Updater.changed == releaseChanged) Updater.changed = () -> {};
         ticker.removeCallbacks(tick);
         worker.shutdown();
         super.onDestroy();
@@ -430,7 +441,10 @@ public class MainActivity extends Activity {
         super.onWindowFocusChanged(focused);
         if (focused) kickoff.begin(android.os.SystemClock.uptimeMillis());
     }
-    @Override protected void onResume() { super.onResume(); sendFootballFollows(); ticker.removeCallbacks(tick); ticker.post(tick); }
+    @Override protected void onResume() {
+        super.onResume(); sendFootballFollows(); checkRelease(); ticker.removeCallbacks(tick); ticker.post(tick);
+        if (installOnReturn) { installOnReturn = false; if (getPackageManager().canRequestPackageInstalls()) update(); }
+    }
     @Override protected void onPause() { stopTactic(); ticker.removeCallbacks(tick); super.onPause(); }
     private long clockSeconds() { return MatchClock.seconds(System.currentTimeMillis(), clockAnchor, clockBase, clockRunning); }
     private void updateClock() {
@@ -1971,8 +1985,97 @@ public class MainActivity extends Activity {
         bar.addView(barAction(R.drawable.ic_settings, "Options", this::options), barSize(8));
         TextView intro = label("Les matchs que vous suivez, prêts à être notés.");
         intro.setTextColor(skin.muted); intro.setTextSize(14); intro.setPadding(0, 0, 0, 0);
+        releaseSlot = strip();
+        LinearLayout.LayoutParams slot = new LinearLayout.LayoutParams(-1, -2); slot.topMargin = dp(10);
+        root.addView(releaseSlot, slot);
+        renderRelease();
         homeFollows();
         section("Aujourd’hui", "Calendrier ›", () -> calendar(LocalDate.now()));
+    }
+
+    /**
+     * Asks the server which versions it syncs with and hands out, at most every five minutes.
+     * The answer is kept: a phone that goes offline still knows its sync is paused, and why.
+     */
+    private void checkRelease() {
+        if (prefs == null || !hasServer() || demoMode()) return;
+        long now = System.currentTimeMillis();
+        if (now - releaseChecked < RELEASE_CHECK) return;
+        releaseChecked = now;
+        String base = server();
+        worker.execute(() -> {
+            try {
+                JSONObject health = new JSONObject(get(base, "/v1/health"));
+                if (!"fonote".equals(health.optString("service")) || !base.equals(server())) return;
+                Updater.remember(prefs, health);
+                runOnUiThread(this::renderRelease);
+            } catch (Exception unreachable) { /* The last answer stands until the server gives another. */ }
+        });
+    }
+
+    /**
+     * The update row on home: absent when the app is level with its server, a line with its
+     * action when it is not, the download's progress once asked. A required update stays; an
+     * offered one gives way to « Plus tard » until the next launch.
+     */
+    private void renderRelease() {
+        if (releaseSlot == null) return;
+        releaseSlot.removeAllViews();
+        JSONObject app = Updater.release(prefs), latest = Updater.latest(app);
+        boolean required = Updater.status(app) == Updater.Status.REQUIRED, idle = Updater.progress == Updater.IDLE;
+        String text;
+        if (Updater.progress == Updater.INSTALLING) text = "Installation de la mise à jour…";
+        else if (!idle) text = "Téléchargement de la mise à jour… " + Updater.progress + " %";
+        else if (required) text = latest == null
+            ? "Synchronisation suspendue · cette version est trop ancienne pour le serveur."
+            : "Synchronisation suspendue · mise à jour requise";
+        else if (latest != null && !releaseDismissed) text = "Nouvelle version " + latest.optString("name") + " disponible";
+        else { releaseSlot.setVisibility(View.GONE); return; }
+        releaseSlot.setVisibility(View.VISIBLE);
+        releaseSlot.setBackground(panel(skin.surface));
+        releaseSlot.setPadding(dp(14), dp(6), dp(6), dp(6));
+        releaseSlot.setMinimumHeight(dp(48));
+        TextView line = new TextView(this);
+        line.setText(text); line.setTextSize(14); line.setTextColor(required ? skin.ink : skin.muted);
+        line.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        releaseSlot.addView(line, new LinearLayout.LayoutParams(0, -2, 1));
+        if (idle && latest != null) releaseSlot.addView(link("Mettre à jour", this::offerUpdate));
+    }
+
+    /** Says what the update is before starting it: a download, perhaps Android asking, a restart by hand. */
+    private void offerUpdate() {
+        JSONObject app = Updater.release(prefs), latest = Updater.latest(app);
+        if (latest == null || Updater.progress != Updater.IDLE) return;
+        boolean required = Updater.status(app) == Updater.Status.REQUIRED;
+        String size = String.format(Locale.FRANCE, "%.1f Mo", latest.optLong("size") / 1e6);
+        dialog().setTitle("Fonote " + latest.optString("name"))
+            .setMessage((required
+                    ? "Cette version ne se synchronise plus avec votre serveur. Vos notes restent sur cet appareil et partiront après la mise à jour."
+                    : "Une nouvelle version est disponible sur votre serveur.")
+                + "\n\nTéléchargement : " + size + ". Android peut demander une confirmation, puis Fonote "
+                + "se ferme le temps de l’installation : rouvrez-le ensuite. Vos notes et vos réglages sont conservés.")
+            .setPositiveButton("Mettre à jour", (d, w) -> update())
+            .setNegativeButton("Plus tard", (d, w) -> { if (!required) { releaseDismissed = true; renderRelease(); } })
+            .show();
+    }
+
+    /**
+     * Starts the update, once Android lets Fonote install apps. Asking belongs to Android, but
+     * its own way round loses the update: the system dialog sends the reader to its settings and
+     * drops the install on the way. So the settings are opened from here, and the update starts
+     * again when the reader comes back.
+     */
+    private void update() {
+        if (getPackageManager().canRequestPackageInstalls()) { Updater.install(this, prefs, server()); showHome(); return; }
+        dialog().setTitle("Autoriser les mises à jour")
+            .setMessage("Android doit d’abord autoriser Fonote à installer des applications. "
+                + "Dans l’écran qui s’ouvre, activez l’autorisation pour Fonote, puis revenez : la mise à jour reprendra.")
+            .setPositiveButton("Ouvrir les réglages", (d, w) -> {
+                installOnReturn = true;
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    android.net.Uri.parse("package:" + getPackageName())));
+            })
+            .setNegativeButton("Annuler", null).show();
     }
 
     /** A centred row above the content, present only while loading. */
@@ -5417,6 +5520,13 @@ public class MainActivity extends Activity {
         });
         full("Configurer le serveur", this::settings);
         connectionTest(root, this::server);
+        JSONObject app = Updater.release(prefs), latest = Updater.latest(app);
+        Updater.Status status = Updater.status(app);
+        TextView version = label("Version " + BuildConfig.VERSION_NAME + (app == null ? ""
+            : status == Updater.Status.REQUIRED ? " · mise à jour requise"
+            : status == Updater.Status.AVAILABLE ? " · " + latest.optString("name") + " disponible" : " · à jour"));
+        version.setTextColor(skin.muted); version.setTextSize(13);
+        if (latest != null) full("Installer la version " + latest.optString("name"), this::offerUpdate);
     }
 
     /**
@@ -5567,9 +5677,12 @@ public class MainActivity extends Activity {
         box.addView(token, below);
         connectionTest(box, () -> url.getText().toString().trim().replaceAll("/+$", ""));
         dialog().setTitle("Serveur personnel").setView(box)
-            .setPositiveButton("Enregistrer", (d,w) -> prefs.edit()
-                .putString("url", url.getText().toString().trim().replaceAll("/+$", ""))
-                .putString("token", token.getText().toString().trim()).apply())
+            .setPositiveButton("Enregistrer", (d,w) -> {
+                String address = url.getText().toString().trim().replaceAll("/+$", "");
+                if (!address.equals(server())) { Updater.forget(prefs); releaseChecked = 0; }
+                prefs.edit().putString("url", address).putString("token", token.getText().toString().trim()).apply();
+                checkRelease();
+            })
             .setNegativeButton("Annuler", null).show();
     }
 
@@ -5585,11 +5698,14 @@ public class MainActivity extends Activity {
             worker.execute(() -> {
                 boolean reached = false;
                 String message;
+                JSONObject app = null;
                 try {
                     JSONObject health = new JSONObject(get(base, "/v1/health"));
                     if (!"fonote".equals(health.optString("service")))
                         throw new java.io.IOException("Ce serveur n’est pas un serveur Fonote");
                     reached = true;
+                    app = health.optJSONObject("app");
+                    if (base.equals(server())) { Updater.remember(prefs, health); runOnUiThread(this::renderRelease); }
                     if (!health.optBoolean("football_configured")) {
                         message = "Serveur connecté, mais il ne sert pas de données football. Mettez-le à jour, puis redémarrez-le.";
                     } else {
@@ -5606,6 +5722,11 @@ public class MainActivity extends Activity {
                             + "Adresse par défaut de cette version : " + BuildConfig.SERVER
                             + ". Si le serveur tourne déjà, redémarrez-le avec la dernière version.";
                 }
+                Updater.Status status = Updater.status(app);
+                if (status == Updater.Status.REQUIRED)
+                    message += " Cette version de Fonote est trop ancienne pour y synchroniser ses notes : mettez-la à jour.";
+                else if (status == Updater.Status.AVAILABLE)
+                    message += " Version " + Updater.latest(app).optString("name") + " disponible.";
                 String feedback = message;
                 runOnUiThread(() -> { test.setEnabled(true); result.setText(feedback); });
             });
@@ -5640,7 +5761,15 @@ public class MainActivity extends Activity {
         syncing = true;
         worker.execute(() -> {
             String message;
+            // The server says first whether it still syncs with this version. Unreachable, it
+            // leaves the last answer standing; the requests below will say it is down.
             try {
+                JSONObject health = new JSONObject(get(base, "/v1/health"));
+                if ("fonote".equals(health.optString("service"))) Updater.remember(prefs, health);
+            } catch (Exception unreachable) { /* See above. */ }
+            if (Updater.status(Updater.release(prefs)) == Updater.Status.REQUIRED) {
+                message = "Synchronisation suspendue : mettez Fonote à jour. Notes conservées sur cet appareil.";
+            } else try {
                 JSONArray pending = store.operations(true);
                 for (int i=0; i<pending.length(); i++) store.accept(new JSONObject(request(base, token, pending.getJSONObject(i))));
                 JSONArray remote = new JSONArray(request(base, token, null));
@@ -5651,6 +5780,7 @@ public class MainActivity extends Activity {
             String result = message;
             runOnUiThread(() -> {
                 syncing = false;
+                renderRelease();
                 // The log has just been renumbered, and lines from elsewhere have slipped into it:
                 // the positions kept for redo no longer point at what they pointed at.
                 undone = 0; redoable.clear();

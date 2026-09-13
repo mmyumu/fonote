@@ -8,10 +8,75 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from backend.server import DEMO, connect, football, make_server, sources
+from backend.server import DEMO, MIN_APP, connect, football, make_server, sources
 
 MATCH = json.loads(DEMO.read_text())
 PLAYERS = [p['id'] for p in MATCH['players']]
+
+
+class ReleaseTest(unittest.TestCase):
+    """The APK a server hands out, as the Android build leaves it: the file and its metadata."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp.name) / 'apk'
+        self.folder.mkdir()
+        self.server = make_server('127.0.0.1', 0, Path(self.temp.name) / 'notes.sqlite3',
+                                  'a-personal-test-token-123456', self.folder)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.start()
+        self.base = f'http://127.0.0.1:{self.server.server_port}'
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join()
+        self.server.server_close()
+        self.temp.cleanup()
+
+    def publish(self, content, code=3, name='1.2.0', package='fr.fonote', output=None):
+        file = f'fonote-{name}.apk'
+        (self.folder / file).write_bytes(content)
+        (self.folder / 'output-metadata.json').write_text(json.dumps({
+            'version': 3, 'applicationId': package, 'variantName': 'release',
+            'elements': [{'type': 'SINGLE', 'versionCode': code, 'versionName': name,
+                          'outputFile': output or file}]}))
+
+    def latest(self):
+        with urlopen(self.base + '/v1/health', timeout=3) as response:
+            return json.load(response)['app']['latest']
+
+    def test_a_published_apk_is_described_and_served_without_a_token(self):
+        import hashlib
+        content = b'PK' + bytes(range(256)) * 400
+        self.publish(content)
+        self.assertEqual(self.latest(), {'code': 3, 'name': '1.2.0', 'size': len(content),
+                                         'sha256': hashlib.sha256(content).hexdigest()})
+        with urlopen(self.base + '/v1/app/fonote.apk', timeout=3) as response:
+            self.assertEqual(response.headers['Content-Type'], 'application/vnd.android.package-archive')
+            self.assertEqual(response.read(), content)
+
+    def test_a_new_version_is_seen_without_a_restart(self):
+        self.publish(b'first', code=3, name='1.2.0')
+        self.assertEqual(self.latest()['code'], 3)
+        (self.folder / 'fonote-1.2.0.apk').unlink()
+        self.publish(b'second', code=4, name='1.3.0')
+        import hashlib
+        self.assertEqual(self.latest()['sha256'], hashlib.sha256(b'second').hexdigest())
+
+    def test_nothing_is_offered_from_an_incomplete_or_foreign_folder(self):
+        cases = [dict(package='org.other'), dict(output='../notes.sqlite3'), dict(code='three')]
+        for case in cases:
+            with self.subTest(case=case):
+                self.publish(b'apk', **case)
+                self.assertIsNone(self.latest())
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(self.base + '/v1/app/fonote.apk', timeout=3)
+                self.assertEqual(error.exception.code, 404)
+        # Metadata copied before its APK: the version is not there yet.
+        for path in self.folder.iterdir():
+            path.unlink()
+        self.publish(b'apk', output='fonote-9.9.9.apk')
+        self.assertIsNone(self.latest())
 
 
 class ServerTest(unittest.TestCase):
@@ -84,7 +149,11 @@ class ServerTest(unittest.TestCase):
 
     def test_health_is_public_without_exposing_credentials(self):
         self.assertEqual(self.request(token='wrong', path='/v1/health'),
-                         {'service': 'fonote', 'football_configured': True})
+                         {'service': 'fonote', 'football_configured': True,
+                          'app': {'minimum': MIN_APP, 'latest': None}})
+        with self.assertRaises(HTTPError) as error:
+            urlopen(self.base + '/v1/app/fonote.apk', timeout=3)
+        self.assertEqual(error.exception.code, 404)
 
     def test_calendar_does_not_require_personal_token(self):
         from unittest.mock import patch

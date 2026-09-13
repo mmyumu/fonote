@@ -14,6 +14,9 @@ services:
     restart: unless-stopped
     volumes:
       - fonote_backend_data:/data
+      # The Android version to hand out: the APK and its output-metadata.json, copied from
+      # android/app/build/outputs/apk/release/. Read-only; the server never writes there.
+      - ./apk:/apk:ro
 
 volumes:
   fonote_backend_data:
