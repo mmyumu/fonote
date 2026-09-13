@@ -540,8 +540,9 @@ server has no dependencies, there is nothing to install and nothing to pin.
 
 - `backend/Dockerfile` — the image, built from the repository root: `server.py` looks for
   `android/app/src/main/assets/match.json` next to its own folder, so the context must
-  see both. The `.dockerignore` is written as an allowlist for that reason: only
-  these three files get in, neither the build machine's `.env` nor the sixteen gigabytes of `.tooling/`.
+  see both. The `.dockerignore` is written as an allowlist for that reason: only the backend
+  modules, the competition catalogue and that lineup get in, neither the build machine's `.env`
+  nor the sixteen gigabytes of `.tooling/`.
 - `compose.yml` — the service, the port and the volume.
 - `.env.example` — the variables to copy into `.env`.
 

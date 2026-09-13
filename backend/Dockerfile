@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# The server has no dependencies: the image holds only the standard library, the two backend
-# modules and the demo lineup they read. The build context is the repository root, since
-# `server.py` looks for that asset next to its own folder.
+# The server has no dependencies: the image holds only the standard library, the backend
+# modules, their competition catalogue and the demo lineup they read. The build context is
+# the repository root, since `server.py` looks for that asset next to its own folder.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
