@@ -574,7 +574,7 @@ Copy `.env.example` to `.env` and fill in the token:
 
 ```env
 FONOTE_TOKEN=the-same-token-as-in-the-app
-FONOTE_BACKEND_IMAGE=registry.mmyumu.fr/fonote-backend:1.1.0
+FONOTE_BACKEND_IMAGE=registry.mmyumu.fr/fonote-backend:1.2.0
 ```
 
 Without `FONOTE_TOKEN`, `docker compose` refuses to start rather than launching a server that

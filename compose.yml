@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ${FONOTE_BACKEND_IMAGE:-registry.mmyumu.fr/fonote-backend:1.1.0}
+    image: ${FONOTE_BACKEND_IMAGE:-registry.mmyumu.fr/fonote-backend:1.2.0}
     build:
       context: .
       dockerfile: backend/Dockerfile
