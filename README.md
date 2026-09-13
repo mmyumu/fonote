@@ -620,7 +620,7 @@ so an APK still being copied is not announced yet.
 
 ```bash
 cd android && ./gradlew :app:assembleRelease
-scp app/build/outputs/apk/release/fonote-1.2.0.apk <vps>:<compose folder>/apk/
+scp app/build/outputs/apk/release/fonote-1.2.1.apk <vps>:<compose folder>/apk/
 scp app/build/outputs/apk/release/output-metadata.json <vps>:<compose folder>/apk/
 ```
 
