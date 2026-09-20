@@ -72,9 +72,10 @@ public final class OfflineChecks extends Instrumentation {
             require(!FixtureSelection.matches(searchable, "Monaco"), "Unrelated search result");
             checkPull();
             checkNestedGestures();
+            checkSpotDrag();
             checkRefreshAnimations();
             checkTacticalEditor();
-            result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, next club fixtures, pull gestures, tactical keyframes, timeline, undo/redo, atomic notes.\n");
+            result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, next club fixtures, pull gestures, spot drag, tactical keyframes, timeline, undo/redo, atomic notes.\n");
             sendStatus(0, progress);
         } catch (Throwable failure) {
             progress.putString("stack", android.util.Log.getStackTraceString(failure));
@@ -446,6 +447,76 @@ public final class OfflineChecks extends Instrumentation {
             } catch (Throwable error) { failure[0] = error; }
         });
         if (failure[0] != null) throw new AssertionError("Nested swipe gestures", failure[0]);
+    }
+
+    /**
+     * A spot already given is taken and carried through the real pager: it lands where the finger
+     * lifts, the card does not turn under it, a touch that does not move is a tap on its player,
+     * and a swipe that starts away from any spot still turns the card.
+     */
+    private void checkSpotDrag() throws Exception {
+        final Throwable[] failure = {null};
+        Context context = getTargetContext();
+        JSONObject match;
+        try (java.io.InputStream input = context.getAssets().open("match.json")) {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            for (int count; (count = input.read(buffer)) != -1; ) bytes.write(buffer, 0, count);
+            match = new JSONObject(bytes.toString("UTF-8"));
+        }
+        String player = match.getJSONArray("players").getJSONObject(9).getString("id");
+        runOnMainSync(() -> {
+            try {
+                String[] tapped = {""}, moved = {""};
+                double[][] landed = {null};
+                Pager pager = new Pager(context);
+                PitchView pitch = null;
+                for (int i = 0; i < 3; i++) {
+                    Pull pull = new Pull(context);
+                    android.view.View content = i == 1
+                        ? (pitch = new PitchView(context, match, true, 0xFFFFFFFF, 0xFFFFFFFF, 0xFF0A1E19,
+                            0xFF0A1E19, 0, id -> tapped[0] = id, id -> { }))
+                        : new android.view.View(context);
+                    content.setMinimumHeight(1400);
+                    pull.addView(content, new android.widget.FrameLayout.LayoutParams(-1, 1400));
+                    pager.addPage(pull);
+                }
+                pitch.moving((id, at) -> { moved[0] = id; landed[0] = at; });
+                java.util.Map<String,double[]> places = new java.util.HashMap<>();
+                places.put(player, new double[]{.5, .5});
+                pitch.setPlaces(places);
+                int width = 1000, height = 1400;
+                pager.measure(android.view.View.MeasureSpec.makeMeasureSpec(width, android.view.View.MeasureSpec.EXACTLY),
+                    android.view.View.MeasureSpec.makeMeasureSpec(height, android.view.View.MeasureSpec.EXACTLY));
+                pager.layout(0, 0, width, height);
+                pager.show(1, false);
+                require(pitch.getWidth() == width && pitch.getHeight() == height, "Pitch not laid out for the drag");
+                float slop = android.view.ViewConfiguration.get(context).getScaledTouchSlop();
+                // Sideways first, the way the pager would take it: the spot must win.
+                swipe(pager, new float[]{500, 500 + slop * 3, 800, 800}, new float[]{700, 700, 910, 910});
+                require(player.equals(moved[0]), "The spot was not carried");
+                require(Math.abs(landed[0][0] - .8) < .002 && Math.abs(landed[0][1] - .65) < .002,
+                    "The spot did not land under the finger");
+                require(pager.page() == 1 && pager.getScrollX() == width, "Dragging a spot turned the card");
+                require(tapped[0].isEmpty(), "A drag was taken for a tap");
+                moved[0] = "";
+                swipe(pager, new float[]{500, 500}, new float[]{700, 700});
+                require(player.equals(tapped[0]) && moved[0].isEmpty(), "A tap on a spot did not reach its player");
+                swipe(pager, new float[]{900, 900 - slop * 3, 50, 50}, new float[]{60, 60, 60, 60});
+                require(moved[0].isEmpty() && pager.page() == 2, "A swipe away from the spots no longer turns the card");
+            } catch (Throwable error) { failure[0] = error; }
+        });
+        if (failure[0] != null) throw new AssertionError("Spot drag", failure[0]);
+    }
+    /** Down, moves, up, at the given points, dispatched from the top as a real finger would be. */
+    private static void swipe(android.view.View target, float[] xs, float[] ys) {
+        long now = android.os.SystemClock.uptimeMillis();
+        for (int i = 0; i < xs.length; i++) {
+            int action = i == 0 ? android.view.MotionEvent.ACTION_DOWN
+                : i == xs.length - 1 ? android.view.MotionEvent.ACTION_UP : android.view.MotionEvent.ACTION_MOVE;
+            android.view.MotionEvent event = android.view.MotionEvent.obtain(now, now + i * 80, action, xs[i], ys[i], 0);
+            target.dispatchTouchEvent(event); event.recycle();
+        }
     }
 
     private void nestedGesture(boolean horizontal, boolean busy, boolean cancel, boolean clickable) {

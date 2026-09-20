@@ -9,6 +9,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.InsetDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -61,10 +62,31 @@ final class PitchView extends FrameLayout {
     private final java.util.List<JSONObject> roster = new java.util.ArrayList<>();
     private final java.util.List<LinearLayout> markers = new java.util.ArrayList<>();
     private final java.util.List<TextView> labels = new java.util.ArrayList<>();
+    /** Where each player of the note did what he did, on the board's frame; drawn while composing. */
+    private java.util.Map<String,double[]> places = new java.util.HashMap<>();
+    /** Set while the next touch on the grass says where: the shirts step back and catch nothing. */
+    private Consumer<double[]> placing;
+    /** The point under the finger while it looks for the spot or carries one, null otherwise. */
+    private double[] aim;
+    /** Whose spot {@link #aim} stands for: the player in focus while placing, the one carried while dragging. */
+    private String aimedAt = "";
+    /** Takes a spot already given to where the finger lifted it; null while there is none to move. */
+    private java.util.function.BiConsumer<String,double[]> moved;
+    /** The player whose spot the finger came down on, and whether it has moved far enough to be a drag. */
+    private String grabbed = "";
+    private boolean dragging;
+    private float grabX, grabY;
+    private float[] grabFrom;
+    /** How near a spot a finger may land to take it: a finger's width, though the dot is smaller. */
+    private static final int GRAB = 20;
+    private final Consumer<String> select;
+    private final android.graphics.Paint dot = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+    private final android.graphics.Paint tie = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
     PitchView(Context context, JSONObject match, boolean glass, int held, int heldEnd, int lawn,
               int lawnEnd, int minute, Consumer<String> select, Consumer<String> pull) {
         super(context);
         this.match = match; this.glass = glass; this.held = held; this.heldEnd = heldEnd;
+        this.select = select;
         setWillNotDraw(false);
         grass = new Pitch(context);
         setBackground(Pitch.turf(lawn, lawnEnd, 20, getResources().getDisplayMetrics().density));
@@ -86,6 +108,8 @@ final class PitchView extends FrameLayout {
         // Eleven a side and nobody else — a lineup with no bench published — keeps the whole width.
         yielded = seated ? dp(YIELD) : 0;
         shade.setColor(Color.argb(46, 0, 12, 8));
+        tie.setStyle(android.graphics.Paint.Style.STROKE); tie.setStrokeWidth(dp(2));
+        tie.setPathEffect(new android.graphics.DashPathEffect(new float[]{dp(4), dp(4)}, 0));
         JSONArray published = match.optJSONArray("changes");
         for (int i = 0; published != null && i < published.length(); i++) {
             JSONObject change = published.optJSONObject(i);
@@ -239,6 +263,102 @@ final class PitchView extends FrameLayout {
                   String focus, boolean selecting) {
         this.marks = marks; this.tints = tints; this.focus = focus; this.selecting = selecting;
         refresh();
+        invalidate();
+    }
+    /** Where the players of the open note were, drawn in the tint of their action. */
+    void setPlaces(java.util.Map<String,double[]> places) { this.places = places; invalidate(); }
+    /**
+     * The next touch on the grass says where the player in focus was; null gives the shirts back
+     * their touch. The finger may slide before it lifts: the point follows it, and lifting is what counts.
+     */
+    void placing(Consumer<double[]> where) {
+        if ((placing == null) == (where == null)) { placing = where; return; }
+        placing = where; aim = null;
+        setContentDescription(where == null ? null : "Toucher l’endroit de l’action sur le terrain");
+        refresh();
+        invalidate();
+    }
+    /**
+     * A spot already given can be taken and dragged to where it belongs: going back through the
+     * 📍 to correct a point that is right there on the grass cost two taps and a second aim.
+     */
+    void moving(java.util.function.BiConsumer<String,double[]> moved) { this.moved = moved; }
+    @Override public boolean onInterceptTouchEvent(MotionEvent event) {
+        if (placing != null) return true;
+        // A spot is drawn above the shirts, so it is also touched before them.
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && moved != null) {
+            grabbed = spotUnder(event.getX(), event.getY());
+            if (!grabbed.isEmpty()) return true;
+        }
+        return super.onInterceptTouchEvent(event);
+    }
+    @Override public boolean onTouchEvent(MotionEvent event) {
+        if (placing == null) return grabbed.isEmpty() ? super.onTouchEvent(event) : drag(event);
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                // The finger is choosing a point, not turning the card nor pulling the page.
+                getParent().requestDisallowInterceptTouchEvent(true);
+                aimedAt = focus; aim = pointAt(event); invalidate(); break;
+            case MotionEvent.ACTION_MOVE: aim = pointAt(event); invalidate(); break;
+            case MotionEvent.ACTION_UP:
+                double[] spot = pointAt(event); aim = null;
+                performClick(); placing.accept(spot); break;
+            case MotionEvent.ACTION_CANCEL: aim = null; invalidate(); break;
+        }
+        return true;
+    }
+    /**
+     * A spot carried by the finger. It keeps the distance at which it was taken, so it does not
+     * jump under the fingertip; it grows while carried, like a spot being aimed, to show round the
+     * finger. A touch that never moves is a tap on the player the spot belongs to, as on his shirt.
+     */
+    private boolean drag(MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                // The finger carries a spot, it is not turning the card nor pulling the page.
+                getParent().requestDisallowInterceptTouchEvent(true);
+                grabX = event.getX(); grabY = event.getY();
+                grabFrom = onGrass(places.get(grabbed)); dragging = false; break;
+            case MotionEvent.ACTION_MOVE:
+                if (!dragging && Math.hypot(event.getX() - grabX, event.getY() - grabY)
+                        < android.view.ViewConfiguration.get(getContext()).getScaledTouchSlop()) break;
+                dragging = true; aimedAt = grabbed;
+                aim = pointAt(grabFrom[0] + event.getX() - grabX, grabFrom[1] + event.getY() - grabY);
+                invalidate(); break;
+            case MotionEvent.ACTION_UP: {
+                String id = grabbed;
+                double[] spot = aim;
+                boolean carried = dragging && spot != null;
+                grabbed = ""; dragging = false; aim = null;
+                performClick();
+                if (carried) moved.accept(id, spot); else { invalidate(); select.accept(id); }
+                break;
+            }
+            case MotionEvent.ACTION_CANCEL:
+                grabbed = ""; dragging = false; aim = null; invalidate(); break;
+        }
+        return true;
+    }
+    /** The player whose spot lies under a touch, the nearest when two are close; "" for none. */
+    private String spotUnder(float x, float y) {
+        String nearest = "";
+        double best = dp(GRAB);
+        for (java.util.Map.Entry<String,double[]> place : places.entrySet()) {
+            float[] at = onGrass(place.getValue());
+            double distance = Math.hypot(at[0] - x, at[1] - y);
+            if (distance <= best) { best = distance; nearest = place.getKey(); }
+        }
+        return nearest;
+    }
+    @Override public boolean performClick() { return super.performClick(); }
+    /** A touch as a point of the grass, in fractions of it; the benches count as its touchlines. */
+    private double[] pointAt(MotionEvent event) { return pointAt(event.getX(), event.getY()); }
+    private double[] pointAt(float touchX, float touchY) {
+        double field = Math.max(1, getWidth() - 2 * yielded);
+        double x = Math.max(0, Math.min(1, (touchX - yielded) / field));
+        double y = Math.max(0, Math.min(1, touchY / Math.max(1, getHeight())));
+        // A thousandth of the pitch is about ten centimetres: finer says nothing more.
+        return new double[]{Math.round(x * 1000) / 1000.0, Math.round(y * 1000) / 1000.0};
     }
     private void refresh() {
         for (int i = 0; i < roster.size(); i++) {
@@ -269,6 +389,8 @@ final class PitchView extends FrameLayout {
             // A player already replaced has had his match: he sits beside those still waiting for
             // theirs, set back a shade until a note picks him up again.
             float presence = benched && replaced.contains(id) && !marked ? .55f : 1f;
+            // Looking for a spot, the grass is what is being touched: only the player it is for stays.
+            if (placing != null && !id.equals(focus)) presence = .3f;
             marker.setAlpha(presence); name.setAlpha(presence);
             name.setTextColor(marked && tint != null ? tint : Color.WHITE);
             ((GradientDrawable)name.getBackground()).setColor(
@@ -373,5 +495,53 @@ final class PitchView extends FrameLayout {
         canvas.translate(yielded, 0);
         grass.draw(canvas, getWidth() - 2 * yielded, getHeight());
         canvas.restore();
+        // The thread from a shirt to its spot runs under the shirts; the spot itself sits above them.
+        for (String id : shownPlaces().keySet()) {
+            float[] from = shirtCentre(id), to = onGrass(shownPlaces().get(id));
+            if (from == null) continue;
+            tie.setColor(tint(id)); tie.setAlpha(190);
+            canvas.drawLine(from[0], from[1], to[0], to[1], tie);
+        }
+    }
+    @Override protected void dispatchDraw(Canvas canvas) {
+        super.dispatchDraw(canvas);
+        for (java.util.Map.Entry<String,double[]> place : shownPlaces().entrySet()) {
+            float[] at = onGrass(place.getValue());
+            boolean aimed = aim != null && place.getKey().equals(aimedAt);
+            // Under a finger, a point must be wide enough to show round it.
+            float radius = dp(aimed ? 16 : place.getKey().equals(focus) ? 8 : 6);
+            dot.setStyle(android.graphics.Paint.Style.FILL);
+            dot.setColor(tint(place.getKey())); dot.setAlpha(aimed ? 120 : 255);
+            canvas.drawCircle(at[0], at[1], radius, dot);
+            dot.setStyle(android.graphics.Paint.Style.STROKE); dot.setStrokeWidth(dp(2));
+            dot.setColor(Color.WHITE);
+            canvas.drawCircle(at[0], at[1], radius, dot);
+        }
+    }
+    /** The places of the note, with the one being aimed or carried following the finger. */
+    private java.util.Map<String,double[]> shownPlaces() {
+        if (aim == null) return places;
+        java.util.Map<String,double[]> shown = new java.util.HashMap<>(places);
+        shown.put(aimedAt, aim);
+        return shown;
+    }
+    private int tint(String id) {
+        Integer tint = tints.get(id);
+        return tint == null ? Color.WHITE : tint;
+    }
+    private float[] onGrass(double[] point) {
+        return new float[]{yielded + (float)point[0] * (getWidth() - 2 * yielded), (float)point[1] * getHeight()};
+    }
+    /** Where a player's shirt is drawn right now, on the grass or on his bench; null if nowhere. */
+    private float[] shirtCentre(String id) {
+        for (int i = 0; i < roster.size(); i++) {
+            if (!id.equals(roster.get(i).optString("id"))) continue;
+            LinearLayout marker = markers.get(i);
+            if (marker.getVisibility() != VISIBLE) return null;
+            android.view.View shirt = marker.getChildAt(0);
+            return new float[]{marker.getLeft() + shirt.getLeft() + shirt.getWidth() / 2f,
+                marker.getTop() + shirt.getTop() + shirt.getHeight() / 2f};
+        }
+        return null;
     }
 }

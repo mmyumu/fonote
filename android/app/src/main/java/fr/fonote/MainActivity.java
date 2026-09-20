@@ -70,7 +70,9 @@ public class MainActivity extends Activity {
     private JSONObject match;
     private JSONObject demoMatch;
     private final List<JSONObject> demoMatches = new ArrayList<>();
-    private LinearLayout root, composer, factsPage, statsPage, notesPage, tallyPage;
+    private LinearLayout root, composer, factsPage, statsPage, notesPage, tallyPage, heatPage;
+    /** The player the heatmap shows, kept while the card is redrawn around him. */
+    private String heatPlayer = "";
     private Pager pager;
     /**
      * The match cards, from left to right, with the pitch in the middle: what the provider
@@ -78,7 +80,7 @@ public class MainActivity extends Activity {
      * centre, and neither direction costs a button.
      */
     private static final int CARD_STATS = 0, CARD_FACTS = 1, CARD_PITCH = 2,
-                             CARD_NOTES = 3, CARD_TALLY = 4, CARDS = 5;
+                             CARD_NOTES = 3, CARD_TALLY = 4, CARD_HEAT = 5, CARDS = 6;
     /** Where each card landed in the pager, or -1 when this match does not carry it. */
     private final int[] cardPlace = new int[CARDS];
     /** Which card occupies each page of the pager, the other way round. */
@@ -126,9 +128,9 @@ public class MainActivity extends Activity {
      * press — the common gesture costs one tap, and the palette stays about one screen wide.
      */
     private static final String[][] SUCCEEDED = {{"positive"}, {"goal"}, {"pass", "assist"},
-        {"dribble"}, {"shot_on"}, {"defense", "tackle", "interception"}};
+        {"dribble"}, {"shot_on", "header_on"}, {"duel_won"}, {"defense", "tackle", "interception"}};
     private static final String[][] FAILED = {{"negative"}, {"own_goal"}, {"pass_missed"},
-        {"dribble_lost"}, {"shot_off"}, {"duel_lost"}, {"lost_ball"}, {"yellow"}, {"red"}};
+        {"dribble_lost"}, {"shot_off", "header_off"}, {"duel_lost"}, {"lost_ball"}, {"yellow"}, {"red"}};
     /**
      * The goalkeeper's own column, success above failure, in no one else's palette. The catch-all
      * pair keeps the head of the row whoever the player is; his column comes right after it.
@@ -137,6 +139,13 @@ public class MainActivity extends Activity {
 
     /** The note being composed: every player involved, each with its own action. */
     private final LinkedHashMap<String,String> entries = new LinkedHashMap<>();
+    /**
+     * Where on the pitch a player of the note did what he did, on the board's frame. Optional,
+     * and written with his action, so a player still waiting for one keeps his spot unwritten.
+     */
+    private final Map<String,double[]> places = new HashMap<>();
+    /** True while the pitch waits for the spot of the player in focus. */
+    private boolean placing;
     /** Note currently open, new or reopened to be extended; "" when nothing is open. */
     private String noteId = "";
     /** Player the palette qualifies; "" while the note waits for one. */
@@ -293,6 +302,8 @@ public class MainActivity extends Activity {
         action("pass", "↗", "Bonne passe", "Passe", 1);
         action("dribble", "↝", "Dribble réussi", "Dribble", 1);
         action("shot_on", "◎", "Tir cadré", "Tir", 1);
+        action("header_on", "◉", "Tête cadrée", "Tête", 1);
+        action("duel_won", "⚔", "Duel gagné", "Duel", 1);
         action("defense", "◇", "Geste défensif", "Défense", 1);
         action("tackle", "◆", "Tacle", "Tacle", 1);
         action("interception", "◈", "Interception", "Intercept.", 1);
@@ -304,7 +315,8 @@ public class MainActivity extends Activity {
         action("pass_missed", "↘", "Passe ratée", "Passe R", -1);
         action("dribble_lost", "⤫", "Dribble raté", "Dribble R", -1);
         action("shot_off", "○", "Tir manqué", "Tir M", -1);
-        action("duel_lost", "✕", "Duel perdu", "Duel", -1);
+        action("header_off", "◌", "Tête manquée", "Tête M", -1);
+        action("duel_lost", "✕", "Duel perdu", "Duel P", -1);
         action("save_missed", "⚑", "Arrêt raté", "Arrêt R", -2);
         action("keeper_exit_missed", "⇣", "Sortie ratée", "Sortie R", -1);
         action("yellow", "▨", "Jaune", "Jaune", -1);
@@ -1184,16 +1196,18 @@ public class MainActivity extends Activity {
             try (java.io.InputStream input = getAssets().open("match.json")) {
                 JSONObject original = new JSONObject(readText(input)); known.put(original.optString("id"), original);
             }
+            // Notes naming a match nothing on this device describes any more, and which no
+            // identifier lets us fetch either: the card would say « Domicile / Extérieur » and
+            // open on an empty pitch. A dead end is worse than an absence, so the list drops it.
+            // Nothing is deleted: the notes stay in the log and come back with their match.
+            byMatch.keySet().removeIf(id -> !known.containsKey(id) && !id.startsWith(REMOTE));
             int shown = 0;
             for (Map.Entry<String, List<JSONObject>> item : byMatch.entrySet()) {
                 String id = item.getKey(); JSONObject fixture = known.get(id);
-                if (fixture == null) {
-                    if (id.startsWith(REMOTE)) fixture = new JSONObject().put("id", Integer.parseInt(id.substring(REMOTE.length())))
-                        .put("homeTeam", new JSONObject().put("name", "Match " + id))
-                        .put("awayTeam", new JSONObject().put("name", "Détails non téléchargés"))
-                        .put("competition", new JSONObject());
-                    else fixture = goneMatch(id);
-                }
+                if (fixture == null) fixture = new JSONObject().put("id", Integer.parseInt(id.substring(REMOTE.length())))
+                    .put("homeTeam", new JSONObject().put("name", "Match " + id))
+                    .put("awayTeam", new JSONObject().put("name", "Détails non téléchargés"))
+                    .put("competition", new JSONObject());
                 boolean found = FixtureSelection.matches(fixture, annotatedSearch);
                 for (JSONObject note : item.getValue())
                     found |= FixtureSelection.contains(note.optString("comment"), annotatedSearch);
@@ -1204,21 +1218,6 @@ public class MainActivity extends Activity {
             if (shown == 0) label(byMatch.isEmpty() ? "Les matchs où vous prenez des notes apparaîtront ici, même une fois terminés."
                 : "Aucun match annoté ne correspond à cette recherche.");
         } catch (Exception error) { error(error); }
-    }
-
-    /**
-     * A match the notes name but nothing on this device describes: in practice one numbered
-     * 'fd-', whose details left with the feed that served them. Its notes did not, so it keeps
-     * a card that says what it is and opens on them without fetching anything. Built like any
-     * match without a composition, so that the sheet finds two sides to name, not question
-     * marks for clubs under a demo label.
-     */
-    private JSONObject goneMatch(String id) throws Exception {
-        JSONObject gone = convertMatch(new JSONObject().put("id", 0)
-            .put("homeTeam", new JSONObject().put("name", "Domicile"))
-            .put("awayTeam", new JSONObject().put("name", "Extérieur"))
-            .put("competition", new JSONObject().put("name", "détails perdus")));
-        return gone.put("id", id).put("stage", "Match d’avant ESPN").put("demo_status", "ARCHIVE");
     }
 
     private void profile() { profile(this::showHome); }
@@ -1439,13 +1438,26 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Which competitions a calendar is asked over, and which clubs it must not lose.
+     *
+     * <p>A club is followed for its league and meets others in a cup. This device does not know
+     * which competitions that makes — the server does, from the calendars it has imported — so
+     * the clubs travel with the request and the server widens the reading to them. Following no
+     * competition asks for the whole catalogue, as before.
+     */
     private String footballCompetitionQuery() {
         Set<String> followed = prefs.getStringSet("follow_competitions", Collections.emptySet());
-        if (followed.isEmpty() || !prefs.getStringSet("follow_teams", Collections.emptySet()).isEmpty()) return "";
+        if (followed.isEmpty()) return "";
         List<String> codes = new ArrayList<>();
         JSONArray items = footballCatalogue().optJSONArray("competitions");
         if (items != null) for (int i = 0; i < items.length(); i++) { JSONObject c = items.optJSONObject(i); if (c != null && followed.contains(c.optString("id"))) codes.add(c.optString("code")); }
-        return codes.isEmpty() ? "" : "&competitions=" + android.net.Uri.encode(android.text.TextUtils.join(",", codes));
+        if (codes.isEmpty()) return "";
+        String query = "&competitions=" + android.net.Uri.encode(android.text.TextUtils.join(",", codes));
+        List<String> clubs = new ArrayList<>(prefs.getStringSet("follow_teams", Collections.emptySet()));
+        Collections.sort(clubs);
+        return clubs.isEmpty() ? query
+            : query + "&teams=" + android.net.Uri.encode(android.text.TextUtils.join(",", clubs));
     }
 
     private final int[] fixturesRequests = new int[2];
@@ -1998,9 +2010,36 @@ public class MainActivity extends Activity {
         root.addView(box, new LinearLayout.LayoutParams(-1, -2));
     }
 
-    /** The home screen without its fixtures: drawn once on entry, redrawn when they arrive. */
+    /**
+     * The home page, written again. Only the page inside the scroll is thrown away: the scroll
+     * itself, the name it is headed by and the loading row above it are drawn once, when the
+     * card is new, and kept. A feed redrawn every two seconds while the server is still
+     * gathering would otherwise hand the reader a brand new scroll each time, and a new scroll
+     * starts at the top — the page would climb back up under the finger. The search card
+     * already refreshes its results this way.
+     */
     private void showHomeShell() {
         screen = "home";
+        if (homeCard.getChildCount() == 0) buildHomeChrome();
+        else {
+            pageBack = this::showHome;
+            root = homeRoot;
+            // Emptied and filled again in the same pass: the scroll is measured once, at the end,
+            // and settles back where it was unless what is left is too short to hold it.
+            root.removeAllViews();
+        }
+        TextView intro = label("Les matchs que vous suivez, prêts à être notés.");
+        intro.setTextColor(skin.muted); intro.setTextSize(14); intro.setPadding(0, 0, 0, 0);
+        releaseSlot = strip();
+        LinearLayout.LayoutParams slot = new LinearLayout.LayoutParams(-1, -2); slot.topMargin = dp(10);
+        root.addView(releaseSlot, slot);
+        renderRelease();
+        homeFollows();
+        section("Aujourd’hui", "Calendrier ›", () -> calendar(LocalDate.now()));
+    }
+
+    /** The parts of home that outlive a refresh, laid out when the card is new. */
+    private void buildHomeChrome() {
         // Settings are not content: they belong in the bar as icons, not in the middle of the page.
         LinearLayout bar = page(null, null, HOME);
         // The title and the loading row stay fixed; only the content belongs to the gesture.
@@ -2020,14 +2059,6 @@ public class MainActivity extends Activity {
         homeCard.addView(layout);
         bar.addView(barAction(R.drawable.ic_star, "Mes suivis", this::profile), barSize(8));
         bar.addView(barAction(R.drawable.ic_settings, "Options", this::options), barSize(8));
-        TextView intro = label("Les matchs que vous suivez, prêts à être notés.");
-        intro.setTextColor(skin.muted); intro.setTextSize(14); intro.setPadding(0, 0, 0, 0);
-        releaseSlot = strip();
-        LinearLayout.LayoutParams slot = new LinearLayout.LayoutParams(-1, -2); slot.topMargin = dp(10);
-        root.addView(releaseSlot, slot);
-        renderRelease();
-        homeFollows();
-        section("Aujourd’hui", "Calendrier ›", () -> calendar(LocalDate.now()));
     }
 
     /**
@@ -2696,7 +2727,7 @@ public class MainActivity extends Activity {
     }
 
     private void openMatch() {
-        noteId = ""; focus = ""; entries.clear(); written = false;
+        noteId = ""; focus = ""; entries.clear(); places.clear(); written = false; placing = false;
         // A match opens on its pitch: the card left last belonged to the previous one.
         shownCard = CARD_PITCH;
         // And with no path to redo: that one led to notes nobody is looking at any more.
@@ -2897,17 +2928,18 @@ public class MainActivity extends Activity {
 
     private void showMatch() {
         screen = "match";
-        // Five cards laid side by side, with the pitch in the middle. The provider's facts and
-        // figures are on the left, my notes and my summary on the right: each direction says
-        // what it brings back, and none of it is hidden behind a menu any more.
+        // Six cards laid side by side, with the pitch near the middle. The provider's facts and
+        // figures are on the left, my notes, my summary and where it all happened on the right:
+        // each direction says what it brings back, and none of it is hidden behind a menu any more.
         pager = new Pager(this);
-        factsPage = statsPage = notesPage = tallyPage = null;
+        factsPage = statsPage = notesPage = tallyPage = heatPage = null;
         java.util.Arrays.fill(cardPlace, -1);
         if (counted()) statsPage = matchCard(CARD_STATS);
         if (told()) factsPage = matchCard(CARD_FACTS);
         LinearLayout pitchCard = matchCard(CARD_PITCH);
         notesPage = matchCard(CARD_NOTES);
         tallyPage = matchCard(CARD_TALLY);
+        heatPage = matchCard(CARD_HEAT);
         LinearLayout screenRoot = new LinearLayout(this);
         screenRoot.setOrientation(LinearLayout.VERTICAL);
         screenRoot.setBackgroundColor(ground());
@@ -2941,6 +2973,7 @@ public class MainActivity extends Activity {
         pitch = new PitchView(this, match, glassMarkers(), Skin.onGrass(skin.ring),
             Skin.onGrass(skin.ringEnd), skin.lawn, skin.lawnEnd, minute, this::tapPlayer, this::pullPlayer);
         pitch.setMinimumHeight(dp(300));
+        pitch.moving(this::movePlace);
         LinearLayout.LayoutParams pitchSize = new LinearLayout.LayoutParams(-1, 0, 1);
         pitchSize.topMargin = dp(8); pitchSize.bottomMargin = dp(8);
         root.addView(pitch, pitchSize);
@@ -2954,7 +2987,7 @@ public class MainActivity extends Activity {
         root.addView(composer, new LinearLayout.LayoutParams(-1, dp(COMPOSER)));
         if (factsPage != null) renderFacts();
         if (statsPage != null) renderStats();
-        renderNotes(); renderTally();
+        renderNotes(); renderTally(); renderHeat();
         pager.onTurn(this::turnCard);
         pager.show(cardPlace[shownCard] < 0 ? cardPlace[CARD_PITCH] : cardPlace[shownCard], false);
         updateClock(); renderComposer();
@@ -3033,6 +3066,7 @@ public class MainActivity extends Activity {
         // arrival rather than on every tap on the pitch.
         if (shownCard == CARD_NOTES) renderNotes();
         else if (shownCard == CARD_TALLY) renderTally();
+        else if (shownCard == CARD_HEAT) renderHeat();
     }
 
     /** Whether the provider gave any account of this match to put on the second card. */
@@ -3249,7 +3283,7 @@ public class MainActivity extends Activity {
     private void tapPlayer(String id) {
         if (!noteId.isEmpty() && naming) { mention(id); return; }
         if (noteId.isEmpty()) {
-            noteId = UUID.randomUUID().toString(); entries.clear();
+            noteId = UUID.randomUUID().toString(); entries.clear(); places.clear();
             draft = ""; draftWritten = ""; written = false;
             updateClock(); noteMinute = minute;
         }
@@ -3261,7 +3295,7 @@ public class MainActivity extends Activity {
         if (noteId.isEmpty() || !entries.containsKey(id)) return;
         // A written note is written when it is finished, so taking someone out writes nothing yet.
         if (naming) { mention(id); return; }
-        entries.remove(id);
+        entries.remove(id); places.remove(id);
         if (id.equals(focus)) focus = entries.isEmpty() ? "" : last(entries.keySet());
         pitch.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
         // With nobody left and nothing written or drawn, there is no note left either; a comment
@@ -3329,7 +3363,7 @@ public class MainActivity extends Activity {
      * is finished, since here the text is the note and it is typed last.
      */
     private void openWrittenNote(int at) {
-        noteId = UUID.randomUUID().toString(); entries.clear(); focus = "";
+        noteId = UUID.randomUUID().toString(); entries.clear(); places.clear(); focus = "";
         draft = ""; draftWritten = ""; entriesWritten = ""; written = false;
         noteMinute = at; naming = true; noteTeam = "";
         renderComposer();
@@ -3370,8 +3404,8 @@ public class MainActivity extends Activity {
         closeNote();
     }
     private void closeNote() {
-        noteId = ""; entries.clear(); focus = ""; draft = ""; draftWritten = ""; written = false;
-        tacticTime = 0; noteTeam = ""; naming = false;
+        noteId = ""; entries.clear(); places.clear(); focus = ""; draft = ""; draftWritten = ""; written = false;
+        tacticTime = 0; noteTeam = ""; naming = false; placing = false;
         diagram = null; entriesWritten = ""; diagramWritten = ""; tacticBase = null;
         renderComposer();
     }
@@ -3525,6 +3559,8 @@ public class MainActivity extends Activity {
         if (composer == null || !"match".equals(screen)) return;
         composer.removeAllViews();
         boolean open = !noteId.isEmpty(), named = open && naming;
+        // A spot belongs to an action: a player still waiting for his has nowhere to have been yet.
+        placing = placing && open && !named && !entries.getOrDefault(focus, "").isEmpty();
         if (named) renderWrittenDraft(); else if (open) renderDraft(); else renderIdle();
         renderClubs();
         Map<String,String> marks = new HashMap<>();
@@ -3546,7 +3582,13 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception e) { error(e); }
         }
+        Map<String,double[]> spots = new HashMap<>();
+        if (open && !named)
+            for (Map.Entry<String,double[]> place : places.entrySet())
+                if (!entries.getOrDefault(place.getKey(), "").isEmpty()) spots.put(place.getKey(), place.getValue());
+        pitch.setPlaces(spots);
         pitch.setMarks(marks, tints, focus, open);
+        pitch.placing(placing ? this::place : null);
     }
     /**
      * At rest the panel must answer one question: how do I write a note? The pitch is the
@@ -3632,32 +3674,26 @@ public class MainActivity extends Activity {
         }
         for (Map.Entry<String,String> entry : entries.entrySet()) addChip(chipRow, entry.getKey(), entry.getValue());
         line.addView(chips, new LinearLayout.LayoutParams(0, dp(44), 1));
+        // The minute opens the line and the spot closes it: when, then where. The spot is the
+        // player in focus's own, like the palette's action.
+        boolean ready = !entries.getOrDefault(focus, "").isEmpty(), placed = places.containsKey(focus);
+        Button where = button("📍", this::togglePlacing);
+        where.setTextSize(15); where.setMinHeight(0); where.setMinWidth(0); where.setMinimumWidth(0);
+        where.setPadding(0, 0, 0, 0);
+        if (placing) where.setBackground(tappable(leading(skin.control)));
+        else if (placed) {
+            GradientDrawable carries = rounded(skin.chip, skin.control); carries.setStroke(dp(1), skin.accent);
+            where.setBackground(carries);
+        }
+        where.setAlpha(ready ? 1f : .35f);
+        where.setContentDescription(!ready ? "Endroit de l’action, une fois l’action choisie"
+            : placing ? "Ne plus chercher l’endroit" : placed ? "Endroit indiqué, toucher pour le changer"
+            : "Indiquer où l’action a eu lieu");
+        LinearLayout.LayoutParams whereSize = new LinearLayout.LayoutParams(dp(44), dp(44));
+        whereSize.leftMargin = dp(6); line.addView(where, whereSize);
         composer.addView(line, new LinearLayout.LayoutParams(-1, dp(44)));
 
-        HorizontalScrollView palette = sideways();
-        LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
-        palette.addView(rows);
-        String current = entries.containsKey(focus) ? entries.get(focus) : "";
-        List<String[]> succeeded = new ArrayList<>(Arrays.asList(SUCCEEDED));
-        List<String[]> failed = new ArrayList<>(Arrays.asList(FAILED));
-        if (keeper(focus)) { succeeded.add(1, KEEPING[0]); failed.add(1, KEEPING[1]); }
-        int columns = Math.max(succeeded.size(), failed.size());
-        for (List<String[]> side : Arrays.asList(succeeded, failed)) {
-            LinearLayout row = strip();
-            for (int i = 0; i < columns; i++) {
-                LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(56), dp(46));
-                p.rightMargin = dp(5); p.bottomMargin = side == succeeded ? dp(4) : 0;
-                if (i >= side.size()) { row.addView(new View(this), p); continue; }
-                String[] keys = side.get(i);
-                Button cell = keys.length == 1 ? cell(keys[0], keys[0].equals(current)) : familyCell(keys, current);
-                // Nothing to qualify yet: dimmed reads as "not yet", where live-but-inert reads as broken.
-                cell.setAlpha(entries.containsKey(focus) ? 1f : .35f);
-                row.addView(cell, p);
-            }
-            rows.addView(row);
-        }
-        LinearLayout.LayoutParams paletteSize = new LinearLayout.LayoutParams(-1, dp(96));
-        paletteSize.topMargin = dp(6); composer.addView(palette, paletteSize);
+        if (placing) renderPlacing(placed); else renderPalette();
 
         LinearLayout footer = strip();
         Button note = button("💬", this::editDraft);
@@ -3685,6 +3721,80 @@ public class MainActivity extends Activity {
         footer.addView(done, new LinearLayout.LayoutParams(0, dp(46), 1));
         LinearLayout.LayoutParams footerSize = new LinearLayout.LayoutParams(-1, dp(46));
         footerSize.topMargin = dp(6); composer.addView(footer, footerSize);
+    }
+    private void renderPalette() {
+        HorizontalScrollView palette = sideways();
+        LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
+        palette.addView(rows);
+        String current = entries.containsKey(focus) ? entries.get(focus) : "";
+        List<String[]> succeeded = new ArrayList<>(Arrays.asList(SUCCEEDED));
+        List<String[]> failed = new ArrayList<>(Arrays.asList(FAILED));
+        if (keeper(focus)) { succeeded.add(1, KEEPING[0]); failed.add(1, KEEPING[1]); }
+        int columns = Math.max(succeeded.size(), failed.size());
+        for (List<String[]> side : Arrays.asList(succeeded, failed)) {
+            LinearLayout row = strip();
+            for (int i = 0; i < columns; i++) {
+                LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(56), dp(46));
+                p.rightMargin = dp(5); p.bottomMargin = side == succeeded ? dp(4) : 0;
+                if (i >= side.size()) { row.addView(new View(this), p); continue; }
+                String[] keys = side.get(i);
+                Button cell = keys.length == 1 ? cell(keys[0], keys[0].equals(current)) : familyCell(keys, current);
+                // Nothing to qualify yet: dimmed reads as "not yet", where live-but-inert reads as broken.
+                cell.setAlpha(entries.containsKey(focus) ? 1f : .35f);
+                row.addView(cell, p);
+            }
+            rows.addView(row);
+        }
+        LinearLayout.LayoutParams paletteSize = new LinearLayout.LayoutParams(-1, dp(96));
+        paletteSize.topMargin = dp(6); composer.addView(palette, paletteSize);
+    }
+    /**
+     * The palette's place while the pitch waits for a spot. The palette steps aside rather than
+     * staying live: a cell touched now would change the action of a player whose spot is being
+     * given. What stays is the way out, and the way to take a spot back.
+     */
+    private void renderPlacing(boolean placed) {
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
+        TextView hint = new TextView(this);
+        hint.setText("↑  Touche le terrain là où " + shortName(focus) + " a fait son action");
+        hint.setTextSize(14); hint.setTextColor(skin.ink);
+        hint.setMaxLines(2); hint.setEllipsize(TextUtils.TruncateAt.END);
+        box.addView(hint, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout choices = strip();
+        if (placed) {
+            Button none = button("Sans endroit", this::unplace);
+            none.setContentDescription("Retirer l’endroit de l’action de " + shortName(focus));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1);
+            p.rightMargin = dp(6); choices.addView(none, p);
+        }
+        Button back = button("Annuler", this::togglePlacing);
+        back.setContentDescription("Ne plus chercher l’endroit");
+        choices.addView(back, new LinearLayout.LayoutParams(0, dp(44), 1));
+        box.addView(choices, new LinearLayout.LayoutParams(-1, dp(44)));
+        LinearLayout.LayoutParams boxSize = new LinearLayout.LayoutParams(-1, dp(96));
+        boxSize.topMargin = dp(6); composer.addView(box, boxSize);
+    }
+    private void togglePlacing() {
+        if (entries.getOrDefault(focus, "").isEmpty()) return;
+        placing = !placing; renderComposer();
+    }
+    /** The spot the pitch was touched at, written with the action it belongs to. */
+    private void place(double[] at) {
+        if (entries.getOrDefault(focus, "").isEmpty()) return;
+        places.put(focus, at); placing = false;
+        if (writeNote()) pitch.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        renderComposer();
+    }
+    /** A spot dragged to where it belongs: written as it lands, like the first one was. */
+    private void movePlace(String id, double[] at) {
+        if (entries.getOrDefault(id, "").isEmpty()) return;
+        places.put(id, at);
+        if (writeNote()) pitch.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        renderComposer();
+    }
+    private void unplace() {
+        places.remove(focus); placing = false;
+        writeNote(); renderComposer();
     }
     /** An outlined control: present, reachable, and visibly not the main road. */
     private Button ghost(String text, String described, Runnable action) {
@@ -3909,7 +4019,7 @@ public class MainActivity extends Activity {
     private void openTactic() {
         if (noteId.isEmpty()) {
             updateClock();
-            noteId = UUID.randomUUID().toString(); entries.clear();
+            noteId = UUID.randomUUID().toString(); entries.clear(); places.clear();
             draft = ""; draftWritten = ""; entriesWritten = ""; written = false;
             noteMinute = minute; tacticBase = null;
         }
@@ -4966,16 +5076,23 @@ public class MainActivity extends Activity {
         JSONArray list = new JSONArray();
         for (Map.Entry<String,String> entry : entries.entrySet()) {
             if (entry.getValue().isEmpty()) continue;
-            try { list.put(new JSONObject().put("player_id", entry.getKey()).put("action", entry.getValue())); }
-            catch (org.json.JSONException ignored) { }
+            try {
+                JSONObject written = new JSONObject().put("player_id", entry.getKey()).put("action", entry.getValue());
+                double[] place = places.get(entry.getKey());
+                if (place != null) written.put("x", place[0]).put("y", place[1]);
+                list.put(written);
+            } catch (org.json.JSONException ignored) { }
         }
         return list;
     }
     private void loadEntries(JSONArray list) {
-        entries.clear();
+        entries.clear(); places.clear();
         for (int i = 0; i < list.length(); i++) {
             JSONObject entry = list.optJSONObject(i);
-            if (entry != null) entries.put(entry.optString("player_id"), entry.optString("action"));
+            if (entry == null) continue;
+            entries.put(entry.optString("player_id"), entry.optString("action"));
+            if (entry.has("x") && entry.has("y"))
+                places.put(entry.optString("player_id"), new double[]{entry.optDouble("x"), entry.optDouble("y")});
         }
     }
     // ——— Reading notes ———
@@ -5322,6 +5439,131 @@ public class MainActivity extends Activity {
         } catch (Exception e) { error(e); }
         finally { root = previous; }
     }
+
+    /**
+     * Where my notes happened, one player at a time: the card after the bilan, which says how much
+     * — this one says where. A quick note gives its 📍, a tactical note the player's place on its
+     * board; an action said neither way has no spot, and is only counted below the map. A board
+     * also shows passes and tackles nobody gave as actions: they are read here, and here only —
+     * the bilan keeps to what was written.
+     *
+     * <p>One player at a time on a map the width of the card, rather than a small map per player:
+     * a handful of patches on a thumbnail tells nothing about which third they sit in.
+     */
+    private void renderHeat() {
+        if (heatPage == null) return;
+        LinearLayout previous = root;
+        root = heatPage; heatPage.removeAllViews();
+        try {
+            cardTitle("Heatmap de mes notes");
+            TextView caveat = label("Où ont eu lieu les actions notées : l’endroit donné avec 📍, ou "
+                + "la place du joueur sur le schéma d’une note tactique. Un schéma compte aussi ses "
+                + "passes et ses tacles, sans les ajouter au bilan.");
+            caveat.setTextSize(12); caveat.setTextColor(skin.muted);
+            Map<String,String> sides = new HashMap<>();
+            JSONArray players = match.optJSONArray("players");
+            for (int i = 0; players != null && i < players.length(); i++)
+                sides.put(players.optJSONObject(i).optString("id"), players.optJSONObject(i).optString("team"));
+            List<JSONObject> notes = notes();
+            List<Heat.Spot> spots = new ArrayList<>();
+            // What each player was given, and how much of it found a spot: the rest is said below the map.
+            Map<String,Integer> noted = new LinkedHashMap<>(), placed = new HashMap<>();
+            for (JSONObject note : notes) {
+                JSONArray list = entriesOf(note);
+                for (int i = 0; i < list.length(); i++)
+                    if (actions.containsKey(list.optJSONObject(i).optString("action")))
+                        noted.merge(list.optJSONObject(i).optString("player_id"), 1, Integer::sum);
+                for (Heat.Spot spot : Heat.of(list, note.optJSONObject("schema"), sides)) {
+                    if (!actions.containsKey(spot.action)) continue;
+                    spots.add(spot);
+                    if (spot.source != Heat.Source.DRAWN) placed.merge(spot.playerId, 1, Integer::sum);
+                }
+            }
+            List<String> located = Heat.players(spots);
+            if (located.isEmpty()) {
+                TextView none = label(notes.isEmpty() ? "Aucune note pour l’instant."
+                    : "Aucune action située pour l’instant. Dans une note rapide, le 📍 dit où ; "
+                    + "une note tactique le montre par la place du joueur sur le schéma.");
+                none.setTextColor(skin.muted);
+                return;
+            }
+            if (!located.contains(heatPlayer)) heatPlayer = located.get(0);
+            // The chips, the head line and the map change in place: redrawing the card would bring
+            // the row back to its start, away from the player just touched at its far end.
+            HorizontalScrollView chips = sideways();
+            LinearLayout row = strip(); chips.addView(row);
+            LinearLayout.LayoutParams chipsSize = new LinearLayout.LayoutParams(-1, dp(44));
+            chipsSize.topMargin = dp(4);
+            root.addView(chips, chipsSize);
+            TextView who = label("");
+            who.setTextSize(15); who.setLineSpacing(dp(4), 1);
+            HeatView map = new HeatView(this, skin.lawn, skin.lawnEnd);
+            root.addView(map, new LinearLayout.LayoutParams(-1, -2));
+            String legend = "Réussi     Raté     ·     ● donné avec 📍     ○ lu sur un schéma";
+            SpannableString key = new SpannableString(legend);
+            key.setSpan(new ForegroundColorSpan(skin.good), 0, 6, 0);
+            key.setSpan(new ForegroundColorSpan(skin.bad), 11, 15, 0);
+            TextView keyLine = label(""); keyLine.setText(key);
+            keyLine.setTextSize(12); keyLine.setTextColor(skin.muted);
+            TextView unplacedLine = label("");
+            unplacedLine.setTextSize(12); unplacedLine.setTextColor(skin.muted);
+            List<Button> buttons = new ArrayList<>();
+            Runnable[] pick = new Runnable[1];
+            for (String id : located) {
+                Button chip = button(shortName(id), () -> { heatPlayer = id; pick[0].run(); });
+                chip.setTextSize(13); chip.setMinHeight(0); chip.setMinWidth(0); chip.setMinimumWidth(0);
+                chip.setPadding(dp(12), 0, dp(12), 0);
+                chip.setTag(id);
+                LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(44));
+                p.rightMargin = dp(6); row.addView(chip, p);
+                buttons.add(chip);
+            }
+            pick[0] = () -> {
+                for (Button chip : buttons) {
+                    boolean chosen = heatPlayer.equals(chip.getTag());
+                    if (chosen) accent(chip);
+                    else { chip.setBackground(tappable(control(skin.chip, skin.control))); chip.setTextColor(skin.ink); }
+                    chip.setContentDescription("Heatmap de " + shortName((String)chip.getTag())
+                        + (chosen ? ", affichée" : ""));
+                }
+                List<Heat.Spot> mine = new ArrayList<>();
+                int up = 0, down = 0;
+                for (Heat.Spot spot : spots) {
+                    if (!spot.playerId.equals(heatPlayer)) continue;
+                    mine.add(spot);
+                    if (good(spot.action)) up++; else down++;
+                }
+                JSONObject player = playerById(heatPlayer);
+                // The frame is the pitch's: home attacks downwards, whatever the half.
+                String way = player == null ? "" : "home".equals(player.optString("team"))
+                    ? "   ·   attaque vers le bas" : "   ·   attaque vers le haut";
+                String head = playerName(heatPlayer);
+                String line = mine.size() + (mine.size() > 1 ? " actions situées" : " action située")
+                    + "   ·   " + up + " ↑   " + down + " ↓" + way;
+                SpannableString text = new SpannableString(head + "\n" + line);
+                text.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 0, head.length(), 0);
+                text.setSpan(new ForegroundColorSpan(skin.muted), head.length() + 1, text.length(), 0);
+                who.setText(text);
+                map.show(mine, this::good);
+                map.setContentDescription("Heatmap de " + shortName(heatPlayer) + " : "
+                    + up + (up > 1 ? " actions réussies, " : " action réussie, ")
+                    + down + (down > 1 ? " ratées" : " ratée"));
+                int unplaced = noted.getOrDefault(heatPlayer, 0) - placed.getOrDefault(heatPlayer, 0);
+                unplacedLine.setText(unplaced + (unplaced > 1 ? " autres actions notées sans endroit"
+                    : " autre action notée sans endroit"));
+                unplacedLine.setVisibility(unplaced > 0 ? View.VISIBLE : View.GONE);
+            };
+            pick[0].run();
+            int silent = 0;
+            for (String id : noted.keySet()) if (!located.contains(id)) silent++;
+            if (silent > 0) {
+                TextView rest = label(silent + (silent > 1 ? " joueurs notés, aucun endroit connu"
+                    : " joueur noté, aucun endroit connu"));
+                rest.setTextSize(12); rest.setTextColor(skin.muted);
+            }
+        } catch (Exception e) { error(e); }
+        finally { root = previous; }
+    }
     private void card(CharSequence text, int accentColour) {
         TextView view = new TextView(this); view.setText(text); view.setTextSize(13);
         view.setTextColor(skin.ink); view.setLineSpacing(dp(4), 1);
@@ -5371,9 +5613,9 @@ public class MainActivity extends Activity {
             // No message: the note disappears or comes back in plain sight, and a toast repeating
             // it would hide the bottom of the panel for as long as it takes to read.
             if (noteId.isEmpty()) renderComposer(); else closeNote();
-            // The two cards on the right hold the undone log: they cannot stay on the previous
+            // The cards on the right hold the undone log: they cannot stay on the previous
             // version.
-            renderNotes(); renderTally();
+            renderNotes(); renderTally(); renderHeat();
         } catch (Exception e) { error(e); }
     }
 
@@ -5389,7 +5631,7 @@ public class MainActivity extends Activity {
             // the round trips made in the meantime.
             undone = store.operations(false).length() - 1 - step.end;
             if (noteId.isEmpty()) renderComposer(); else closeNote();
-            renderNotes(); renderTally();
+            renderNotes(); renderTally(); renderHeat();
         } catch (Exception e) { error(e); }
     }
 
@@ -5628,7 +5870,7 @@ public class MainActivity extends Activity {
             .setNegativeButton("Annuler", null).setPositiveButton("Supprimer", (d,w) -> {
                 try {
                     record(operation("delete", note.getString("note_id"))); toast("Note supprimée");
-                    renderNotes(); renderTally(); renderComposer();
+                    renderNotes(); renderTally(); renderHeat(); renderComposer();
                 }
                 catch (Exception e) { error(e); }
             }).show();

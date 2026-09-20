@@ -28,10 +28,10 @@ else:
 DEMO = Path(__file__).resolve().parents[1] / 'android/app/src/main/assets/match.json'
 # Each action carries its own polarity; the client derives colour and balance from it,
 # so 'positive' and 'negative' are the catch-all members of each side, not the axis itself.
-ACTIONS = {'positive', 'goal', 'assist', 'pass', 'dribble', 'shot_on', 'defense', 'tackle',
-           'interception', 'save', 'keeper_exit', 'negative', 'own_goal', 'lost_ball',
-           'pass_missed', 'dribble_lost', 'shot_off', 'duel_lost', 'save_missed',
-           'keeper_exit_missed', 'yellow', 'red'}
+ACTIONS = {'positive', 'goal', 'assist', 'pass', 'dribble', 'shot_on', 'header_on', 'duel_won',
+           'defense', 'tackle', 'interception', 'save', 'keeper_exit', 'negative', 'own_goal',
+           'lost_ball', 'pass_missed', 'dribble_lost', 'shot_off', 'header_off', 'duel_lost',
+           'save_missed', 'keeper_exit_missed', 'yellow', 'red'}
 # What a stroke on a tactical schema can mean. Meaning is carried by the shape of the line the
 # client draws — solid, dashed, waved, doubled — never by a colour, which already names a team.
 # 'carry' is no longer written: a run made by the player holding the ball is drawn waved, read
@@ -182,8 +182,14 @@ def validate(op):
         for entry in entries:
             if not isinstance(entry, dict) or not {'player_id', 'action'} <= set(entry):
                 raise ValueError('Participant invalide')
-            if not legacy and set(entry) != {'player_id', 'action'}:
+            # Where on the pitch the action took place, if the note says: a point on the board's
+            # own frame, both coordinates or neither.
+            placed = {'x', 'y'} <= set(entry)
+            if not legacy and set(entry) != {'player_id', 'action'} | ({'x', 'y'} if placed else set()):
                 raise ValueError('Participant invalide')
+            if not legacy and placed:
+                fraction(entry['x'])
+                fraction(entry['y'])
             player(entry['player_id'])
             if entry['action'] not in ACTIONS:
                 raise ValueError('Action inconnue')

@@ -168,6 +168,10 @@ class ServerTest(unittest.TestCase):
             ('entries', [dict(player_id=PLAYERS[0], action='unknown')]),
             ('entries', [dict(player_id=PLAYERS[0])]),
             ('entries', [dict(player_id=PLAYERS[0], action='goal', extra=1)]),
+            ('entries', [dict(player_id=PLAYERS[0], action='goal', x=.5)]),
+            ('entries', [dict(player_id=PLAYERS[0], action='goal', x=.5, y=1.2)]),
+            ('entries', [dict(player_id=PLAYERS[0], action='goal', x='.5', y=.5)]),
+            ('entries', [dict(player_id=PLAYERS[0], action='goal', x=True, y=.5)]),
             ('entries', [dict(player_id=PLAYERS[0], action='goal')] * 2),
             ('entries', dict(player_id=PLAYERS[0], action='goal')),
             ('player_id', PLAYERS[1]),
@@ -191,11 +195,26 @@ class ServerTest(unittest.TestCase):
         self.request(op)
         self.assertEqual(self.request()[0]['operation'], op)
 
+    def test_note_says_where_each_action_took_place_if_it_wants(self):
+        op = self.note(entries=[dict(player_id=PLAYERS[0], action='pass', x=.25, y=.8),
+                                dict(player_id=PLAYERS[1], action='goal', x=0, y=1),
+                                dict(player_id=PLAYERS[2], action='negative')])
+        self.request(op)
+        self.assertEqual(self.request()[0]['operation'], op)
+
     def test_note_accepts_the_members_of_a_palette_family(self):
         op = self.note(entries=[dict(player_id=PLAYERS[0], action='tackle'),
                                 dict(player_id=PLAYERS[1], action='interception'),
                                 dict(player_id=PLAYERS[2], action='keeper_exit'),
-                                dict(player_id=PLAYERS[3], action='keeper_exit_missed')])
+                                dict(player_id=PLAYERS[3], action='keeper_exit_missed'),
+                                dict(player_id=PLAYERS[4], action='header_on'),
+                                dict(player_id=PLAYERS[5], action='header_off')])
+        self.request(op)
+        self.assertEqual(self.request()[0]['operation'], op)
+
+    def test_a_won_duel_mirrors_a_lost_one(self):
+        op = self.note(entries=[dict(player_id=PLAYERS[0], action='duel_won'),
+                                dict(player_id=PLAYERS[1], action='duel_lost')])
         self.request(op)
         self.assertEqual(self.request()[0]['operation'], op)
 
