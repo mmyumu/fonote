@@ -22,7 +22,11 @@ competitions by international events, European cups and country, with All/Men/Wo
 The curated catalogue has 23 competitions: the previous 13, Europa League, the French and English
 national cups, plus the women's World Cup, Euro, Champions League, French/English/Spanish leagues
 and NWSL. Teams can be loaded by competition rather than depending on previously opened calendars.
-Follows personalise home; they never restrict archive search.
+Follows personalise home; they never restrict archive search. A calendar request carries the
+followed competitions and the followed clubs: the server widens the reading to the competitions
+those clubs play in, which it knows from the calendars already imported and the device does not,
+so a cup night is never lost to a narrowed calendar. A club the server has not seen yet widens
+it to the whole catalogue, as does following no competition at all.
 
 The annotated matches gather the fixtures with at least one non-deleted note, even finished ones,
 including demos and synced notes. Search filters teams, competition, date and note text,
@@ -110,8 +114,12 @@ Season/team catalogues are checked weekly, followed seasons daily, visible perio
 today after five minutes and other active periods after six hours. A live open sheet may refresh
 after thirty seconds, another unfinished sheet after five minutes. Finished archives are retained;
 a final calendar check is made after season closure. Explicit authenticated refresh routes allow
-later corrections. A season response at the 500-result limit is split into smaller date ranges.
-A processed period means requests succeeded, not that ESPN's historical archive is complete.
+later corrections. A period is read in the buckets ESPN's scoreboard accepts — a day, a month
+or a year, since it no longer takes a span of two dates — and the readings are cut back to the
+period asked for: a day for a single day, months up to three months, years beyond that. A bucket
+answering at the 500-result limit is read again in narrower ones, down to the day; a day still
+cut short leaves the period partial. A processed period means requests succeeded, not that
+ESPN's historical archive is complete.
 
 On home and the calendar, pulling down from the top of the list and releasing
 refreshes the data. A loading indicator appears centred above the content, then
@@ -718,7 +726,7 @@ explicit archive refreshes require `Authorization: Bearer <token>`:
 | `GET /v1/football/competitions` | The 23 classified competitions and catalogue version |
 | `GET /v1/football/matches?lineups=1` | Compatibility flag; lists use only already-known lineup information |
 | `GET /v1/football/competitions/{code}/teams` | A competition's teams, to choose one's follows |
-| `GET /v1/football/matches?dateFrom=…&dateTo=…` | Matches in a period, for home and the calendar |
+| `GET /v1/football/matches?dateFrom=…&dateTo=…` | Matches in a period, for home and the calendar. `competitions` narrows it; `teams` widens it back to the competitions those clubs play in |
 | `GET /v1/football/matches/{id}` | Details, published lineup, substitutes, match events and actual times |
 | `GET /v1/football/competitions/{code}/seasons` | Known editions and import state |
 | `GET /v1/football/search?competition=WC&season=2022` | Matches, team/phase facets, pagination and import state; optional `team`, `phase`, `dateFrom`, `dateTo`, `page` |

@@ -211,6 +211,10 @@ class ServerTest(unittest.TestCase):
                 asked.append(('fixtures', date_from, date_to, codes, lineups))
                 return 'calendrier'
 
+            def widen(self, codes, teams):
+                asked.append(('widen', codes, teams))
+                return sorted(set(codes) | {'FL1'}) if codes and teams else list(codes)
+
             def teams(self, code):
                 return {'teams': []} if code == 'FL1' else None
 
@@ -227,6 +231,11 @@ class ServerTest(unittest.TestCase):
             'dateFrom': ['2026-09-05'], 'dateTo': ['2026-09-06'],
             'competitions': ['FL1,PL'], 'ignored': ['secret']}), 'calendrier')
         self.assertEqual(asked[-1], ('fixtures', '2026-09-05', '2026-09-06', ['FL1', 'PL'], False))
+        # The clubs travel with the competitions: the server widens the reading to the ones
+        # they play in, which is knowledge the device does not have.
+        football(adapter, '/v1/football/matches', {'competitions': ['CL'], 'teams': ['174,160']})
+        self.assertEqual(asked[-2], ('widen', ['CL'], ['174', '160']))
+        self.assertEqual(asked[-1][3], ['CL', 'FL1'])
         # Announcing which compositions are out costs a reading per match, so it is asked for.
         football(adapter, '/v1/football/matches', {'lineups': ['1']})
         self.assertTrue(asked[-1][4])

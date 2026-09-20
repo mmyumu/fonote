@@ -104,10 +104,13 @@ def football(espn, route, query):
     if rest == ['matches']:
         today = date.today().isoformat()
         codes = [c for c in (one(query, 'competitions', '') or '').split(',') if c]
+        # The clubs travel beside the competitions so that the reading can be widened to the
+        # ones they play in; without them a narrowed calendar would lose their cup nights.
+        teams = [t for t in (one(query, 'teams', '') or '').split(',') if t]
         # Saying which compositions are out costs a reading per match, so it is asked for
         # rather than assumed: a client that will not show it should not pay for it.
         return espn.fixtures(one(query, 'dateFrom', today), one(query, 'dateTo', today),
-                             codes or None, one(query, 'lineups', '') == '1')
+                             espn.widen(codes, teams) or None, one(query, 'lineups', '') == '1')
     if len(rest) == 3 and rest[0] == 'competitions' and rest[2] == 'teams':
         found = espn.teams(rest[1])
         if found is None:

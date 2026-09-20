@@ -11,7 +11,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -360,12 +360,77 @@ LIVE = {'IN_PLAY', 'PAUSED'}
 SLUGS = {slug: code for code, slug in LEAGUES.items()}
 
 
+# Beyond three months a span is read year by year rather than month by month: the calendars a
+# club is followed over run a year, and thirteen readings for one are thirteen too many.
+BY_YEAR = 3
+
+
 def window(date_from, date_to):
-    """The span a scoreboard is asked for, as ESPN spells spans."""
+    """The readings a span is made of, as ESPN spells a date.
+
+    A scoreboard answers on a day, a month or a year — 20260917, 202609, 2026 — and since
+    mid-September 2026 answers 400 Bad Request to the span it accepted until then,
+    20260917-20260918. So a span is no longer one reading: it is the coarsest buckets that
+    cover it, read one after another and cut back to its own days by the caller.
+    """
     start, end = date.fromisoformat(date_from), date.fromisoformat(date_to)
     if end < start:
         raise ValueError('Période invalide')
-    return start.strftime('%Y%m%d') + '-' + end.strftime('%Y%m%d')
+    if start == end:
+        return [start.strftime('%Y%m%d')]
+    months = (end.year - start.year) * 12 + end.month - start.month + 1
+    if months > BY_YEAR:
+        return [str(year) for year in range(start.year, end.year + 1)]
+    return months_between(start, end)
+
+
+def months_between(start, end):
+    """Every month the span touches, first to last."""
+    found, year, month = [], start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        found.append('%04d%02d' % (year, month))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return found
+
+
+def days_of(year, month):
+    """Every day of a month, as ESPN spells a day."""
+    last = date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)
+    return ['%04d%02d%02d' % (year, month, day) for day in range(1, last.day + 1)]
+
+
+def narrower(bucket, date_from, date_to):
+    """The readings a bucket that answered short of everything is made of instead.
+
+    A year holds twelve months, a month its days; a day holds nothing smaller, and a reading
+    that fills up on one day is as complete as ESPN will ever be about it. Only the ones the
+    span actually touches are kept: a fortnight cut short costs a fortnight of readings, not a
+    year of them.
+    """
+    if len(bucket) == 4:
+        smaller = months_between(date(int(bucket), 1, 1), date(int(bucket), 12, 31))
+    elif len(bucket) == 6:
+        smaller = days_of(int(bucket[:4]), int(bucket[4:]))
+    else:
+        return []
+    return [item for item in smaller if touches(item, date_from, date_to)]
+
+
+def bounds(bucket):
+    """The first and last day a bucket answers for."""
+    if len(bucket) == 4:
+        return date(int(bucket), 1, 1), date(int(bucket), 12, 31)
+    if len(bucket) == 6:
+        year, month = int(bucket[:4]), int(bucket[4:])
+        return date(year, month, 1), date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)
+    return date.fromisoformat(bucket[:4] + '-' + bucket[4:6] + '-' + bucket[6:]),\
+        date.fromisoformat(bucket[:4] + '-' + bucket[4:6] + '-' + bucket[6:])
+
+
+def touches(bucket, date_from, date_to):
+    """Whether a bucket holds any day of the span."""
+    start, end = bounds(bucket)
+    return start.isoformat() <= date_to and end.isoformat() >= date_from
 
 
 def current(date_from, date_to):
@@ -510,6 +575,42 @@ class Espn:
             params['dates'] = dates
         return self.fetch(LEAGUES[code], 'scoreboard', params, ttl)
 
+    def calendar(self, code, date_from, date_to, ttl=CACHE, limit=500):
+        """A span of one competition's calendar, in the shape a scoreboard answers.
+
+        Several readings, since ESPN no longer takes a span in one — see `window` — merged into
+        the one answer the callers have always read. A bucket is coarser than the span it serves
+        and is cut back to it here; a bucket that came back full was truncated by ESPN, so it is
+        read again in narrower ones rather than quietly losing the matches beyond the limit.
+        """
+        leagues, events, seen, truncated = None, [], set(), False
+        buckets = list(window(date_from, date_to))
+        while buckets:
+            bucket = buckets.pop(0)
+            data = self.board(code, dates=bucket, ttl=ttl, limit=limit)
+            if leagues is None:
+                leagues = data.get('leagues')
+            found = data.get('events')
+            if not isinstance(found, list):
+                raise ValueError('Calendrier invalide')
+            if len(found) >= limit:
+                smaller = narrower(bucket, date_from, date_to)
+                if smaller:
+                    buckets = smaller + buckets
+                    continue
+                # A single day ESPN cuts short: nothing narrower to ask, so what is kept is
+                # said to be incomplete rather than passed off as the whole day.
+                truncated = True
+            for item in found:
+                identifier = str(item.get('id') or '')
+                day = str(item.get('date') or '')[:10]
+                if identifier in seen or not date_from <= day <= date_to:
+                    continue
+                seen.add(identifier)
+                events.append(item)
+        events.sort(key=lambda item: (str(item.get('date') or ''), str(item.get('id') or '')))
+        return {'leagues': leagues or [], 'events': events, 'truncated': truncated}
+
     def competitions(self):
         """Which competitions this server knows, named and badged by the feed itself."""
         def read(code):
@@ -551,11 +652,13 @@ class Espn:
 
     def fixtures(self, date_from, date_to, codes=None, lineups=False):
         """Every match of a span, in the order they are played."""
-        span, ttl = window(date_from, date_to), CACHE
+        # An impossible span is refused once, here, rather than by each league's own reading.
+        window(date_from, date_to)
+        ttl = CACHE
         wanted = [code for code in (codes or LEAGUES) if code in LEAGUES]
 
         def read(code):
-            data = self.board(code, dates=span, ttl=ttl)
+            data = self.calendar(code, date_from, date_to, ttl)
             league = (data.get('leagues') or [{}])[0]
             competition = competition_entry(league, code)
             return [fixture(event, code, competition) for event in data.get('events') or []]
@@ -609,10 +712,12 @@ class Espn:
         codes = [code] if code else []
         # A club is followed for its domestic season, but its European nights count too.
         codes += [cup for cup in CUPS if cup != code]
-        span, ttl = window(date_from, date_to), CACHE
+        # As above: the span is checked before the calendars are read, not once per calendar.
+        window(date_from, date_to)
+        ttl = CACHE
 
         def read(where):
-            data = self.board(where, dates=span, ttl=ttl)
+            data = self.calendar(where, date_from, date_to, ttl)
             league = (data.get('leagues') or [{}])[0]
             competition = competition_entry(league, where)
             found = []

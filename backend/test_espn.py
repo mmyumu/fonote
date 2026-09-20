@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from backend.espn import (CACHE, INK, LIVE_CACHE, MIN_CONTRAST, MIN_DISTANCE, RETRY, Espn,
                           contrast, distance, luminance, minute, parse_colour, readable, stage,
-                          status)
+                          status, window)
 
 
 class Feed:
@@ -191,6 +191,35 @@ class EspnTest(unittest.TestCase):
         match = self.leagues({'fra.1': played}).fixtures('2026-09-04', '2026-09-04', ['FL1'])['matches'][0]
         self.assertEqual(match['score'], {'fullTime': {'home': '3', 'away': '1'}})
 
+    def test_a_span_is_spelled_the_way_espn_still_reads_one(self):
+        """ESPN answers 400 to 20260917-20260918; a day, a month and a year it still reads."""
+        self.assertEqual(window('2026-09-17', '2026-09-17'), ['20260917'])
+        self.assertEqual(window('2026-09-17', '2026-09-18'), ['202609'])
+        self.assertEqual(window('2026-09-17', '2026-11-02'), ['202609', '202610', '202611'])
+        # Past three months the months would be a dozen readings; the years are two.
+        self.assertEqual(window('2026-08-01', '2027-06-30'), ['2026', '2027'])
+        with self.assertRaises(ValueError):
+            window('2026-09-18', '2026-09-17')
+
+    def test_a_calendar_asks_by_month_and_keeps_only_its_own_days(self):
+        inside = event('1', '2026-09-17T19:00:00Z')
+        outside = event('2', '2026-09-30T19:00:00Z')
+        adapter = self.leagues({'fra.1': scoreboard([inside, outside])})
+        result = adapter.fixtures('2026-09-16', '2026-09-18', ['FL1'])
+        # One reading for the month, and the match played outside the span left out of it.
+        self.assertEqual([call.args[2].get('dates') for call in adapter.fetch.call_args_list],
+                         ['202609'])
+        self.assertEqual([m['id'] for m in result['matches']], [1])
+
+    def test_a_month_cut_short_is_read_again_over_the_days_asked_for(self):
+        """A bucket that came back full hid the rest; only the span's own days are read again."""
+        full = scoreboard([event(str(i), '2026-09-17T19:00:00Z') for i in range(1, 501)])
+        adapter = self.leagues({'fra.1': full})
+        result = adapter.fixtures('2026-09-17', '2026-09-18', ['FL1'])
+        self.assertEqual([call.args[2].get('dates') for call in adapter.fetch.call_args_list],
+                         ['202609', '20260917', '20260918'])
+        self.assertEqual(result['count'], 500)
+
     def test_one_calendar_is_made_of_every_league_and_survives_a_silent_one(self):
         early = event('1', '2026-09-04T15:00:00Z')
         late = event('2', '2026-09-04T21:00:00Z')
@@ -229,8 +258,11 @@ class EspnTest(unittest.TestCase):
         adapter = self.leagues({'fra.1': board})
         asked = []
         adapter.lineup_ready = Mock(side_effect=lambda i: asked.append(i) or 'available')
+        # The span has to hold the four of them: a calendar only answers for its own days.
+        span = ((now - timedelta(days=3)).date().isoformat(),
+                (now + timedelta(days=4)).date().isoformat())
         found = {m['id']: m['lineup_status']
-                 for m in adapter.fixtures('2026-09-04', '2026-09-04', ['FL1'], lineups=True)['matches']}
+                 for m in adapter.fixtures(*span, ['FL1'], lineups=True)['matches']}
         self.assertEqual(sorted(asked), [1, 2])
         self.assertEqual(found, {1: 'available', 2: 'available', 3: 'unknown', 4: 'unknown'})
 

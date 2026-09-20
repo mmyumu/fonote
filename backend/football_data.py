@@ -205,6 +205,30 @@ class FootballData(Espn):
                 'page': page, 'hasMore': len(items) > (page + 1) * 50,
                 'teams': list(teams.values()), 'phases': sorted(phases - {''}), **self.state([key])}
 
+    def widen(self, codes, teams):
+        """The competitions a calendar has to be read over, clubs included.
+
+        A calendar narrowed to the competitions someone follows loses the nights their club
+        plays elsewhere — a cup, a European tie. Which competitions a club plays in is known
+        here and not on the device: the calendars already imported say so, club by club. So the
+        device sends the clubs it follows and the reading widens to their competitions.
+
+        A club nobody has imported a calendar for yet says nothing, and nothing is not an empty
+        answer: the reading widens to everything rather than losing that club's matches. Asking
+        for no competition at all still means the whole catalogue, as it always did.
+        """
+        if not codes:
+            return []
+        found = set(codes)
+        for team in teams:
+            if not str(team).isdigit():
+                raise ValueError('Équipe invalide')
+            known = self.store.meta('team_codes:' + str(team), [])
+            if not known:
+                return []
+            found.update(known)
+        return sorted(found)
+
     def fixtures(self, date_from, date_to, codes=None, lineups=False):
         window(date_from, date_to)
         if (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days > 370:
@@ -386,7 +410,8 @@ class FootballData(Espn):
             # Le parent est prêt après ses enfants ; state() agrège leurs états.
         elif kind == 'range':
             start, end = payload['start'], payload['end']
-            data = self.board(code, dates=window(start, end), ttl=300 if start <= date.today().isoformat() <= end else 21600)
+            data = self.calendar(code, start, end,
+                                 ttl=300 if start <= date.today().isoformat() <= end else 21600)
             events = data.get('events')
             if not isinstance(events, list):
                 raise ValueError('Calendrier invalide')
@@ -404,16 +429,10 @@ class FootballData(Espn):
                         known = self.store.meta(key, [])
                         if code not in known:
                             self.store.put_meta(key, sorted(known + [code]))
-            if len(events) >= 500 or data.get('count', len(events)) > len(events):
-                first, last = date.fromisoformat(start), date.fromisoformat(end)
-                if first >= last:
-                    return True
-                mid = first + (last - first) // 2
-                children = []
-                for a, b in ((first, mid), (mid + timedelta(days=1), last)):
-                    child = job['key'] + ':' + a.isoformat() + ':' + b.isoformat()
-                    children.append(self.enqueue(child, 'range', dict(payload, start=a.isoformat(), end=b.isoformat()), job['priority']))
-                self.store.put_meta(job['key'] + ':children', children)
+            # The span was read in the buckets ESPN accepts, each one narrowed until it came
+            # back short of its limit. Only a single day it still cuts short stays incomplete,
+            # and nothing smaller can be asked for it.
+            return data.get('truncated')
         else:
             raise ValueError('Tâche inconnue')
 

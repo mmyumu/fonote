@@ -107,6 +107,25 @@ class FootballDataTest(unittest.TestCase):
         self.assertEqual(data['matches'], [])
         self.assertIsNotNone(self.adapter.store.job('season:WC:2022'))
 
+    def test_a_calendar_widens_to_the_competitions_a_followed_club_plays_in(self):
+        """Monaco is followed, Ligue 1 is not: its league nights still have to be read."""
+        self.adapter.store.put_meta('team_codes:174', ['FL1', 'UECL'])
+        self.assertEqual(self.adapter.widen(['CL', 'EL'], ['174']), ['CL', 'EL', 'FL1', 'UECL'])
+        # A club the server has never imported a calendar for says nothing about itself, and
+        # nothing is not an empty answer: everything is read rather than losing its matches.
+        self.assertEqual(self.adapter.widen(['CL'], ['9999']), [])
+        # Following no competition has always meant the whole catalogue.
+        self.assertEqual(self.adapter.widen([], ['174']), [])
+        with self.assertRaises(ValueError):
+            self.adapter.widen(['CL'], ['tout'])
+
+    def test_a_narrowed_calendar_only_reads_the_competitions_it_named(self):
+        self.adapter.store.put_meta('team_codes:174', ['WC'])
+        self.adapter.fixtures('2022-12-18', '2022-12-18', self.adapter.widen(['WC'], ['174']))
+        self.drain()
+        slugs = {u.split('/soccer/')[1].split('/')[0] for u in self.calls if 'scoreboard' in u}
+        self.assertEqual(slugs, {COMPETITIONS['WC']['slug']})
+
     def test_calendar_import_does_not_claim_a_composition(self):
         self.adapter.fixtures('2022-12-18', '2022-12-18', ['WC'], lineups=True)
         self.drain()
