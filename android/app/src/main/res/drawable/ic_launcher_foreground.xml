@@ -1,9 +1,9 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <!-- The notebook lying on the lawn: a page of kraft paper, its lemon spiral, and the
-         pitch drawn on it. The app's name says both halves — football and the note — and
-         that is what the drawing shows, rather than one of the two.
+    <!-- The notebook lying on the lawn: a page of kraft paper, its spiral, and the pitch
+         drawn on it. The app's name says both halves — football and the note — and that is
+         what the drawing shows, rather than one of the two.
 
          The icon's lawn is lighter than the tactical board's, which is a night green; here
          it has the launcher's dark background on one side and the paper on the other, and a
@@ -19,37 +19,46 @@
          areas, for their part, would clog into a blot at forty-eight points and are left
          out.
 
-         Everything fits in the 66dp disc the launcher guarantees, spiral included. -->
+         The rings are drawn short and thin: they name the object and nothing more, so the
+         room they gave up at the top goes to the page, which is the part that carries the
+         drawing. The page widened and rose by the same amount, and its bottom corners stop
+         at the edge of the 66dp disc the launcher guarantees — that disc is what sets the
+         size of everything here, rings included.
+
+         Their brass is the one colour that holds at that size on both grounds the rings
+         cross: the night green above the page, and the kraft below it. The lemon they were
+         drawn in came close enough to the background's green to lose them once they went
+         from four points thick to three. -->
     <path android:fillColor="#FFE7D3AE"
-        android:pathData="M37,34 L71,34 Q75,34 75,38 L75,77 Q75,81 71,81 L37,81 Q33,81 33,77 L33,38 Q33,34 37,34 Z" />
-    <path android:strokeColor="#FFCFF0A0" android:strokeWidth="3.8" android:strokeLineCap="round"
-        android:fillColor="#00000000" android:pathData="M44,27 L44,38.5 M54,27 L54,38.5 M64,27 L64,38.5" />
+        android:pathData="M36.4,31.5 L71.6,31.5 Q76,31.5 76,35.9 L76,76.1 Q76,80.5 71.6,80.5 L36.4,80.5 Q32,80.5 32,76.1 L32,35.9 Q32,31.5 36.4,31.5 Z" />
+    <path android:strokeColor="#FFE0A64A" android:strokeWidth="2.9" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M44,29.6 L44,34.6 M54,29.6 L54,34.6 M64,29.6 L64,34.6" />
 
     <!-- The lawn, and the mowing stripes: two passes out of four darkened a touch, which is
          enough to give grass rather than a flat fill without adding anything to read. -->
-    <path android:fillColor="#FF3F9160" android:pathData="M38,42 L70,42 L70,76 L38,76 Z" />
+    <path android:fillColor="#FF3F9160" android:pathData="M37,39.5 L71,39.5 L71,75.5 L37,75.5 Z" />
     <group>
-        <clip-path android:pathData="M38,42 L70,42 L70,76 L38,76 Z" />
+        <clip-path android:pathData="M37,39.5 L71,39.5 L71,75.5 L37,75.5 Z" />
         <path android:fillColor="#14000000"
-            android:pathData="M38,42 L70,42 L70,50.5 L38,50.5 Z M38,59 L70,59 L70,67.5 L38,67.5 Z" />
+            android:pathData="M37,39.5 L71,39.5 L71,48.5 L37,48.5 Z M37,57.5 L71,57.5 L71,66.5 L37,66.5 Z" />
     </group>
 
     <!-- The touchlines and the halfway line. -->
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.9" android:strokeLineJoin="round"
-        android:fillColor="#00000000" android:pathData="M39,43 L69,43 L69,75 L39,75 Z" />
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8"
-        android:fillColor="#00000000" android:pathData="M39,59 L69,59" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="2" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M38,40.5 L70,40.5 L70,74.5 L38,74.5 Z" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.9"
+        android:fillColor="#00000000" android:pathData="M38,57.5 L70,57.5" />
     <!-- The centre circle and its spot. -->
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8"
-        android:fillColor="#00000000" android:pathData="M54,53.4 A5.6,5.6 0 1,1 53.9,53.4 Z" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.9"
+        android:fillColor="#00000000" android:pathData="M54,51.5 A6,6 0 1,1 53.9,51.5 Z" />
     <path android:fillColor="#FFFFFFFF"
-        android:pathData="M54,59 m-1.1,0 a1.1,1.1 0 1,0 2.2,0 a1.1,1.1 0 1,0 -2.2,0 z" />
+        android:pathData="M54,57.5 m-1.15,0 a1.15,1.15 0 1,0 2.3,0 a1.15,1.15 0 1,0 -2.3,0 z" />
     <!-- The two penalty areas, and the penalty spots. -->
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineJoin="round"
-        android:fillColor="#00000000" android:pathData="M45,43 L45,49 L63,49 L63,43" />
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.8" android:strokeLineJoin="round"
-        android:fillColor="#00000000" android:pathData="M45,75 L45,69 L63,69 L63,75" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.9" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M44.5,40.5 L44.5,46.9 L63.5,46.9 L63.5,40.5" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.9" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M44.5,74.5 L44.5,68.1 L63.5,68.1 L63.5,74.5" />
     <path android:fillColor="#FFFFFFFF"
-        android:pathData="M54,46.6 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 z
-                          M54,71.4 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0 z" />
+        android:pathData="M54,44.3 m-1.05,0 a1.05,1.05 0 1,0 2.1,0 a1.05,1.05 0 1,0 -2.1,0 z
+                          M54,70.7 m-1.05,0 a1.05,1.05 0 1,0 2.1,0 a1.05,1.05 0 1,0 -2.1,0 z" />
 </vector>
