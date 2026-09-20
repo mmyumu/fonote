@@ -7,9 +7,9 @@ the ones shown on screen, left as they appear there.
 
 Three cards: **Mes matchs annotés** on the left, **Accueil** in the centre and
 **Rechercher un match** on the right. The calendar remains a separate screen with three
-adjacent Monday-to-Sunday weeks and a search within the displayed week. **Mes clubs uniquement**
-narrows those weeks to the fixtures of the followed clubs — a cup followed to keep an eye on it
-otherwise buries the club's night under fifty matches. The box is kept between launches and only
+adjacent Monday-to-Sunday weeks and a search within the displayed week. **Mes équipes uniquement**
+narrows those weeks to the fixtures of the followed teams — a cup followed to keep an eye on it
+otherwise buries the team's night under fifty matches. The box is kept between launches and only
 changes what is shown: the competitions' matches are still asked for, still saved, and come back
 as soon as it is unticked.
 
@@ -23,13 +23,15 @@ the competition and season selection to browse all local matches.
 
 **Mes suivis** separates competitions and teams, shows the current selection first, and groups
 competitions by international events, European cups and country, with All/Men/Women filters.
-The curated catalogue has 23 competitions: the previous 13, Europa League, the French and English
-national cups, plus the women's World Cup, Euro, Champions League, French/English/Spanish leagues
-and NWSL. Teams can be loaded by competition rather than depending on previously opened calendars.
+The curated catalogue has 29 competitions: the previous 13, Europa League, the French and English
+national cups, the women's World Cup, Euro, Champions League, French/English/Spanish leagues
+and NWSL, plus six for national sides — Ligue des nations, the European qualifiers for the World
+Cup and the Euro, international friendlies, and the women's Nations League and friendlies. Teams
+can be loaded by competition rather than depending on previously opened calendars.
 Follows personalise home; they never restrict archive search. A calendar request carries the
-followed competitions and the followed clubs: the server widens the reading to the competitions
-those clubs play in, which it knows from the calendars already imported and the device does not,
-so a cup night is never lost to a narrowed calendar. A club the server has not seen yet widens
+followed competitions and the followed teams: the server widens the reading to the competitions
+those teams play in, which it knows from the calendars already imported and the device does not,
+so a cup night is never lost to a narrowed calendar. A team the server has not seen yet widens
 it to the whole catalogue, as does following no competition at all.
 
 The annotated matches gather the fixtures with at least one non-deleted note, even finished ones,
@@ -41,19 +43,36 @@ kept when the week changes. The fields stay visible above the lists.
 Home favourites only show matches that are scheduled, in progress or at half-time;
 the stars of finished matches are kept but their cards are hidden on home.
 
+## National sides
+
+A selection is followed exactly as a club is, in the **Équipes** tab of **Mes suivis**: pick
+**Matchs amicaux internationaux** and the 191 sides ESPN lists come back, or pick a tournament
+for its entrants alone. A followed selection is labelled « Sélection nationale » beside its
+name. ESPN numbers a side once for all competitions — France is 478 in the Coupe du monde, the
+Euro, the Ligue des nations, the qualifiers and the friendlies alike, 2755 for the women's side
+— so one follow covers them all, and a change of competition never splits it in two.
+
+Which competitions a side's matches are read over is not learned, it is known. A club is learned
+from the calendars it appears in — its league names it, a cup night adds itself the week it is
+read — but a national competition is idle three years out of four, so the summer a Coupe du monde
+names France would teach the server that France plays the Coupe du monde and nothing else, and
+the autumn of qualifiers that follows would show an empty page. So a side is read over every
+national-team competition at once (`codes_for`), which the catalogue lists. A single national
+competition naming a team is enough to recognise one, since no club ever plays in one.
+
 ## Personalised home
 
 A match's star in the calendar adds it to **Mes matchs favoris** (my favourite matches) on home;
 a second tap removes it. Favourites are kept on this device. Adding a favourite
 also starts downloading its details if the server answers, to prepare notes offline.
-**Prochains matchs de mes clubs** (my clubs' next matches) shows the nearest upcoming fixture for
-each club chosen in **Mes suivis** (my follows), without listing twice a fixture between two
-followed clubs. Finished, cancelled, postponed or already started matches are left out of this
-section; **Aujourd'hui** (today) remains available. **Derniers matchs de mes clubs** (my clubs'
-last matches) is its mirror: the latest finished fixture of each followed club, the one caught up
-on later. A finished match dated ahead of now is not one of them, nor is a cancelled, postponed or
-running one. The section is not drawn when no club is followed, since the one above already
-asks for one.
+**Prochains matchs de mes équipes** (my teams' next matches) shows the nearest upcoming fixture
+for each team chosen in **Mes suivis** (my follows), club or national side, without listing twice
+a fixture between two followed teams. Finished, cancelled, postponed or already started matches
+are left out of this section; **Aujourd'hui** (today) remains available. **Derniers matchs de mes
+équipes** (my teams' last matches) is its mirror: the latest finished fixture of each followed
+team, the one caught up on later. A finished match dated ahead of now is not one of them, nor is a
+cancelled, postponed or running one. The section is not drawn when no team is followed, since the
+one above already asks for one.
 
 The server exposes `/v1/football/teams/{id}/matches`. Team memberships learned from calendars
 and team catalogues select the relevant competitions; unknown memberships initially search the
@@ -136,7 +155,7 @@ On home and the calendar, pulling down from the top of the list and releasing
 refreshes the data. A loading indicator appears centred above the content, then
 folds away gradually when loading ends. During a refresh, the content can still be
 pulled slightly: it eases back on release, with no new request.
-Home also reads again the favourite matches and the next matches of followed clubs.
+Home also reads again the favourite matches and the next matches of followed teams.
 
 The gesture reads the server again without forcing ESPN: the cache durations above still apply,
 and simultaneous requests for the same resource share a single ESPN read.
@@ -280,7 +299,7 @@ First Android prototype for taking football notes, with a personal server shared
 - The quick note writes in silence: no toast after an action, a player removed or the note thrown away. The chip, the mark on the pitch and the filled cell already show what was noted, and a toast over the palette hid the next cell to touch. Only a failure still speaks.
 - A note describes a moment, not a player. While a note is open, the panel **collects**: each player tapped joins it with their own action, and "A scores, B gives the assist, C misses the save" follows on in one go in six taps, without leaving the pitch. With no note open, tapping a player starts one. The only gesture left to say out loud is therefore the end of a moment: **« Terminé »** (done), which brings back the list of notes. The bin next to it throws away the note in progress; as long as no action has been chosen there is nothing to throw away, and the button says « Abandonner » (discard).
 - **Where it happened, if you want to say.** The 📍 at the end of the players' line gives the spot of the player in focus's action; it stays dimmed until he has one. Touched, the pitch waits for a point: the badges step back and catch nothing, the whole lawn is the target, and the palette makes way for a hint, « Annuler » (cancel) and, once a spot is given, « Sans endroit » (no spot). The finger may slide before it lifts; lifting is what counts, and it writes straight away, like an action. Each player has his own spot — the passer and the receiver are rarely in the same place —, drawn while the note is open as a point in his action's tint, tied to his badge by a dotted thread. **A spot already given is dragged** to correct it: going back through the 📍 for a point that is right there on the grass cost two taps and a second aim. The point is taken a finger's width around it, above the shirts it is drawn over; it keeps the distance at which it was taken rather than jumping under the fingertip, grows while carried so it shows round the finger, and is written as it lands. A touch that does not move is a tap on its player, as on his shirt; the card does not turn and the page does not pull while a spot is carried. It is a point and not a zone: a grid would have been one more map to aim at in a full panel, and thirds or lanes can be read back from a point later. Touching the grass straight away, without the 📍, was not an option: twenty-two badges cover too much of it, and a miss would add a player.
-- **Free note and match note: a single written note, and only the minute tells them apart.** The quick note is tapped — a player, an action, and it is written straight away; the written note takes its time: you type the text you want, and it is only written on « Terminé », since its text is the note and comes last. « Abandonner », next to it, closes without writing anything: a new note leaves nothing behind, a reopened note stays as it was. These are two buttons and not a single one that changes its word — the first text typed switched the only button to « Terminé », and nothing let you give up any more; « Terminé » stays disabled while there is nothing to write, and a note already written keeps its bin, reduced to the icon. The two buttons of the panel at rest open the **same panel**: « + Note libre » (free note) at the clock's minute, « ✎ Note de match » (match note) with no minute. The players, substitutes and coaches tapped there are **named**, never credited — a tick on their badge, nothing in the summary —, and the two crests under the pitch make it a club's note, one or the other, never both. The minute heads the line; tapping it corrects it, « Sans minute » (no minute) turns it into a match note, and a match note given a minute becomes a free note again: going from one to the other rewrites nothing else. Only the written note can do without a minute: an action happens at a minute. Old notes without a player — a minute and a text — reopen in this panel as free notes.
+- **Free note and match note: a single written note, and only the minute tells them apart.** The quick note is tapped — a player, an action, and it is written straight away; the written note takes its time: you type the text you want, and it is only written on « Terminé », since its text is the note and comes last. « Abandonner », next to it, closes without writing anything: a new note leaves nothing behind, a reopened note stays as it was. These are two buttons and not a single one that changes its word — the first text typed switched the only button to « Terminé », and nothing let you give up any more; « Terminé » stays disabled while there is nothing to write, and a note already written keeps its bin, reduced to the icon. The two buttons of the panel at rest open the **same panel**: « + Note libre » (free note) at the clock's minute, « ✎ Note de match » (match note) with no minute. The players, substitutes and coaches tapped there are **named**, never credited — a tick on their badge, nothing in the summary —, and the two crests under the pitch make it one side's note, one or the other, never both. The minute heads the line; tapping it corrects it, « Sans minute » (no minute) turns it into a match note, and a match note given a minute becomes a free note again: going from one to the other rewrites nothing else. Only the written note can do without a minute: an action happens at a minute. Old notes without a player — a minute and a text — reopen in this panel as free notes.
 - **Tactical note**, the second note-taking mode, opened by « ▤ Tactique » next to
   « + Note libre ». Quick mode answers "who did what, and at which minute"; this one
   answers "where, and towards whom" — a pass deserves to be drawn when what matters is the line
@@ -784,10 +803,10 @@ explicit archive refreshes require `Authorization: Bearer <token>`:
 | `GET /v1/health` | `service`, and under `app` the `minimum` version code synced with and the `latest` APK (`code`, `name`, `size`, `sha256`), or `null` |
 | `GET /v1/app/fonote.apk` | The APK `latest` describes; 404 when none is published |
 | `GET /v1/matches` | The bundled match, its 22 players and its source |
-| `GET /v1/football/competitions` | The 23 classified competitions and catalogue version |
+| `GET /v1/football/competitions` | The 29 classified competitions and catalogue version |
 | `GET /v1/football/matches?lineups=1` | Compatibility flag; lists use only already-known lineup information |
 | `GET /v1/football/competitions/{code}/teams` | A competition's teams, to choose one's follows |
-| `GET /v1/football/matches?dateFrom=…&dateTo=…` | Matches in a period, for home and the calendar. `competitions` narrows it; `teams` widens it back to the competitions those clubs play in |
+| `GET /v1/football/matches?dateFrom=…&dateTo=…` | Matches in a period, for home and the calendar. `competitions` narrows it; `teams` widens it back to the competitions those teams play in |
 | `GET /v1/football/matches/{id}` | Details, published lineup, substitutes, match events and actual times |
 | `GET /v1/football/competitions/{code}/seasons` | Known editions and import state |
 | `GET /v1/football/search?competition=WC&season=2022` | Matches, team/phase facets, pagination and import state; optional `team`, `phase`, `dateFrom`, `dateTo`, `page` |

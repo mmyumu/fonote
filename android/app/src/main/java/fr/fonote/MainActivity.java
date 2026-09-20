@@ -970,12 +970,12 @@ public class MainActivity extends Activity {
             calendarSearch = query;
             renderWeeks();
         }), search);
-        // A cup is followed to keep an eye on it, a club to watch it play: a week of the first
+        // A cup is followed to keep an eye on it, a team to watch it play: a week of the first
         // buries the second under fifty matches. The box narrows what is shown, never what is
         // asked for — the cup's night is already on the device when it is unticked again.
         calendarClubsOnly = prefs.getBoolean("calendar_clubs_only", false);
         CheckBox clubsOnly = new CheckBox(this);
-        clubsOnly.setText("Mes clubs uniquement"); clubsOnly.setChecked(calendarClubsOnly);
+        clubsOnly.setText("Mes équipes uniquement"); clubsOnly.setChecked(calendarClubsOnly);
         clubsOnly.setTextColor(skin.ink); clubsOnly.setTextSize(15);
         clubsOnly.setButtonTintList(ColorStateList.valueOf(skin.accent));
         clubsOnly.setOnCheckedChangeListener((view, checked) -> {
@@ -1257,8 +1257,8 @@ public class MainActivity extends Activity {
         layout.setOrientation(LinearLayout.VERTICAL); layout.setBackgroundColor(ground());
         LinearLayout header = frame(); header.setPadding(dp(16), dp(10), dp(16), dp(12));
         header.addView(title);
-        // Hundreds of clubs come back from a season's calendars: typing a name beats a long thumb.
-        header.addView(searchField("Compétition ou club", followSearch, query -> {
+        // Hundreds of teams come back from a season's calendars: typing a name beats a long thumb.
+        header.addView(searchField("Compétition ou équipe", followSearch, query -> {
             followSearch = query;
             renderProfile(followCatalogue, followFixtures);
         }));
@@ -1986,8 +1986,8 @@ public class MainActivity extends Activity {
         if (shown == 0) {
             if (!home && !calendarSearch.trim().isEmpty()) label("Aucun match ne correspond à cette recherche dans la semaine affichée.");
             else if (!home && calendarClubsOnly) empty(followedClubs().isEmpty()
-                    ? "Suivez un club pour n’afficher que ses matchs."
-                    : "Aucun match de vos clubs dans cette semaine. Décochez « Mes clubs uniquement » pour retrouver vos compétitions.",
+                    ? "Suivez une équipe pour n’afficher que ses matchs."
+                    : "Aucun match de vos équipes dans cette semaine. Décochez « Mes équipes uniquement » pour retrouver vos compétitions.",
                 "Choisir mes suivis", this::profile);
             else empty("Aucun match correspondant à vos suivis sur cette période.", "Choisir mes suivis", this::profile);
         }
@@ -2305,21 +2305,21 @@ public class MainActivity extends Activity {
             if (shown == 0) label("Aucun favori à venir ou en cours. Ajoutez-en avec l’étoile du calendrier.").setTextColor(skin.muted);
 
             Set<String> clubs = followedClubs();
-            section("Prochains matchs de mes clubs", "Mes suivis ›", this::profile);
+            section("Prochains matchs de mes équipes", "Mes suivis ›", this::profile);
             Map<String, JSONObject> next = FixtureSelection.next(all, clubs, Instant.now());
             clubFixtures(next);
-            if (clubs.isEmpty()) label("Suivez un club pour afficher son prochain match.").setTextColor(skin.muted);
+            if (clubs.isEmpty()) label("Suivez une équipe pour afficher son prochain match.").setTextColor(skin.muted);
             else if (next.size() < clubs.size())
-                label("Prochain match encore inconnu pour certains clubs. Actualisation à la connexion au serveur.").setTextColor(skin.muted);
+                label("Prochain match encore inconnu pour certaines équipes. Actualisation à la connexion au serveur.").setTextColor(skin.muted);
 
             // The match just played is the one caught up on later, and the calendar only gives it
-            // back a week at a time. Nothing is said here when no club is followed: the section
+            // back a week at a time. Nothing is said here when no team is followed: the section
             // above already asks for one, and saying it twice says it no better.
             if (!clubs.isEmpty()) {
-                section("Derniers matchs de mes clubs", "Mes suivis ›", this::profile);
+                section("Derniers matchs de mes équipes", "Mes suivis ›", this::profile);
                 Map<String, JSONObject> played = FixtureSelection.previous(all, clubs, Instant.now());
                 clubFixtures(played);
-                if (played.isEmpty()) label("Aucun match terminé enregistré pour vos clubs. Actualisation à la connexion au serveur.").setTextColor(skin.muted);
+                if (played.isEmpty()) label("Aucun match terminé enregistré pour vos équipes. Actualisation à la connexion au serveur.").setTextColor(skin.muted);
             }
         } catch (Exception error) { error(error); }
     }
@@ -3509,7 +3509,7 @@ public class MainActivity extends Activity {
             subjectChip(chipRow, shortName(id), "Retirer " + shortName(id), () -> mention(id));
         if (noteTeam.isEmpty() && entries.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText("↑  Des joueurs, un club — ou personne");
+            empty.setText("↑  Des joueurs, une équipe — ou personne");
             empty.setTextSize(12); empty.setTextColor(skin.muted); empty.setGravity(Gravity.CENTER_VERTICAL);
             chipRow.addView(empty, new LinearLayout.LayoutParams(-2, dp(44)));
         }

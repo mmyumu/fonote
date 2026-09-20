@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 from backend.catalogue import catalogue, COMPETITIONS
-from backend.football_data import FootballData, NetworkGate
+from backend.football_data import FootballData, NetworkGate, NATIONAL
 from backend.football_store import FootballStore
 from backend.test_espn import event, scoreboard, summary
 
@@ -59,10 +59,12 @@ class FootballDataTest(unittest.TestCase):
 
     def test_catalogue_is_local_classified_and_preserves_ids(self):
         data = self.adapter.competitions()
-        self.assertEqual(len(data['competitions']), 23)
-        self.assertEqual(sum(c['gender'] == 'female' for c in data['competitions']), 7)
+        self.assertEqual(len(data['competitions']), 29)
+        self.assertEqual(sum(c['gender'] == 'female' for c in data['competitions']), 9)
+        self.assertEqual(sum(c['participants'] == 'national' for c in data['competitions']), 10)
         self.assertEqual(COMPETITIONS['FL1']['id'], 710)
         self.assertEqual(COMPETITIONS['WC']['id'], 606)
+        self.assertEqual(COMPETITIONS['NL']['id'], 2395)
         self.assertEqual(self.calls, [])
 
     def test_first_search_imports_calendar_only_then_survives_restart(self):
@@ -127,11 +129,23 @@ class FootballDataTest(unittest.TestCase):
             self.adapter.fixtures('2023-12-01', '2025-01-10', ['WC'])
 
     def test_a_narrowed_calendar_only_reads_the_competitions_it_named(self):
-        self.adapter.store.put_meta('team_codes:174', ['WC'])
-        self.adapter.fixtures('2022-12-18', '2022-12-18', self.adapter.widen(['WC'], ['174']))
+        self.adapter.store.put_meta('team_codes:174', ['FL1'])
+        self.adapter.fixtures('2022-12-18', '2022-12-18', self.adapter.widen(['FL1'], ['174']))
         self.drain()
         slugs = {u.split('/soccer/')[1].split('/')[0] for u in self.calls if 'scoreboard' in u}
-        self.assertEqual(slugs, {COMPETITIONS['WC']['slug']})
+        self.assertEqual(slugs, {COMPETITIONS['FL1']['slug']})
+
+    def test_a_followed_selection_is_read_over_every_national_competition(self):
+        """France plays a Coupe du monde one summer in four; the rest is qualifiers."""
+        # One competition named the side, and that is enough to know it is one: no club plays
+        # a Coupe du monde, so the other nine are hers too.
+        self.adapter.store.put_meta('team_codes:478', ['WC'])
+        self.assertEqual(self.adapter.codes_for('478'), NATIONAL)
+        self.assertIn('NL', self.adapter.codes_for('478'))
+        self.assertEqual(self.adapter.widen(['FL1'], ['478']), sorted(set(NATIONAL) | {'FL1'}))
+        # A club keeps the competitions it was met in, and gains nothing it does not play.
+        self.adapter.store.put_meta('team_codes:174', ['FL1', 'UECL'])
+        self.assertEqual(self.adapter.codes_for('174'), ['FL1', 'UECL'])
 
     def test_calendar_import_does_not_claim_a_composition(self):
         self.adapter.fixtures('2022-12-18', '2022-12-18', ['WC'], lineups=True)

@@ -22,6 +22,8 @@ else:
 
 log = logging.getLogger('fonote.football')
 WEEK = 7 * 86400
+# The competitions a national side plays, and the only ones it can appear in.
+NATIONAL = sorted(code for code, item in COMPETITIONS.items() if item['participants'] == 'national')
 
 
 class NetworkGate:
@@ -205,16 +207,35 @@ class FootballData(Espn):
                 'page': page, 'hasMore': len(items) > (page + 1) * 50,
                 'teams': list(teams.values()), 'phases': sorted(phases - {''}), **self.state([key])}
 
+    def codes_for(self, team_id):
+        """The competitions one followed team has to be read over.
+
+        A club is learned from the calendars it turns up in: its league names it, then a cup
+        night adds itself the week it is read. A national side cannot be learned that way. Its
+        competitions are idle three years out of four, so the summer a Coupe du monde names
+        France would teach that France plays the Coupe du monde and nothing else — and through
+        the autumn of qualifiers that follows, a side playing every month would have an empty
+        page.
+
+        So a side is read over every national-team competition at once. Which those are is not
+        something to learn: the catalogue names them, and they are a closed list. One of them
+        naming a team is enough to recognise a side, since no club ever plays in one.
+        """
+        known = self.store.meta('team_codes:' + str(team_id), [])
+        if any(code in NATIONAL for code in known):
+            return sorted(set(known) | set(NATIONAL))
+        return known
+
     def widen(self, codes, teams):
-        """The competitions a calendar has to be read over, clubs included.
+        """The competitions a calendar has to be read over, followed teams included.
 
-        A calendar narrowed to the competitions someone follows loses the nights their club
-        plays elsewhere — a cup, a European tie. Which competitions a club plays in is known
-        here and not on the device: the calendars already imported say so, club by club. So the
-        device sends the clubs it follows and the reading widens to their competitions.
+        A calendar narrowed to the competitions someone follows loses the nights their team
+        plays elsewhere — a cup, a European tie, a qualifier. Which competitions a team plays in
+        is known here and not on the device: see `codes_for`. So the device sends the teams it
+        follows and the reading widens to their competitions.
 
-        A club nobody has imported a calendar for yet says nothing, and nothing is not an empty
-        answer: the reading widens to everything rather than losing that club's matches. Asking
+        A team nobody has imported a calendar for yet says nothing, and nothing is not an empty
+        answer: the reading widens to everything rather than losing that team's matches. Asking
         for no competition at all still means the whole catalogue, as it always did.
         """
         if not codes:
@@ -223,7 +244,7 @@ class FootballData(Espn):
         for team in teams:
             if not str(team).isdigit():
                 raise ValueError('Équipe invalide')
-            known = self.store.meta('team_codes:' + str(team), [])
+            known = self.codes_for(team)
             if not known:
                 return []
             found.update(known)
@@ -251,7 +272,7 @@ class FootballData(Espn):
 
     def team_fixtures(self, team_id, date_from, date_to, limit=100):
         # Les calendriers partagent les tâches avec l'accueil ; aucune fiche n'est préchargée.
-        known = self.store.meta('team_codes:' + str(team_id), [])
+        known = self.codes_for(team_id)
         codes = known or list(COMPETITIONS)
         data = self.fixtures(date_from, date_to, codes)
         items = [m for m in data['matches'] if any(str(m.get(s, {}).get('id')) == str(team_id)
