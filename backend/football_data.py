@@ -229,9 +229,15 @@ class FootballData(Espn):
             found.update(known)
         return sorted(found)
 
+    # A club's page asks for the month behind it as well as the year ahead, so the widest span
+    # a client asks for is a long month plus a leap year: 397 days. The bound sits just above
+    # that. It costs nothing to read — beyond three months a span is read year by year, and a
+    # year and a month spans the same two years as a year does.
+    LONGEST = 400
+
     def fixtures(self, date_from, date_to, codes=None, lineups=False):
         window(date_from, date_to)
-        if (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days > 370:
+        if (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days > self.LONGEST:
             raise ValueError('Période trop longue')
         wanted = codes or list(COMPETITIONS)
         keys = []

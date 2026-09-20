@@ -119,6 +119,13 @@ class FootballDataTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.adapter.widen(['CL'], ['tout'])
 
+    def test_a_club_calendar_covers_a_month_back_and_the_year_ahead(self):
+        """The span the home screen asks a followed club for is the one accepted."""
+        # A long month behind a leap year ahead is the widest of them: 397 days.
+        self.adapter.fixtures('2023-12-01', '2025-01-01', ['WC'])
+        with self.assertRaises(ValueError):
+            self.adapter.fixtures('2023-12-01', '2025-01-10', ['WC'])
+
     def test_a_narrowed_calendar_only_reads_the_competitions_it_named(self):
         self.adapter.store.put_meta('team_codes:174', ['WC'])
         self.adapter.fixtures('2022-12-18', '2022-12-18', self.adapter.widen(['WC'], ['174']))
