@@ -627,6 +627,52 @@ token must not cross a network unencrypted. `/v1/health` is open without a token
 it for the `HEALTHCHECK` —, along with the football proxy, which only exposes the provider's
 public data and never the key, and the APK, which holds no secret.
 
+### Cutting a version
+
+A version is two artefacts out of one repository: the backend image, and the APK the server
+hands out. They move at their own pace — 1.2.1 was an app-only release, the image stayed at
+1.2.0 — so one script decides what moved and publishes only that:
+
+```bash
+bash scripts/release.sh 1.4.0
+```
+
+From a clean tree it compares `HEAD` against the previous tag, bumps what moved, commits
+`Fonote 1.4.0` and tags it. The app's `versionCode` is raised along with its `versionName`:
+that code is the only thing an installed app compares, so an APK published under the previous
+one updates nothing. The image tag moves in `compose.yml` and `.env.example` together.
+
+What makes the image move is not "did I touch `backend/`" but the set of files the
+`.dockerignore` allowlist lets into it — a set that includes
+`android/app/src/main/assets/match.json`, an Android asset the Dockerfile copies. The script
+reads that set, so nobody has to remember it.
+
+It then makes the server match the tree, whether or not a version was just cut: it asks the VPS
+which image it runs and `/v1/health` which version code it offers, then publishes whichever
+lags behind — `docker compose build` and `push`, then `pull` and `up -d` over SSH for the
+image, `scripts/publish-apk.sh` for the APK. That half is idempotent:
+
+```bash
+bash scripts/release.sh            # publishes what the current tag already says
+bash scripts/release.sh --dry-run  # says what it would do, touches nothing
+```
+
+The bare form is what catches a version tagged but never published — the image deployed while
+the APK stayed behind, and no phone offered anything. It also finishes a release interrupted
+halfway. The commit and the tag are pushed last, once everything is out.
+
+`FONOTE_VPS`, `FONOTE_VPS_DIR`, `FONOTE_VPS_APK_DIR`, `FONOTE_URL` and `FONOTE_IMAGE` point it
+elsewhere.
+
+The `compose.yml` on the VPS is not a copy of the one in this repository. It is maintained
+there: it names the image outright with no interpolation, reads the token from `env_file`,
+publishes no port, runs the container read-only with dropped capabilities, and joins an
+internal network alongside the one giving egress to ESPN. The one here builds and pushes the
+image and serves as the local reference. So the script moves the deployed tag in the VPS's
+`compose.yml`, substituting the image actually running, and never touches the `.env` beside it
+— that file holds `FONOTE_TOKEN`, which exists nowhere else, neither in Git nor in the image.
+On the VPS, `grep image compose.yml` therefore always says what is deployed.
+
 ### Publishing an Android update
 
 The server hands out the APK found in `apk/`, next to `compose.yml`, which compose mounts
