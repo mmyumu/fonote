@@ -590,7 +590,7 @@ Copy `.env.example` to `.env` and fill in the token:
 
 ```env
 FONOTE_TOKEN=the-same-token-as-in-the-app
-FONOTE_BACKEND_IMAGE=registry.mmyumu.fr/fonote-backend:1.2.0
+FONOTE_BACKEND_IMAGE=registry.mmyumu.fr/fonote-backend:1.3.0
 ```
 
 Without `FONOTE_TOKEN`, `docker compose` refuses to start rather than launching a server that
@@ -645,7 +645,7 @@ the new hash. `FONOTE_VPS`, `FONOTE_VPS_APK_DIR` and `FONOTE_URL` point it elsew
 
 ```bash
 cd android && ./gradlew :app:assembleRelease
-scp app/build/outputs/apk/release/fonote-1.2.1.apk <vps>:<compose folder>/apk/
+scp app/build/outputs/apk/release/fonote-1.3.0.apk <vps>:<compose folder>/apk/
 scp app/build/outputs/apk/release/output-metadata.json <vps>:<compose folder>/apk/
 ```
 
