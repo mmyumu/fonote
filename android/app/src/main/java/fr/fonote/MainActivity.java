@@ -410,6 +410,8 @@ public class MainActivity extends Activity {
     private FrameLayout homeCard, annotatedCard, savedCard;
     private LinearLayout homeRoot, annotatedRoot, savedRoot;
     private String calendarSearch = "", annotatedSearch = "", followSearch = "";
+    /** Whether the calendar shows only the matches of followed clubs, ignoring the competitions. */
+    private boolean calendarClubsOnly;
     private LinearLayout profileRoot;
     /**
      * Where the back arrow of the page on screen leads. Set by {@link #titleBar}, so that the
@@ -968,6 +970,20 @@ public class MainActivity extends Activity {
             calendarSearch = query;
             renderWeeks();
         }), search);
+        // A cup is followed to keep an eye on it, a club to watch it play: a week of the first
+        // buries the second under fifty matches. The box narrows what is shown, never what is
+        // asked for — the cup's night is already on the device when it is unticked again.
+        calendarClubsOnly = prefs.getBoolean("calendar_clubs_only", false);
+        CheckBox clubsOnly = new CheckBox(this);
+        clubsOnly.setText("Mes clubs uniquement"); clubsOnly.setChecked(calendarClubsOnly);
+        clubsOnly.setTextColor(skin.ink); clubsOnly.setTextSize(15);
+        clubsOnly.setButtonTintList(ColorStateList.valueOf(skin.accent));
+        clubsOnly.setOnCheckedChangeListener((view, checked) -> {
+            calendarClubsOnly = checked;
+            prefs.edit().putBoolean("calendar_clubs_only", checked).apply();
+            renderWeeks();
+        });
+        header.addView(clubsOnly, new LinearLayout.LayoutParams(-1, -2));
         layout.addView(header, new LinearLayout.LayoutParams(-1, -2));
         View divider = new View(this); divider.setBackgroundColor(skin.chip);
         layout.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
@@ -1958,7 +1974,7 @@ public class MainActivity extends Activity {
         String day = "";
         if (fixtures != null) for (int i = 0; i < fixtures.length(); i++) {
             JSONObject fixture = fixtures.optJSONObject(i);
-            if (!follows(fixture) || (!home && !FixtureSelection.matches(fixture, calendarSearch))) continue;
+            if (!follows(fixture) || (!home && !shownInWeek(fixture))) continue;
             // A week of fixtures is a week of days: say which one, once, above its matches.
             if (!home) {
                 ZonedDateTime kickoff = local(fixture.optString("utcDate"));
@@ -1969,8 +1985,25 @@ public class MainActivity extends Activity {
         }
         if (shown == 0) {
             if (!home && !calendarSearch.trim().isEmpty()) label("Aucun match ne correspond à cette recherche dans la semaine affichée.");
+            else if (!home && calendarClubsOnly) empty(followedClubs().isEmpty()
+                    ? "Suivez un club pour n’afficher que ses matchs."
+                    : "Aucun match de vos clubs dans cette semaine. Décochez « Mes clubs uniquement » pour retrouver vos compétitions.",
+                "Choisir mes suivis", this::profile);
             else empty("Aucun match correspondant à vos suivis sur cette période.", "Choisir mes suivis", this::profile);
         }
+    }
+
+    /**
+     * Whether a fixture the follows let through is also one the calendar itself shows: its box
+     * narrows to the followed clubs, and its field to what is typed above the week.
+     */
+    private boolean shownInWeek(JSONObject fixture) {
+        if (calendarClubsOnly && !FixtureSelection.involves(fixture, followedClubs())) return false;
+        return FixtureSelection.matches(fixture, calendarSearch);
+    }
+
+    private Set<String> followedClubs() {
+        return prefs.getStringSet("follow_teams", Collections.emptySet());
     }
 
     /** Kickoff in the reader's own zone: UTC on a home screen is a machine's idea of a clock. */
@@ -2224,8 +2257,8 @@ public class MainActivity extends Activity {
         List<String> paths = new ArrayList<>();
         paths.add("/v1/football/matches?dateFrom=" + from + "&dateTo=" + to + footballCompetitionQuery());
         if (!calendar) {
-            for (String club : prefs.getStringSet("follow_teams", Collections.emptySet()))
-                paths.add("/v1/football/teams/" + club + "/matches?dateFrom=" + centre
+            for (String club : followedClubs())
+                paths.add("/v1/football/teams/" + club + "/matches?dateFrom=" + centre.minusMonths(1)
                     + "&dateTo=" + centre.plusYears(1) + "&limit=100");
             for (String id : prefs.getStringSet("follow_matches", Collections.emptySet()))
                 paths.add("/v1/football/matches/" + id + "?overview=1");
@@ -2271,18 +2304,33 @@ public class MainActivity extends Activity {
             }
             if (shown == 0) label("Aucun favori à venir ou en cours. Ajoutez-en avec l’étoile du calendrier.").setTextColor(skin.muted);
 
-            Set<String> clubs = prefs.getStringSet("follow_teams", Collections.emptySet());
+            Set<String> clubs = followedClubs();
             section("Prochains matchs de mes clubs", "Mes suivis ›", this::profile);
             Map<String, JSONObject> next = FixtureSelection.next(all, clubs, Instant.now());
-            Set<String> displayed = new HashSet<>();
-            for (JSONObject fixture : next.values()) {
-                if (!displayed.add(fixture.optString("id"))) continue;
-                fixtureDate(fixture); fixtureCard(fixture, false);
-            }
+            clubFixtures(next);
             if (clubs.isEmpty()) label("Suivez un club pour afficher son prochain match.").setTextColor(skin.muted);
             else if (next.size() < clubs.size())
                 label("Prochain match encore inconnu pour certains clubs. Actualisation à la connexion au serveur.").setTextColor(skin.muted);
+
+            // The match just played is the one caught up on later, and the calendar only gives it
+            // back a week at a time. Nothing is said here when no club is followed: the section
+            // above already asks for one, and saying it twice says it no better.
+            if (!clubs.isEmpty()) {
+                section("Derniers matchs de mes clubs", "Mes suivis ›", this::profile);
+                Map<String, JSONObject> played = FixtureSelection.previous(all, clubs, Instant.now());
+                clubFixtures(played);
+                if (played.isEmpty()) label("Aucun match terminé enregistré pour vos clubs. Actualisation à la connexion au serveur.").setTextColor(skin.muted);
+            }
         } catch (Exception error) { error(error); }
+    }
+
+    /** One card per club, and a single card when two followed clubs met each other. */
+    private void clubFixtures(Map<String, JSONObject> fixtures) {
+        Set<String> displayed = new HashSet<>();
+        for (JSONObject fixture : fixtures.values()) {
+            if (!displayed.add(fixture.optString("id"))) continue;
+            fixtureDate(fixture); fixtureCard(fixture, false);
+        }
     }
 
     private void fixtureDate(JSONObject fixture) {
@@ -2306,15 +2354,17 @@ public class MainActivity extends Activity {
     private void refreshClubFixtures() {
         if (!hasServer() || demoMode()) return;
         String base = server();
-        for (String club : prefs.getStringSet("follow_teams", Collections.emptySet())) {
+        for (String club : followedClubs()) {
             String key = base + "/" + club;
             if (clubsFetching.contains(key) || System.currentTimeMillis() - clubFetched.getOrDefault(key, 0L) < 300_000) continue;
             clubsFetching.add(key);
             worker.execute(() -> {
                 boolean success = false;
                 try {
+                    // A month back as well as the year ahead: the last match played is asked for
+                    // by name, rather than hoped for from a calendar week somebody happened to open.
                     LocalDate today = LocalDate.now();
-                    String path = "/v1/football/teams/" + club + "/matches?dateFrom=" + today
+                    String path = "/v1/football/teams/" + club + "/matches?dateFrom=" + today.minusMonths(1)
                         + "&dateTo=" + today.plusYears(1) + "&limit=100";
                     JSONObject data = new JSONObject(store.download(path, get(base, path)));
                     success = !"loading".equals(data.optString("state")) && !"error".equals(data.optString("state"));

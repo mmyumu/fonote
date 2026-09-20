@@ -7,7 +7,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
-/** The earliest future, playable fixture for each followed club, independent of list order. */
+/**
+ * Which fixtures a followed club is read by: the next one it plays, the last one it played, and
+ * whether a given fixture is one of its own at all. All of it independent of list order.
+ */
 final class FixtureSelection {
     static boolean unfinished(JSONObject fixture) {
         String status = fixture.optString("status");
@@ -36,23 +39,53 @@ final class FixtureSelection {
         return contains(text.toString(), query);
     }
 
+    /** Whether a followed club is one of the two sides, whatever the competition around them. */
+    static boolean involves(JSONObject fixture, Set<String> clubs) {
+        for (String side : new String[]{"homeTeam", "awayTeam"}) {
+            JSONObject team = fixture.optJSONObject(side);
+            if (team != null && clubs.contains(team.optString("id"))) return true;
+        }
+        return false;
+    }
+
+    /** The next match each club plays: the earliest one still to be kicked off. */
     static Map<String, JSONObject> next(JSONArray fixtures, Set<String> clubs, Instant now) {
+        return closest(fixtures, clubs, now, true);
+    }
+
+    /**
+     * The last match each club played: the latest one that is over. Played means finished — a
+     * postponed or cancelled fixture was never a match, and one under way is not one to catch up
+     * on yet.
+     */
+    static Map<String, JSONObject> previous(JSONArray fixtures, Set<String> clubs, Instant now) {
+        return closest(fixtures, clubs, now, false);
+    }
+
+    /**
+     * The fixture nearest to now on one side of it, for each followed club: the same walk either
+     * way, since what is ahead and what is behind are read from the same list and kept by the
+     * same comparison, turned around.
+     */
+    private static Map<String, JSONObject> closest(JSONArray fixtures, Set<String> clubs,
+                                                   Instant now, boolean ahead) {
         Map<String, JSONObject> result = new LinkedHashMap<>();
         for (int i = 0; i < fixtures.length(); i++) {
             JSONObject fixture = fixtures.optJSONObject(i);
             if (fixture == null) continue;
             String status = fixture.optString("status");
-            if (!"TIMED".equals(status) && !"SCHEDULED".equals(status)) continue;
+            if (ahead ? !"TIMED".equals(status) && !"SCHEDULED".equals(status)
+                      : !"FINISHED".equals(status)) continue;
             Instant kickoff;
             try { kickoff = Instant.parse(fixture.optString("utcDate")); }
             catch (RuntimeException invalid) { continue; }
-            if (kickoff.isBefore(now)) continue;
+            if (ahead == kickoff.isBefore(now)) continue;
             for (String side : new String[]{"homeTeam", "awayTeam"}) {
                 JSONObject team = fixture.optJSONObject(side);
                 String id = team == null ? "" : team.optString("id");
                 if (!clubs.contains(id)) continue;
-                JSONObject previous = result.get(id);
-                if (previous == null || kickoff.isBefore(Instant.parse(previous.optString("utcDate"))))
+                JSONObject kept = result.get(id);
+                if (kept == null || kickoff.isBefore(Instant.parse(kept.optString("utcDate"))) == ahead)
                     result.put(id, fixture);
             }
         }

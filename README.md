@@ -7,7 +7,11 @@ the ones shown on screen, left as they appear there.
 
 Three cards: **Mes matchs annotés** on the left, **Accueil** in the centre and
 **Rechercher un match** on the right. The calendar remains a separate screen with three
-adjacent Monday-to-Sunday weeks and a search within the displayed week.
+adjacent Monday-to-Sunday weeks and a search within the displayed week. **Mes clubs uniquement**
+narrows those weeks to the fixtures of the followed clubs — a cup followed to keep an eye on it
+otherwise buries the club's night under fifty matches. The box is kept between launches and only
+changes what is shown: the competitions' matches are still asked for, still saved, and come back
+as soon as it is unticked.
 
 Match search starts with a competition and season/edition, then optionally filters by team,
 phase or dates. Results are paginated by 50. The first request for an unknown season schedules
@@ -45,12 +49,18 @@ also starts downloading its details if the server answers, to prepare notes offl
 **Prochains matchs de mes clubs** (my clubs' next matches) shows the nearest upcoming fixture for
 each club chosen in **Mes suivis** (my follows), without listing twice a fixture between two
 followed clubs. Finished, cancelled, postponed or already started matches are left out of this
-section; **Aujourd'hui** (today) remains available.
+section; **Aujourd'hui** (today) remains available. **Derniers matchs de mes clubs** (my clubs'
+last matches) is its mirror: the latest finished fixture of each followed club, the one caught up
+on later. A finished match dated ahead of now is not one of them, nor is a cancelled, postponed or
+running one. The section is not drawn when no club is followed, since the one above already
+asks for one.
 
 The server exposes `/v1/football/teams/{id}/matches`. Team memberships learned from calendars
 and team catalogues select the relevant competitions; unknown memberships initially search the
-curated catalogue. The client asks for the coming year (at most 100 fixtures per team), keeps
-results locally and polls pending imports without causing duplicate ESPN calls.
+curated catalogue. The client asks for the past month and the coming year (at most 100 fixtures per team), so that
+the last match played is asked for by name rather than hoped for from a calendar week somebody
+happened to open. It keeps results locally and polls pending imports without causing duplicate
+ESPN calls.
 
 ## Offline use
 

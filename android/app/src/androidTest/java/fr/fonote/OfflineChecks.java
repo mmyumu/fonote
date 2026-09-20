@@ -59,7 +59,7 @@ public final class OfflineChecks extends Instrumentation {
                 throw new AssertionError("Accepted malformed fixture"); }
             catch (org.json.JSONException expected) { }
             require(store.fixtures().length() == 2, "Failed write was not rolled back");
-            checkNextFixtures();
+            checkClubFixtures();
             checkSearchStaysPut();
             for (String status : new String[]{"TIMED", "SCHEDULED", "IN_PLAY", "PAUSED"})
                 require(FixtureSelection.unfinished(new JSONObject().put("status", status)), "Hidden active favorite");
@@ -75,7 +75,7 @@ public final class OfflineChecks extends Instrumentation {
             checkSpotDrag();
             checkRefreshAnimations();
             checkTacticalEditor();
-            result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, next club fixtures, pull gestures, spot drag, tactical keyframes, timeline, undo/redo, atomic notes.\n");
+            result.putString("stream", "Offline checks passed: migration, persistence, deduplication, notes, catalogue, rollback, club fixtures, next and last, pull gestures, spot drag, tactical keyframes, timeline, undo/redo, atomic notes.\n");
             sendStatus(0, progress);
         } catch (Throwable failure) {
             progress.putString("stack", android.util.Log.getStackTraceString(failure));
@@ -370,7 +370,7 @@ public final class OfflineChecks extends Instrumentation {
         return null;
     }
 
-    private static void checkNextFixtures() throws Exception {
+    private static void checkClubFixtures() throws Exception {
         org.json.JSONArray fixtures = new org.json.JSONArray();
         fixtures.put(fixture(1, "TIMED", "2026-10-01T18:00:00Z", 10, 20));
         fixtures.put(fixture(2, "FINISHED", "2026-09-08T18:00:00Z", 10, 20));
@@ -386,6 +386,21 @@ public final class OfflineChecks extends Instrumentation {
         require(next.size() == 2, "Invented a next match for an unknown club");
         require(next.get("10").getInt("id") == 6 && next.get("20").getInt("id") == 6,
             "Next match must use kickoff, both sides, and exclude past/cancelled/postponed/live matches");
+        // The last match played is a finished one that is behind: the list above also holds a
+        // finished fixture dated ahead of now, which is no more played than a scheduled one.
+        fixtures.put(fixture(9, "FINISHED", "2026-09-05T18:00:00Z", 10, 20));
+        fixtures.put(fixture(10, "FINISHED", "2026-09-06T18:00:00Z", 10, 30));
+        java.util.Map<String, JSONObject> played = FixtureSelection.previous(fixtures, clubs,
+            java.time.Instant.parse("2026-09-07T12:00:00Z"));
+        require(played.size() == 3, "A followed club lost the match it just played");
+        require(played.get("10").getInt("id") == 10 && played.get("30").getInt("id") == 10,
+            "Last match must be the latest finished one before now, on both sides");
+        require(played.get("20").getInt("id") == 9,
+            "A club's own last match was lost to a later one it did not play");
+        require(FixtureSelection.involves(fixture(11, "TIMED", "2026-10-01T18:00:00Z", 30, 40), clubs),
+            "A followed club was not recognised in its own fixture");
+        require(!FixtureSelection.involves(fixture(12, "TIMED", "2026-10-01T18:00:00Z", 40, 50), clubs),
+            "A fixture without a followed club passed the club filter");
     }
     private static JSONObject fixture(int id, String status, String date, int home, int away) throws Exception {
         return new JSONObject().put("id", id).put("status", status).put("utcDate", date)
