@@ -1,0 +1,6 @@
+{"tests": ["tests.yml"],
+ "components": [
+  {"name": "Docs and tests", "deploy": "none", "paths": ["README.md", "CLAUDE.md", "normandy.json", ".gitignore", ".env.example", ".github/**", "compose.yml", "backend/test_*.py", "android/checks/**"]},
+  {"name": "Server", "deploy": "auto", "paths": ["backend/**", ".dockerignore", "android/app/src/main/assets/match.json"], "containers": ["fonote-backend"]},
+  {"name": "Android app", "deploy": "manual", "paths": ["android/**", "scripts/**"], "how": "Raise the version in android/app/build.gradle, then run scripts/publish-apk.sh on the workstation: it builds the signed APK and copies it to the VPS, where the server offers it to the installed apps."}
+ ]}
