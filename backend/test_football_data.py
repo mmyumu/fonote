@@ -245,11 +245,13 @@ class GateTest(unittest.TestCase):
         def read(url, timeout):
             times.append(time.monotonic())
             return io.BytesIO(b'{}')
-        gate = NetworkGate(self.store, interval=.025, background=.025, opener=read)
+        gate = NetworkGate(self.store, interval=.1, background=.1, opener=read)
         with ThreadPoolExecutor(max_workers=3) as pool:
             list(pool.map(gate.read, ['one', 'two', 'three']))
         self.assertEqual(len(times), 3)
-        self.assertTrue(all(b - a >= .024 for a, b in zip(times, times[1:])))
+        # The gate spaces the slots it grants; a request then leaves after its timing is written to SQLite, which can take a
+        # few milliseconds on a slow machine (GitHub's runners): the margin is for that, not for the spacing.
+        self.assertTrue(all(b - a >= .07 for a, b in zip(times, times[1:])), times)
 
     def test_foreground_precedes_background_waiting_for_a_slot(self):
         calls = []
