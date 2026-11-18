@@ -10,17 +10,18 @@
 #   - Given a version, it bumps what moved since the previous tag, commits and tags. What makes
 #     the image move is the set of files the `.dockerignore` allowlist lets in, a set that
 #     includes an Android asset — precisely the kind of detail one forgets.
-#   - Then, always, it makes the server match the tree: it asks the VPS which image it runs and
-#     the server which APK it offers, and publishes whichever lags behind. That second half is
-#     idempotent, so a release interrupted halfway is finished by running the script again, and
-#     a version tagged but never published is caught without a new tag.
+#   - Then, always, it asks the server which APK it offers and publishes the tree's if it lags
+#     behind. That second half is idempotent, so a release interrupted halfway is finished by
+#     running the script again, and a version tagged but never published is caught without a
+#     new tag. The server image is Normandy's: it builds and runs the default branch's commit
+#     from its recipe, so this script only reports which image the VPS runs.
 #
 # Usage: scripts/release.sh [X.Y.Z] [--dry-run]
-#        scripts/release.sh            publishes what the current tree says, if the server lags
+#        scripts/release.sh            publishes the APK the current tree says, if the server lags
 #        scripts/release.sh 1.4.0      cuts 1.4.0 first
 #
-# Overridable: FONOTE_VPS (ssh host), FONOTE_VPS_DIR (compose folder on it), FONOTE_VPS_APK_DIR
-# (apk folder), FONOTE_URL (server), FONOTE_IMAGE (registry repository).
+# Overridable: FONOTE_VPS (ssh host), FONOTE_VPS_APK_DIR (apk folder), FONOTE_URL (server),
+# FONOTE_IMAGE (registry repository).
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/android-env.sh"
 
@@ -37,8 +38,6 @@ if [[ -n "$version" && ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 vps=${FONOTE_VPS:-mmyumu.fr}
-remote_apk=${FONOTE_VPS_APK_DIR:-docker/fonote/apk}
-remote_dir=${FONOTE_VPS_DIR:-$(dirname -- "$remote_apk")}
 url=${FONOTE_URL:-https://fonote.mmyumu.fr}
 repository=${FONOTE_IMAGE:-registry.mmyumu.fr/fonote-backend}
 cd "$FONOTE_ROOT"
@@ -104,8 +103,9 @@ if [[ -n "$version" ]]; then
     fi
 fi
 
-# What the tree says should be out there, and what is actually out there.
-wanted_image=$repository:$(sed -n 's|.*fonote-backend:\([0-9.]*\).*|\1|p' compose.yml | head -1)
+# What the tree says should be out there, and what is actually out there. The server image is
+# not this script's to publish: Normandy builds the default branch's commit on the VPS and runs
+# it under that commit's SHA, so it is only reported here.
 wanted_code=$(sed -n 's/.*versionCode  *\([0-9]\+\).*/\1/p' android/app/build.gradle)
 running_image=$(ssh "$vps" "docker inspect -f '{{.Config.Image}}' fonote-backend" 2>/dev/null || echo 'none')
 served_code=$(python3 - "$url/v1/health" <<'EOF' || echo 'none'
@@ -115,28 +115,9 @@ print(((health.get('app') or {}).get('latest') or {}).get('code', 'none'))
 EOF
 )
 
-echo "The VPS runs $running_image, the tree says $wanted_image."
+echo "The VPS runs $running_image; Normandy deploys the server from the default branch."
 echo "The server offers version code $served_code, the tree says $wanted_code."
 [[ -z "$dry" ]] || exit 0
-
-if [[ "$running_image" != "$wanted_image" ]]; then
-    # The token never enters the image: it is read from the environment at run time, so any
-    # value satisfies compose's interpolation while building and pushing.
-    echo "Building and pushing $wanted_image"
-    FONOTE_TOKEN=unused FONOTE_BACKEND_IMAGE=$wanted_image docker compose build
-    FONOTE_TOKEN=unused FONOTE_BACKEND_IMAGE=$wanted_image docker compose push
-    # The VPS's compose.yml is its own file, not a copy of this one: hardened, read-only, on
-    # two networks, reading the token from `.env`, and naming the image outright with no
-    # interpolation. So the tag is moved there and nowhere else — `grep image compose.yml` on
-    # the VPS keeps telling the truth, and `.env`, which holds FONOTE_TOKEN, is never touched.
-    # The substitution is anchored on the image actually running, so it fires once or not at all.
-    ssh "$vps" "cd '$remote_dir' && sed -i 's|$running_image|$wanted_image|' compose.yml \
-        && grep -q 'image: $wanted_image' compose.yml \
-        && docker compose pull && docker compose up -d"
-    running_image=$(ssh "$vps" "docker inspect -f '{{.Config.Image}}' fonote-backend")
-    [[ "$running_image" == "$wanted_image" ]] || { echo "The VPS runs $running_image." >&2; exit 1; }
-    echo "The VPS now runs $running_image."
-fi
 
 if [[ "$served_code" != "$wanted_code" ]]; then
     # Builds the signed release, copies it beside the server and reads it back from the outside.
