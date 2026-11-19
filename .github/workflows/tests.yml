@@ -11,7 +11,7 @@ jobs:
   server:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -19,24 +19,11 @@ jobs:
   android-checks:
     # The logic that does without Android, checked by its asserts: no emulator, no Gradle.
     runs-on: ubuntu-latest
-    env:
-      JSON_JAR: /tmp/org.json.jar
-      OUT: /tmp/fonote-checks
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-      # Android ships org.json; off device it comes from Maven Central.
-      - run: curl -sfLo "$JSON_JAR" https://repo1.maven.org/maven2/org/json/json/20240303/json-20240303.jar
-      - name: Compile
-        run: |
-          src=android/app/src/main/java/fr/fonote
-          javac -cp "$JSON_JAR" -d "$OUT" $src/{Formation,Lineup,MatchClock,PlayerName,Skin,Logo,Kickoff,Track,Diagram,Sequence,TacticalHistory,Heat}.java android/checks/fr/fonote/*Check.java
-      - name: Run
-        run: |
-          for check in Formation Lineup MatchClock PlayerName Skin Logo Kickoff Track Sequence Heat; do
-            java -ea -cp "$OUT:$JSON_JAR" fr.fonote.${check}Check
-          done
-          java -ea -cp "$OUT:$JSON_JAR" fr.fonote.DiagramCheck json
+      # Android ships org.json; the script uses the copy in android/checks/lib, so no download can fail the run.
+      - run: bash android/checks/run.sh
