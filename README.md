@@ -787,12 +787,13 @@ Tooling compatibility: [AGP 8.7 / Gradle 8.9 / JDK 17](https://developer.android
 ```bash
 python3 -m unittest discover -s backend -v
 source scripts/android-env.sh
-javac -d /tmp/fonote-checks android/app/src/main/java/fr/fonote/{Formation,Lineup,MatchClock,PlayerName,Skin,Logo,Kickoff}.java android/checks/fr/fonote/{Formation,Lineup,MatchClock,PlayerName,Skin,Logo,Kickoff}Check.java
-for check in Formation Lineup MatchClock PlayerName Skin Logo Kickoff; do java -ea -cp /tmp/fonote-checks fr.fonote.${check}Check; done
+bash android/checks/run.sh
 ```
 
-The logic that does without Android (placement, clock, names, themes) lives in separate classes,
-checked by these `assert`s with no emulator and no test dependency.
+The logic that does without Android (placement, clock, names, themes, tracks, diagrams) lives in
+separate classes, checked by these `assert`s with no emulator and no Gradle. `android/checks/run.sh`
+compiles and runs them, as CI does; the only dependency, org.json (which Android ships), is kept in
+`android/checks/lib/` so that the checks never depend on Maven Central answering.
 
 Android flows to check on a device: write a note with several players without leaving the pitch, give a spot with the 📍 then drag it elsewhere, a free note through `+` that names a player, then turn it into a match note by removing its minute, a tactical note (fill the pitch, move a player, draw a pass then a run, frame a whole line and move it as one block, give an action to a player on the board, check that it appears in the summary, come back through « Mes observations » and reopen the schema with a tap), take notes offline, close and reopen while writing, add a comment, check the summary, sync twice, undo then sync again, import on a second device. Notes must not be duplicated or reappear after deletion.
 
@@ -932,12 +933,7 @@ of test data must cover the logs of both devices and of the server together.
 
 ```bash
 source scripts/android-env.sh
-FONOTE_JSON_JAR="$FONOTE_ROOT/.tooling/android-studio/plugins/grazie/lib/org.json-json.jar"
-javac -cp "$FONOTE_JSON_JAR" -d /tmp/fonote-checks android/app/src/main/java/fr/fonote/{Track,Diagram,Sequence,TacticalHistory,Heat}.java android/checks/fr/fonote/{Track,Diagram,Sequence,Heat}Check.java
-java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.TrackCheck
-java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.DiagramCheck json
-java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.SequenceCheck
-java -ea -cp "/tmp/fonote-checks:$FONOTE_JSON_JAR" fr.fonote.HeatCheck
+bash android/checks/run.sh
 python3 -m unittest discover -s backend -q
 bash scripts/check-offline-android.sh
 ```
